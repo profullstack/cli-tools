@@ -50,28 +50,38 @@ pnpm unlink                                   # remove the ones we own
 ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 ```
 
-## Aliases must be real executables
+## Files on PATH, not shell functions
 
-These install as files on PATH rather than shell aliases or functions, and that
-is load-bearing.
+These install as executables on PATH rather than shell aliases or functions.
 
-The moshcode pit runs its aliases with `zsh -c <command>`, and `zsh -c` is a
-non-interactive shell: it reads neither `~/.zshrc` nor `~/.zsh_aliases`. A
-function defined there is simply not there, so `/alias tcfeed "tcfeed"` in the
-pit answered `command not found` while the identical word worked when typed at a
-prompt. A file on PATH works from an interactive shell, from `zsh -c`, and from
-the pit, because none of them have to have sourced anything first.
+The older tools carry a comment saying this is because the moshcode pit runs
+aliases with `zsh -c`, a non-interactive shell that reads neither `~/.zshrc` nor
+`~/.zsh_aliases`. **That is no longer true** — `src/aliases.mjs` in current
+moshcode runs `$SHELL -ic`, which is interactive and does source them. Verified:
+
+```console
+$ zsh -ic 'gh-prs-all --help'   # works — the pit's path
+$ zsh -c  'gh-prs-all --help'   # zsh:1: command not found
+```
+
+The reason to stay on PATH is the weaker but still sufficient one: a file works
+from every caller — an interactive shell, `zsh -c`, a systemd unit, a CI step —
+without anything having been sourced first. A shell alias only works where a
+startup file was read.
 
 Nothing should alias *to* these either. A function beats PATH, so a wrapper of
 the same name silently shadows the file and the two drift apart.
 
+Pit aliases (`/alias set <name> "<command>"`, stored in
+`~/.moshcode/aliases.json`):
+
 ```
-/alias prs        "gh-prs --orgs profullstack"
-/alias merge      "gh-prs-merge --orgs profullstack --apply --fix"
-/alias merge-dry  "gh-prs-merge --orgs profullstack"
-/alias fixprs     "gh-prs-fix-all"
-/alias feed       "tcfeed"
-/alias whoisj     "domainjson"
+/alias set prs        "gh-prs --orgs profullstack"
+/alias set merge      "gh-prs-merge --orgs profullstack --apply --fix"
+/alias set merge-dry  "gh-prs-merge --orgs profullstack"
+/alias set fixprs     "gh-prs-fix-all"
+/alias set feed       "tcfeed"
+/alias set whoisj     "domainjson"
 ```
 
 ## `gh-prs-merge --fix`
