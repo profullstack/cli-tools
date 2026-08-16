@@ -10,6 +10,7 @@ TypeScript, installed as executables on `PATH`.
 | [`gh-prs-fix-all`](#gh-prs-fix-all) | Fix the open threatcrush-scan PRs that are broken because of us |
 | [`tcfeed`](#tcfeed) | Find repositories worth scanning, scan them, print a shortlist |
 | [`domainjson`](#domainjson) | whois-style, JSON-first name lookup |
+| [`blog-post`](#blog-post) | Publish to the plain-HTML blog without breaking the feed |
 
 ## Requirements
 
@@ -170,6 +171,52 @@ goes through OpenRDAP. Either way `dig` adds records, hosts, reverse lookups and
 per-nameserver AXFR attempts. Errors are JSON too — a tool whose output gets
 parsed should not change shape when it fails.
 
+### `blog-post`
+
+Publishes to the plain-HTML blog at `~/public_html/blog`. That blog has no build
+step and no CMS: writing a file *is* publishing. This exists because nothing
+else catches a mistake before it is live.
+
+```sh
+blog-post new "A title" --description "The one-line feed summary"
+blog-post new "A title" --description "..." --body draft.html
+blog-post check          # posts that will break the feed
+blog-post list           # every post with its date
+blog-post feed           # regenerate feed.xml
+```
+
+`new` picks the next `NNN-post.html`, renders the smolweb-valid template with
+the AI-drafting acknowledgment, splices the entry into the hand-maintained
+`index.html`, and runs the blog's own `build-feed.mjs`. Point it elsewhere with
+`--dir` or `$BLOG_DIR`.
+
+What it refuses to do:
+
+- **Date a post in the future.** Such a post sorts above every real post, and
+  readers that filter future items drop it entirely — so the feed looks like it
+  stopped updating while the files on disk look perfect. This has happened:
+  three posts sat 7–10 hours ahead and did exactly that. `--allow-future` is
+  there if you genuinely mean to schedule.
+- **Overwrite a post.** Two concurrent runs read the directory before either
+  writes, so both pick the same number; the write uses `wx` and the loser fails
+  loudly rather than silently replacing a post.
+- **Skip the description.** It is the entire RSS summary.
+
+`check` reports missing, unparseable and future dates, empty descriptions and a
+missing `<h1>`, and exits non-zero, so it works as a pre-publish gate.
+
+## As a moshcode plugin
+
+This repo is also a plugin marketplace, exposing `blog-post` as slash commands:
+
+```sh
+moshcode plugin marketplace add profullstack/cli-tools
+moshcode plugin install blog@cli-tools
+```
+
+That adds `/blog:post`, `/blog:check`, `/blog:list` and `/blog:feed`. See
+[plugins/blog](plugins/blog/README.md).
+
 ## Aliases
 
 Pit aliases live in `~/.moshcode/aliases.json`:
@@ -181,6 +228,7 @@ Pit aliases live in `~/.moshcode/aliases.json`:
 /alias set fixprs     "gh-prs-fix-all"
 /alias set feed       "tcfeed"
 /alias set whoisj     "domainjson"
+/alias set blog       "blog-post"
 
 /alias                # list
 /alias get merge      # show one

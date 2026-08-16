@@ -1,0 +1,23 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "cli-tools",
+  "description": "Profullstack's command-line tools as installable plugins — publish to the plain-HTML blog without getting a convention wrong.",
+  "owner": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "plugins": [
+    {
+      "name": "blog",
+      "description": "Write, check and publish posts on the plain-HTML blog: next post number, smolweb-valid template, index listing and feed regeneration, with a lint that catches the mistakes that silently break RSS.",
+      "source": "./plugins/blog",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#blog",
+      "keywords": ["blog", "rss", "feed", "publishing", "smolweb"]
+    }
+  ]
+}

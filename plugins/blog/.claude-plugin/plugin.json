@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "blog",
+  "description": "Write, check and publish posts on the plain-HTML blog: next post number, smolweb-valid template, index listing and feed regeneration, with a lint that catches the mistakes that silently break RSS.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://github.com/profullstack/cli-tools#blog",
+  "license": "MIT",
+  "keywords": ["blog", "rss", "feed", "publishing", "smolweb"]
+}
