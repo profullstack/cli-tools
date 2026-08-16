@@ -1,0 +1,9 @@
+# pnpm 11 no longer reads the `pnpm` field in package.json, and an unapproved
+# install script fails the install outright rather than merely warning.
+#
+# esbuild (vitest's bundler) ships prebuilt binaries that its install script
+# puts in place. Approved one package at a time rather than blanket-allowed, so
+# a new dependency wanting a shell at install time stays a decision someone
+# makes on purpose.
+allowBuilds:
+  esbuild: true
