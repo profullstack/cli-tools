@@ -13,11 +13,27 @@
 export const DEFAULT_COUNT = 1000;
 export const DEFAULT_TLD = 'com';
 
-/** Cheap-tier default per provider. Overridable with --model. */
+/**
+ * Frontier default per provider. Overridable with --model.
+ *
+ * This was the cheap tier, and the names showed it: generic startup vocabulary,
+ * the same handful of stems recycled, and a drift off-brief on any description
+ * longer than a sentence. The whole design here is *one* call per run whatever
+ * --count says, so the model is a rounding error against the value of a name
+ * you actually ship — the cheap tier was never the saving it looked like.
+ */
 export const DEFAULT_MODELS = {
-  openai: 'gpt-4.1-mini',
-  anthropic: 'claude-haiku-4-5',
+  openai: 'gpt-5.6-sol',
+  anthropic: 'claude-fable-5',
 } as const;
+
+/**
+ * Claude Fable 5 always thinks, and thinking counts against max_tokens, so the
+ * 4096 that was ample for a non-thinking model can be spent before the JSON
+ * starts. 16000 is the documented non-streaming default and leaves room for
+ * both.
+ */
+const ANTHROPIC_MAX_TOKENS = 16_000;
 
 export type Provider = keyof typeof DEFAULT_MODELS;
 
@@ -125,12 +141,30 @@ export function anthropicCaller(apiKey: string, model: string, timeoutMs: number
         },
         body: JSON.stringify({
           model,
-          max_tokens: 4096,
+          max_tokens: ANTHROPIC_MAX_TOKENS,
           messages: [{ role: 'user', content: prompt }],
         }),
       });
       if (!response.ok) throw new Error(`anthropic ${response.status}: ${await response.text()}`);
-      const data = (await response.json()) as { content?: { type: string; text?: string }[] };
+      const data = (await response.json()) as {
+        content?: { type: string; text?: string }[];
+        stop_reason?: string;
+        stop_details?: { category?: string | null } | null;
+      };
+
+      // A refusal is HTTP 200 with no text block. Without this it surfaces as
+      // "the model returned nothing", which sends you looking at the prompt
+      // parser rather than at the answer the API actually gave.
+      if (data.stop_reason === 'refusal') {
+        const category = data.stop_details?.category;
+        throw new Error(
+          `anthropic declined this request${category ? ` (${category})` : ''}. ` +
+            'Rephrase the description, or use --provider openai.',
+        );
+      }
+
+      // Thinking models put a thinking block first; find the text one rather
+      // than reading content[0].
       return data.content?.find((b) => b.type === 'text')?.text ?? '';
     } finally {
       clearTimeout(timer);

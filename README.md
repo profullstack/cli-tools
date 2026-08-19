@@ -275,7 +275,7 @@ the same whether you ask for 10 names or 10,000.
 Needs a key — `cli-tools config set openai` stores one (see [API
 keys](#api-keys)), and `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` still work and
 take precedence. Whichever provider has a key is used; OpenAI wins if both do.
-Defaults are the cheap tier on each side (`gpt-4.1-mini` / `claude-haiku-4-5`)
+Defaults are the frontier tier on each side (`gpt-5.6-sol` / `claude-fable-5`)
 and are overridable with `--model`.
 
 | Flag | Effect |
