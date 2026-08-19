@@ -14,6 +14,7 @@ import {
   nextNumber,
   readPosts,
   renderPost,
+  TRACKER,
   typogrify,
   type Post,
 } from '../src/blog.ts';
@@ -103,6 +104,14 @@ describe('renderPost', () => {
 
   it('keeps the AI-drafting acknowledgment, which is required disclosure', () => {
     expect(html).toContain('How this was written:');
+  });
+
+  it('carries the CrawlProof tracker, last thing before </body>', () => {
+    expect(html).toContain(TRACKER);
+    // Placement matters: the tag is async, but keeping it after the article
+    // means nothing about the post waits on a third-party host.
+    expect(html.indexOf(TRACKER)).toBeGreaterThan(html.indexOf('</article>'));
+    expect(html.indexOf(TRACKER)).toBeLessThan(html.indexOf('</body>'));
   });
 
   it('escapes a description that tries to break out of its attribute', () => {

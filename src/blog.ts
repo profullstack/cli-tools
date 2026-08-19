@@ -97,12 +97,24 @@ export function nextNumber(posts: readonly Pick<Post, 'n'>[]): string {
 }
 
 /**
+ * CrawlProof's cookieless pageview tracker, on every page of the blog.
+ *
+ * This is the one deliberate departure from smolweb validity: the guidelines
+ * forbid scripts served from another host. Nothing on the page depends on it —
+ * the post reads identically with JavaScript off — so the "usable without
+ * JavaScript" half of the rule still holds.
+ */
+export const TRACKER =
+  '<script data-site="099436d8-e1b1-4b4e-bc04-b3fbff5c4ead" src="https://crawlproof.com/stats.js" async></script>';
+
+/**
  * Render a post file.
  *
  * Deliberately smolweb-valid, which is stricter than "valid HTML": an explicit
  * `<html lang>`, `<head>` and `<body>`; `<meta http-equiv="Content-Type">`
  * rather than a bare `<meta charset>`, because every `<meta>` needs a `content`
- * attribute; and every `<p>` closed.
+ * attribute; and every `<p>` closed. The one exception is {@link TRACKER}, the
+ * external analytics tag, which smolweb's no-third-party-script rule forbids.
  */
 export function renderPost({ title, description, date, body = '' }: NewPost): string {
   const day = date.slice(0, 10);
@@ -141,6 +153,8 @@ ${content}
 </nav>
 
 </article>
+
+${TRACKER}
 
 </body>
 </html>
