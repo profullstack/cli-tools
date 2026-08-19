@@ -21,7 +21,8 @@ import {
 const USAGE = `Usage:
   domainfree <name>...
   domainfree --file candidates.txt
-  generate-names | domainfree --jobs 24
+  generate-names "a registry that checks Lean proofs" | domainfree
+  printf '%s\n' sorry{check,lint,scan}.com | domainfree
 
 Availability is read from RDAP, never inferred from DNS: a parked domain
 resolves but is taken, and a domain registered with no nameservers returns

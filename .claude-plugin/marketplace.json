@@ -17,7 +17,13 @@
         "url": "https://profullstack.com"
       },
       "homepage": "https://github.com/profullstack/cli-tools#install",
-      "keywords": ["cli", "install", "path", "aliases", "moshcode"]
+      "keywords": [
+        "cli",
+        "install",
+        "path",
+        "aliases",
+        "moshcode"
+      ]
     },
     {
       "name": "blog",
@@ -39,7 +45,7 @@
     },
     {
       "name": "domain",
-      "description": "Find domains you can actually register, and look one up in depth. Availability is read from the registry over RDAP, never guessed from DNS, so parked names and registrations with no nameservers are not mistaken for free.",
+      "description": "Generate candidate product names from a sentence, find the ones you can actually register, and look one up in depth. Availability is read from the registry over RDAP, never guessed from DNS, so parked names and registrations with no nameservers are not mistaken for free.",
       "source": "./plugins/domain",
       "category": "productivity",
       "author": {
@@ -53,7 +59,8 @@
         "dns",
         "whois",
         "availability",
-        "naming"
+        "naming",
+        "llm"
       ]
     }
   ]
