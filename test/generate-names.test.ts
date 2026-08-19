@@ -1,12 +1,87 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type Vocabulary,
+  anthropicCaller,
   buildPrompt,
+  DEFAULT_MODELS,
   expand,
   generateNames,
   parseVocabulary,
   resolveProvider,
 } from '../src/generate-names.ts';
+
+describe('DEFAULT_MODELS', () => {
+  // The cheap tier produced generic startup vocabulary and drifted off-brief on
+  // anything longer than a sentence. One call per run means the model is a
+  // rounding error against the value of a usable name.
+  it('is the frontier tier on both providers', () => {
+    expect(DEFAULT_MODELS.openai).toBe('gpt-5.6-sol');
+    expect(DEFAULT_MODELS.anthropic).toBe('claude-fable-5');
+  });
+});
+
+describe('anthropicCaller', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stub(body: unknown, ok = true) {
+    const fetchMock = vi.fn(async () => ({
+      ok,
+      status: 200,
+      json: async () => body,
+      text: async () => JSON.stringify(body),
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('returns the text block', async () => {
+    stub({ content: [{ type: 'text', text: '{"heads":[]}' }] });
+    await expect(anthropicCaller('k', 'm', 1000)('p')).resolves.toBe('{"heads":[]}');
+  });
+
+  // Fable 5 always thinks, and a thinking block comes first — reading
+  // content[0] would return the empty reasoning rather than the answer.
+  it('skips a leading thinking block', async () => {
+    stub({
+      content: [
+        { type: 'thinking', thinking: '' },
+        { type: 'text', text: '{"heads":["a"]}' },
+      ],
+    });
+    await expect(anthropicCaller('k', 'm', 1000)('p')).resolves.toBe('{"heads":["a"]}');
+  });
+
+  // A refusal is HTTP 200 with no text block. Left unhandled it reads as "the
+  // model returned nothing", which sends you to the parser instead of the API.
+  it('reports a refusal as a refusal, with the category', async () => {
+    stub({ content: [], stop_reason: 'refusal', stop_details: { category: 'cyber' } });
+    await expect(anthropicCaller('k', 'm', 1000)('p')).rejects.toThrow(/declined.*cyber/);
+  });
+
+  it('survives a refusal with no category', async () => {
+    stub({ content: [], stop_reason: 'refusal', stop_details: null });
+    await expect(anthropicCaller('k', 'm', 1000)('p')).rejects.toThrow(/declined/);
+  });
+
+  it('leaves room for thinking in max_tokens', async () => {
+    const fetchMock = stub({ content: [{ type: 'text', text: '{}' }] });
+    await anthropicCaller('k', 'm', 1000)('p');
+    const body = JSON.parse((fetchMock.mock.calls[0] as never[])[1]!['body'] as string);
+    expect(body.max_tokens).toBeGreaterThanOrEqual(16_000);
+  });
+
+  // Sampling parameters were removed on Fable 5 / Opus 5 / Sonnet 5 and are
+  // rejected with a 400, so this request must never grow one.
+  it('sends no sampling parameters', async () => {
+    const fetchMock = stub({ content: [{ type: 'text', text: '{}' }] });
+    await anthropicCaller('k', 'm', 1000)('p');
+    const body = JSON.parse((fetchMock.mock.calls[0] as never[])[1]!['body'] as string);
+    expect(body).not.toHaveProperty('temperature');
+    expect(body).not.toHaveProperty('top_p');
+    expect(body).not.toHaveProperty('top_k');
+    expect(body).not.toHaveProperty('thinking');
+  });
+});
 
 describe('resolveProvider', () => {
   it('prefers OpenAI when both keys are set', () => {
