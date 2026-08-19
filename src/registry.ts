@@ -1,6 +1,6 @@
-import { accessSync, constants, readdirSync } from 'node:fs';
+import { accessSync, constants, readdirSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -57,17 +57,75 @@ export function commands(root: string = repoRoot()): Command[] {
     .map((name) => ({ name, summary: SUMMARIES[name] ?? '' }));
 }
 
-/** Is this name resolvable on PATH? */
+/** Is this name resolvable on PATH? Says nothing about *which* implementation. */
 export function onPath(name: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return firstOnPath(name, env) !== null;
+}
+
+/** The first executable of this name on PATH, or null. */
+function firstOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? '').split(':').filter(Boolean)) {
+    const candidate = join(dir, name);
     try {
-      accessSync(join(dir, name), constants.X_OK);
-      return true;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
     } catch {
-      // Not here; keep looking.
+      // Not here, or not executable; keep looking.
     }
   }
-  return false;
+  return null;
+}
+
+export type CommandStatus = 'ours' | 'other' | 'missing';
+
+export interface Resolution {
+  status: CommandStatus;
+  /** What the name on PATH resolves to, once symlinks are followed. */
+  target: string | null;
+}
+
+/**
+ * Which implementation of a command is actually on PATH.
+ *
+ * "Is a file of this name on PATH" is the question that produces a misleading
+ * answer, and it produced one here: several of these names (gh-prs,
+ * gh-prs-merge, tcfeed, domainjson) also exist as the older hand-written
+ * scripts they were ported from, so a bare presence check reported every one of
+ * them installed while five were a different implementation with different
+ * flags. `gh-prs-merge` is the one that matters — the older one repairs by
+ * default under --apply and this one does not — so "installed" has to mean
+ * "this checkout's copy", not "something answers to that name".
+ *
+ * The comparison follows symlinks on both sides, because the install *is* a
+ * symlink and a repository path may itself sit behind one.
+ */
+export function resolveCommand(
+  name: string,
+  binDir: string = join(repoRoot(), 'bin'),
+  env: NodeJS.ProcessEnv = process.env,
+): Resolution {
+  const found = firstOnPath(name, env);
+  if (!found) return { status: 'missing', target: null };
+
+  // A broken symlink still tells you where it meant to point, which is the
+  // useful thing to print; realpath on it would throw and lose that.
+  let target = found;
+  try {
+    target = realpathSync(found);
+  } catch {
+    // Leave it as the link path.
+  }
+
+  let ours = binDir;
+  try {
+    ours = realpathSync(binDir);
+  } catch {
+    // A checkout that has moved; the raw comparison below still works.
+  }
+
+  // The separator matters: without it a sibling directory whose name merely
+  // starts the same way would read as ours.
+  return { status: target.startsWith(ours + sep) ? 'ours' : 'other', target };
 }
 
 /**

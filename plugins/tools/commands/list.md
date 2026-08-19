@@ -8,7 +8,7 @@ allowed-tools: Bash(cli-tools:*), Read
 Report the state of the installed command set.
 
 ```bash
-cli-tools list          # a * marks each command found on PATH
+cli-tools list          # * runs from here, ! is shadowed by another copy
 cli-tools list --json   # the same, machine-readable
 cli-tools where         # the checkout the commands run from
 ```
@@ -32,5 +32,22 @@ git -C "$(cli-tools where)" log --oneline HEAD..origin/master
 
 `cli-tools update` fixes the common case.
 
-A command with no `*` is not on `PATH` — see `/tools:install`, which covers both
-causes.
+## The marks
+
+| Mark | Means |
+| --- | --- |
+| `*` | runs from this checkout |
+| `!` | another implementation on `PATH` answers to that name — the row names it |
+| (blank) | not on `PATH` at all |
+
+`!` is the one that matters, and it is why this command does not simply ask
+whether a file of each name exists. Several of these were ported from older
+hand-written scripts of the same name, so a presence check reports them all
+installed while some are a different program. A port does not always keep the
+original's defaults: `gh-prs-merge` repairs by default under `--apply` in the
+older script and only with `--fix` here, so which one is on `PATH` changes what
+a merge run does.
+
+`cli-tools link --force` takes over a `!` row, but check the flags first. A
+blank row just needs `cli-tools link`, or `~/.local/bin` on `PATH` — see
+`/tools:install`.

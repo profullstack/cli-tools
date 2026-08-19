@@ -43,7 +43,7 @@ moshcode install cli-tools     # then /cli-tools … in the pit
 Check what landed, and wire up the pit aliases:
 
 ```sh
-cli-tools list                 # a * marks each command found on PATH
+cli-tools list                 # * runs from here, ! is shadowed by another copy
 cli-tools aliases --install    # /blog /free /merge /prs /whois
 cli-tools update               # git pull, reinstall, relink
 ```
