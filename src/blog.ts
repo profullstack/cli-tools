@@ -2,6 +2,8 @@ import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { type BlogConfig, type BlogLink, EMPTY_CONFIG } from './blog-config.ts';
+
 /**
  * The plain-HTML blog at ~/public_html/blog.
  *
@@ -103,24 +105,52 @@ export function nextNumber(posts: readonly Pick<Post, 'n'>[]): string {
  * forbid scripts served from another host. Nothing on the page depends on it —
  * the post reads identically with JavaScript off — so the "usable without
  * JavaScript" half of the rule still holds.
+ *
+ * With no site id configured nothing is emitted at all, which is the fully
+ * valid case — and the default, so a fresh checkout never meters somebody
+ * else's traffic into an account it inherited from the repository.
  */
-export const TRACKER =
-  '<script data-site="099436d8-e1b1-4b4e-bc04-b3fbff5c4ead" src="https://crawlproof.com/stats.js" async></script>';
+export function tracker(siteId: string | null): string {
+  if (!siteId) return '';
+  return `<script data-site="${esc(siteId)}" src="https://crawlproof.com/stats.js" async></script>`;
+}
 
 /**
  * The sponsored bar that runs at the foot of every page.
  *
- * `text_link` on purpose, not a 728x90 or 300x250: it is a 40px full-width
+ * `text_link` by default, not a 728x90 or 300x250: it is a 40px full-width
  * strip that carries its own "Sponsored" mark inside the frame, so `ad.js`
  * prepends no extra caption, and an unsold or blocked slot collapses to
  * nothing instead of leaving a banner-shaped hole.
+ *
+ * The slot id is the author's own, so it is configuration rather than a
+ * constant: a shared one would bill every installation's impressions to
+ * whoever happened to be in the file. `ad.js` loads only when there is a slot
+ * for it to fill, and the tracker is emitted here so no page carries it twice.
  */
-export const AD_UNIT = [
-  '<aside data-cp-ad data-slot="50ba73a3-22b6-4264-9b2d-7f866759e287" data-format="text_link"></aside>',
-  '',
-  TRACKER,
-  '<script src="https://crawlproof.com/ad.js" async></script>',
-].join('\n');
+export function adUnit(
+  config: Pick<BlogConfig, 'adSlotId' | 'adFormat' | 'trackerSiteId'>,
+): string {
+  const tag = tracker(config.trackerSiteId);
+  if (!config.adSlotId) return tag;
+
+  const slot =
+    `<aside data-cp-ad data-slot="${esc(config.adSlotId)}"` +
+    ` data-format="${esc(config.adFormat)}"></aside>`;
+
+  return [slot, '', tag, '<script src="https://crawlproof.com/ad.js" async></script>']
+    .filter((line, index, all) => line !== '' || all[index + 1] !== '')
+    .join('\n');
+}
+
+/** The footer identity links, or nothing when none are configured. */
+function identity(links: readonly BlogLink[]): string {
+  if (links.length === 0) return '';
+  const anchors = links.map(
+    (link) => `<a rel="${esc(link.rel ?? 'me')}" href="${esc(link.href)}">${esc(link.label)}</a>`,
+  );
+  return `\n<p>Find me: ${anchors.join(' &middot;\n')}</p>\n`;
+}
 
 /**
  * Render a post file.
@@ -128,21 +158,43 @@ export const AD_UNIT = [
  * Deliberately smolweb-valid, which is stricter than "valid HTML": an explicit
  * `<html lang>`, `<head>` and `<body>`; `<meta http-equiv="Content-Type">`
  * rather than a bare `<meta charset>`, because every `<meta>` needs a `content`
- * attribute; and every `<p>` closed. The one exception is {@link TRACKER}, the
- * external analytics tag, which smolweb's no-third-party-script rule forbids.
+ * attribute; and every `<p>` closed. The one exception is {@link tracker}, the
+ * external analytics tag, which smolweb's no-third-party-script rule forbids —
+ * and which is absent unless a site id is configured.
+ *
+ * Everything identifying the author comes from {@link BlogConfig}. Rendered
+ * with the default config the post carries no byline, no identity links and no
+ * third-party scripts, so a checkout cannot publish somebody else's name or
+ * meter traffic into an account it inherited from the repository.
  */
-export function renderPost({ title, description, date, body = '' }: NewPost): string {
+export function renderPost(
+  { title, description, date, body = '' }: NewPost,
+  config: BlogConfig = EMPTY_CONFIG,
+): string {
   const day = date.slice(0, 10);
   const heading = typogrify(title);
   const content = body.trim() || '<h2>Start here</h2>\n\n<p>&hellip;</p>';
+
+  // esc rather than typogrify: the site name is emitted identically in the
+  // <title> and in the feed link's title attribute, and an attribute is the
+  // stricter of the two. The byline is typogrified because a byline is prose.
+  const site = config.siteTitle ? ` &mdash; ${esc(config.siteTitle)}` : '';
+  const feedTitle = config.siteTitle ? ` title="${esc(config.siteTitle)}"` : '';
+  const byline = config.author
+    ? `<p><em>${day}, by ${typogrify(config.author)}.</em></p>`
+    : `<p><em>${day}</em></p>`;
+  const disclosure = config.disclosure
+    ? `\n\n<p><small>${typogrify(config.disclosure)}</small></p>`
+    : '';
+  const footer = adUnit(config);
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${heading} &mdash; Chovy's Blog</title>
-<link rel="alternate" type="application/rss+xml" title="Chovy's Blog" href="feed.xml">
+<title>${heading}${site}</title>
+<link rel="alternate" type="application/rss+xml"${feedTitle} href="feed.xml">
 <meta name="date" content="${esc(date)}">
 <meta name="description" content="${esc(description)}">
 </head>
@@ -152,10 +204,7 @@ export function renderPost({ title, description, date, body = '' }: NewPost): st
 
 <h1>${heading}</h1>
 
-<p><em>${day}, by Anthony &ldquo;chovy&rdquo; Ettinger.</em></p>
-
-<p><small><strong>How this was written:</strong> drafted with an AI assistant from my own notes,
-then edited by me.</small></p>
+${byline}${disclosure}
 
 <nav>
 	<a href="../blog">back to my blog postings</a>
@@ -166,15 +215,9 @@ ${content}
 <nav>
 	<a href="../blog">back to my blog postings</a>
 </nav>
-
-<p>Find me: <a rel="me" href="https://defcon.social/@chovy">Mastodon</a> &middot;
-<a rel="me" href="https://github.com/ralyodio">GitHub</a> &middot;
-<a rel="me" href="mailto:anthony@profullstack.com">email</a></p>
-
+${identity(config.links)}
 </article>
-
-${AD_UNIT}
-
+${footer ? `\n${footer}\n` : ''}
 </body>
 </html>
 `;
@@ -249,6 +292,7 @@ export function lint(posts: readonly Post[], now: number = Date.now()): Problem[
 export async function createPost(
   dir: string,
   post: NewPost,
+  config: BlogConfig = EMPTY_CONFIG,
 ): Promise<{ file: string; path: string }> {
   const posts = await readPosts(dir);
   const file = `${nextNumber(posts)}-post.html`;
@@ -257,7 +301,7 @@ export async function createPost(
   // 'wx' rather than a plain write: two concurrent runs both read the directory
   // before either writes, so both pick the same number. Losing a post to that
   // race would be invisible until somebody noticed it missing.
-  await writeFile(path, renderPost(post), { flag: 'wx' });
+  await writeFile(path, renderPost(post, config), { flag: 'wx' });
 
   const indexPath = join(dir, 'index.html');
   const index = await readFile(indexPath, 'utf8');

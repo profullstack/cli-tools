@@ -18,6 +18,5 @@ and warns about any post dated in the future.
 Run it after editing a post's title, date or description by hand —
 `/blog:post` already does it for you when creating one.
 
-The feed is served straight off disk at
-`https://dev.profullstack.com/~anthony/blog/feed.xml`, so it is live the moment
-the file is written. There is nothing to deploy.
+The feed is served straight off disk, so it is live the moment the file is
+written. There is nothing to deploy.

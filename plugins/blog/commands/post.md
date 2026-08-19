@@ -45,7 +45,8 @@ right the first time rather than fixing it live.
   you almost never mean to.
 - **Keep the AI-drafting acknowledgment** the template inserts. Kagi Small Web
   and others require disclosure of heavy LLM use, and the index states the
-  policy.
+  policy. It comes from the `disclosure` field of the blog config, so if a post
+  renders without one, run `blog-post config` rather than pasting it by hand.
 - **Stay smolweb-valid**: every `<p>` closed, no bare `<meta charset>`, no
   unclosed tags. The template handles the shell; your body has to hold up its
   end.

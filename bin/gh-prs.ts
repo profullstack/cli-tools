@@ -3,8 +3,8 @@
  * gh-prs — list every open pull request across the owners you name.
  *
  *   gh-prs --orgs profullstack,moshcoder,h4kr,infernetprotocol
- *   gh-prs --users ralyodio,devpreshy
- *   gh-prs --orgs profullstack --users ralyodio
+ *   gh-prs --users octocat,hubot
+ *   gh-prs --orgs profullstack --users octocat
  */
 
 import { csv, integer, parseArgs, UsageError } from '../src/args.ts';
@@ -24,7 +24,7 @@ Options:
 
 Examples:
   gh-prs --orgs profullstack,moshcoder,h4kr,infernetprotocol
-  gh-prs --users ralyodio,devpreshy
+  gh-prs --users octocat,hubot
 `;
 
 async function main(argv: string[]): Promise<number> {

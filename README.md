@@ -71,8 +71,8 @@ and URL become clickable.
 
 ```sh
 gh-prs --orgs profullstack,moshcoder,h4kr,infernetprotocol
-gh-prs --users ralyodio
-gh-prs --orgs profullstack --users ralyodio --limit 50
+gh-prs --users octocat
+gh-prs --orgs profullstack --users octocat --limit 50
 gh-prs --orgs profullstack --no-links          # plain text, for piping
 ```
 
@@ -226,12 +226,49 @@ blog-post new "A title" --description "..." --body draft.html
 blog-post check          # posts that will break the feed
 blog-post list           # every post with its date
 blog-post feed           # regenerate feed.xml
+blog-post config         # where your identity is read from, and what is in effect
 ```
 
-`new` picks the next `NNN-post.html`, renders the smolweb-valid template with
-the AI-drafting acknowledgment, splices the entry into the hand-maintained
-`index.html`, and runs the blog's own `build-feed.mjs`. Point it elsewhere with
-`--dir` or `$BLOG_DIR`.
+`new` picks the next `NNN-post.html`, renders the smolweb-valid template,
+splices the entry into the hand-maintained `index.html`, and runs the blog's own
+`build-feed.mjs`. Point it elsewhere with `--dir` or `$BLOG_DIR`.
+
+#### Your identity is configuration, not code
+
+Nothing about *you* is baked into this repository. The byline, the site name,
+the `rel="me"` links and any analytics or ad ids come from a config file, and
+with none present a post renders with no byline, no identity links and **no
+third-party scripts at all** — which is the only fully smolweb-valid output.
+
+Copy [`blog.config.example.json`](blog.config.example.json) to whichever of
+these suits, most specific first:
+
+| Path | Use it for |
+| --- | --- |
+| `$BLOG_CONFIG` | a one-off, or CI |
+| `<blog dir>/blog.config.json` | a second blog with its own identity |
+| `~/.config/cli-tools/blog.json` | your own blog — the usual answer |
+
+```json
+{
+  "siteTitle": "Your Blog",
+  "author": "Your Name",
+  "disclosure": "<strong>How this was written:</strong> drafted with an AI assistant, then edited by me.",
+  "links": [{ "label": "Mastodon", "href": "https://example.social/@you" }],
+  "trackerSiteId": null,
+  "adSlotId": null
+}
+```
+
+`BLOG_SITE_TITLE`, `BLOG_AUTHOR`, `BLOG_DISCLOSURE`, `CRAWLPROOF_SITE_ID`,
+`CRAWLPROOF_AD_SLOT` and `CRAWLPROOF_AD_FORMAT` override the file. `links` is
+the only field with no environment equivalent.
+
+`trackerSiteId` and `adSlotId` are **accounts, not settings**: leave them null
+unless they are yours. A shared id would meter your readers' pageviews and your
+ad impressions into somebody else's account, which is why they are not defaults.
+
+Run `blog-post config` to see which file was picked up and what it resolved to.
 
 What it refuses to do:
 
