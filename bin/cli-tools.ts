@@ -25,9 +25,9 @@ import {
   aliasesPath,
   commands,
   mergeAliases,
-  onPath,
   PIT_ALIASES,
   repoRoot,
+  resolveCommand,
 } from '../src/registry.ts';
 
 const USAGE = `Usage:
@@ -173,22 +173,51 @@ export async function run(argv: readonly string[]): Promise<number> {
       return 0;
 
     case 'list': {
-      const all = commands(root).map((entry) => ({ ...entry, onPath: onPath(entry.name) }));
+      const binDir = join(root, 'bin');
+      const all = commands(root).map((entry) => ({
+        ...entry,
+        ...resolveCommand(entry.name, binDir),
+      }));
+
       if (options.flags.has('--json')) {
         process.stdout.write(`${JSON.stringify({ root, commands: all }, null, 2)}\n`);
         return 0;
       }
+
       process.stdout.write(`${root}\n\n`);
       for (const entry of all) {
-        const mark = entry.onPath ? '*' : ' ';
+        const mark = entry.status === 'ours' ? '*' : entry.status === 'other' ? '!' : ' ';
         process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
+        // Naming the file is the whole point of the ! row: without it you know
+        // something else answers to the name but not what, and the next step is
+        // a `readlink` you should not have had to think of.
+        if (entry.status === 'other') {
+          process.stdout.write(`${' '.repeat(19)}↳ on PATH: ${entry.target}\n`);
+        }
       }
-      const missing = all.filter((entry) => !entry.onPath).length;
+
+      const other = all.filter((entry) => entry.status === 'other');
+      const missing = all.filter((entry) => entry.status === 'missing');
+
+      process.stdout.write('\n');
+      if (other.length === 0 && missing.length === 0) {
+        process.stdout.write('All running from this checkout.\n');
+        return 0;
+      }
+
       process.stdout.write(
-        missing === 0
-          ? '\nAll on PATH.\n'
-          : `\n${missing} not on PATH — run \`cli-tools link\`.\n`,
+        `${all.length - other.length - missing.length} of ${all.length} running from this checkout.\n`,
       );
+      if (missing.length > 0) {
+        process.stdout.write(`${missing.length} not on PATH — run \`cli-tools link\`.\n`);
+      }
+      if (other.length > 0) {
+        process.stdout.write(
+          `${other.length} shadowed by another implementation (!). \`cli-tools link --force\`\n` +
+            'takes over a symlink; a real file of that name is refused either way.\n' +
+            'Check the flags first — a port does not always keep the original defaults.\n',
+        );
+      }
       return 0;
     }
 

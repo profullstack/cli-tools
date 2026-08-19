@@ -46,24 +46,36 @@ The installer clones to `~/.local/share/cli-tools` (override with
 Check what took:
 
 ```bash
-cli-tools list          # a * marks each command found on PATH
+cli-tools list          # * runs from here, ! is shadowed by another copy
 ```
 
-## If it says a command is not on PATH
+## Reading `cli-tools list`
 
-Two causes, and `cli-tools list` tells them apart from the rest of the output.
+Three states, and the middle one is the one worth understanding:
 
-**`~/.local/bin` is not on `PATH`.** The installer warns about this at the end.
-Add it to your shell profile:
+| Mark | Means |
+| --- | --- |
+| `*` | runs from this checkout |
+| `!` | something else on `PATH` answers to that name — the row names the file |
+| (blank) | not on `PATH` at all |
+
+**Blank: `~/.local/bin` is not on `PATH`.** The installer warns about this at
+the end. Add it to your shell profile:
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-**The name is already taken by another checkout.** A symlink pointing at a
+**`!`: the name is already taken by another checkout.** A symlink pointing at a
 different clone is left alone, because taking it over silently would change
 which code runs. `cli-tools link --force` takes over a *symlink*; a real file of
 that name is refused either way.
+
+Before forcing, **check the flags**. Several of these commands were ported from
+older hand-written scripts of the same name, and a port does not always keep the
+original's defaults — `gh-prs-merge` is the example that bites, because the
+older one repairs by default under `--apply` and this one repairs only when
+asked with `--fix`. Taking it over silently changes what a merge run does.
 
 ## Aliases are a convenience, not the mechanism
 

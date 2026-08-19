@@ -1,9 +1,17 @@
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { aliasesPath, commands, mergeAliases, onPath, PIT_ALIASES, repoRoot } from '../src/registry.ts';
+import {
+  aliasesPath,
+  commands,
+  mergeAliases,
+  onPath,
+  PIT_ALIASES,
+  repoRoot,
+  resolveCommand,
+} from '../src/registry.ts';
 
 const dirs: string[] = [];
 
@@ -73,6 +81,106 @@ describe('onPath', () => {
   it('survives an empty or missing PATH', () => {
     expect(onPath('anything', {} as NodeJS.ProcessEnv)).toBe(false);
     expect(onPath('anything', { PATH: '' } as NodeJS.ProcessEnv)).toBe(false);
+  });
+});
+
+describe('resolveCommand', () => {
+  /** A checkout with `bin/<name>.ts`, and a PATH dir linking to it. */
+  async function layout(): Promise<{ binDir: string; pathDir: string; other: string }> {
+    const root = await tmp();
+    const binDir = join(root, 'bin');
+    const pathDir = join(root, 'path');
+    const other = join(root, 'elsewhere');
+    await mkdir(binDir);
+    await mkdir(pathDir);
+    await mkdir(other);
+    return { binDir, pathDir, other };
+  }
+
+  it('reports a link into our bin as ours', async () => {
+    const { binDir, pathDir } = await layout();
+    const source = join(binDir, 'thing.ts');
+    await writeFile(source, '#!/bin/sh\n');
+    await chmod(source, 0o755);
+    await symlink(source, join(pathDir, 'thing'));
+
+    const result = resolveCommand('thing', binDir, { PATH: pathDir } as NodeJS.ProcessEnv);
+    expect(result.status).toBe('ours');
+    expect(result.target).toBe(source);
+  });
+
+  // The bug this replaced: a bare presence check called every one of these
+  // installed, while five were the older hand-written scripts they were ported
+  // from — different implementations with different flag defaults.
+  it('reports a different implementation of the same name as other, and names it', async () => {
+    const { binDir, pathDir, other } = await layout();
+    await writeFile(join(binDir, 'thing.ts'), '#!/bin/sh\n');
+    const rival = join(other, 'thing');
+    await writeFile(rival, '#!/bin/sh\n');
+    await chmod(rival, 0o755);
+    await symlink(rival, join(pathDir, 'thing'));
+
+    const result = resolveCommand('thing', binDir, { PATH: pathDir } as NodeJS.ProcessEnv);
+    expect(result.status).toBe('other');
+    expect(result.target).toBe(rival);
+  });
+
+  it('reports a name that is nowhere on PATH as missing', async () => {
+    const { binDir, pathDir } = await layout();
+    const result = resolveCommand('absent', binDir, { PATH: pathDir } as NodeJS.ProcessEnv);
+    expect(result).toEqual({ status: 'missing', target: null });
+  });
+
+  // Without the separator, a sibling directory whose name merely starts the
+  // same way ("bin-old" beside "bin") would read as ours.
+  it('does not mistake a sibling directory with a shared prefix for ours', async () => {
+    const root = await tmp();
+    const binDir = join(root, 'bin');
+    const lookalike = join(root, 'bin-old');
+    const pathDir = join(root, 'path');
+    await mkdir(binDir);
+    await mkdir(lookalike);
+    await mkdir(pathDir);
+
+    const rival = join(lookalike, 'thing');
+    await writeFile(rival, '#!/bin/sh\n');
+    await chmod(rival, 0o755);
+    await symlink(rival, join(pathDir, 'thing'));
+
+    expect(resolveCommand('thing', binDir, { PATH: pathDir } as NodeJS.ProcessEnv).status).toBe(
+      'other',
+    );
+  });
+
+  it('takes the first match on PATH, as the shell would', async () => {
+    const { binDir, pathDir, other } = await layout();
+    const source = join(binDir, 'thing.ts');
+    await writeFile(source, '#!/bin/sh\n');
+    await chmod(source, 0o755);
+    await symlink(source, join(pathDir, 'thing'));
+
+    const shadow = join(other, 'thing');
+    await writeFile(shadow, '#!/bin/sh\n');
+    await chmod(shadow, 0o755);
+
+    // `other` first: it wins, exactly as PATH order dictates.
+    expect(
+      resolveCommand('thing', binDir, { PATH: `${other}:${pathDir}` } as NodeJS.ProcessEnv).status,
+    ).toBe('other');
+    expect(
+      resolveCommand('thing', binDir, { PATH: `${pathDir}:${other}` } as NodeJS.ProcessEnv).status,
+    ).toBe('ours');
+  });
+
+  it('still names a broken symlink rather than throwing', async () => {
+    const { binDir, pathDir } = await layout();
+    const dangling = join(binDir, 'gone.ts');
+    await symlink(dangling, join(pathDir, 'gone'));
+
+    // Nothing is executable, so it does not resolve — but it must not throw.
+    expect(() =>
+      resolveCommand('gone', binDir, { PATH: pathDir } as NodeJS.ProcessEnv),
+    ).not.toThrow();
   });
 });
 
