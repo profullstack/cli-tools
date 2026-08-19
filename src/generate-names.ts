@@ -48,7 +48,10 @@ export function resolveProvider(
   }
   if (env['OPENAI_API_KEY']) return 'openai';
   if (env['ANTHROPIC_API_KEY']) return 'anthropic';
-  throw new Error('set OPENAI_API_KEY or ANTHROPIC_API_KEY (or pass --provider)');
+  throw new Error(
+    'no API key — run `cli-tools config set openai` (or anthropic), ' +
+      'or export OPENAI_API_KEY / ANTHROPIC_API_KEY',
+  );
 }
 
 export function buildPrompt(description: string, words: 1 | 2): string {

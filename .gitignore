@@ -6,6 +6,10 @@ node_modules/
 # Belongs in ~/.config/cli-tools/blog.json, never in the repository.
 blog.config.json
 
+# API keys. These belong in ~/.config/cli-tools/credentials.json, 0600, and
+# never in a repository — see `cli-tools config`.
+credentials.json
+
 # Local environment and credentials, in every form they usually turn up in.
 .env
 .env.*
