@@ -5,12 +5,14 @@ TypeScript, installed as executables on `PATH`.
 
 | Command | What it does |
 | --- | --- |
+| [`cli-tools`](#install) | The dispatcher: list, update, link, and the pit aliases |
 | [`gh-prs`](#gh-prs) | List every open PR across the owners you name |
 | [`gh-prs-merge`](#gh-prs-merge) | Squash-merge the PRs that are genuinely ready |
 | [`gh-prs-fix-all`](#gh-prs-fix-all) | Fix the open threatcrush-scan PRs that are broken because of us |
 | [`tcfeed`](#tcfeed) | Find repositories worth scanning, scan them, print a shortlist |
 | [`domainjson`](#domainjson) | whois-style, JSON-first name lookup |
-| [`blog-post`](#blog-post) | Publish to the plain-HTML blog without breaking the feed |
+| [`domainfree`](#domainfree) | Which of these domains you can actually register |
+| [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 
 ## Requirements
 
@@ -24,11 +26,38 @@ TypeScript, installed as executables on `PATH`.
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh
+```
+
+That clones to `~/.local/share/cli-tools`, installs dependencies, and symlinks
+every command into `~/.local/bin`. `CLI_TOOLS_HOME` and `CLI_TOOLS_PREFIX`
+override both. If a checkout already owns these command names, the installer
+updates *that* one rather than cloning a second copy beside it.
+
+With moshcode on the box, the same thing:
+
+```sh
+moshcode install cli-tools     # then /cli-tools … in the pit
+```
+
+Check what landed, and wire up the pit aliases:
+
+```sh
+cli-tools list                 # a * marks each command found on PATH
+cli-tools aliases --install    # /blog /free /merge /prs /whois
+cli-tools update               # git pull, reinstall, relink
+```
+
+<details>
+<summary>From a clone, for development</summary>
+
+```sh
 git clone git@github.com:profullstack/cli-tools.git ~/src/profullstack/cli-tools
 cd ~/src/profullstack/cli-tools
 pnpm install
 pnpm link:bin
 ```
+</details>
 
 `link:bin` symlinks every `bin/*.ts` into `~/.local/bin` without the extension,
 so `gh-prs-merge` is a real command. (Not named `link` — that is a pnpm builtin,
@@ -287,19 +316,33 @@ missing `<h1>`, and exits non-zero, so it works as a pre-publish gate.
 
 ## As a moshcode plugin
 
-This repo is also a plugin marketplace, exposing `blog-post` as slash commands:
+This repo is also a plugin marketplace:
 
 ```sh
 moshcode plugin marketplace add profullstack/cli-tools
-moshcode plugin install blog@cli-tools
+moshcode plugin install tools@cli-tools     # /tools:install, /tools:list
+moshcode plugin install blog@cli-tools      # /blog:post, :check, :list, :feed
+moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
 ```
 
-That adds `/blog:post`, `/blog:check`, `/blog:list` and `/blog:feed`. See
-[plugins/blog](plugins/blog/README.md).
+See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md)
+and [plugins/domain](plugins/domain/README.md).
+
+`cli-tools` is also a moshcode workflow tool, so the whole set installs and
+updates through moshcode itself:
+
+```sh
+moshcode install cli-tools     # then /cli-tools list, /cli-tools update
+```
 
 ## Aliases
 
-Pit aliases live in `~/.moshcode/aliases.json`:
+Pit aliases live in `~/.moshcode/aliases.json`. `cli-tools aliases --install`
+writes a thin default set (`/blog`, `/free`, `/merge`, `/prs`, `/whois`),
+merging rather than replacing — an alias you bound yourself is kept and the
+collision is reported. `cli-tools aliases` prints them without writing anything.
+
+To manage them by hand:
 
 ```
 /alias set prs        "gh-prs --orgs profullstack"

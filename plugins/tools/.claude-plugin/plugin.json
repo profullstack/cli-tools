@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "tools",
+  "description": "Install and manage the cli-tools command set: put every command on PATH, keep it current, and wire up the moshcode pit aliases.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://github.com/profullstack/cli-tools#install",
+  "license": "MIT",
+  "keywords": ["cli", "install", "path", "aliases", "moshcode"]
+}
