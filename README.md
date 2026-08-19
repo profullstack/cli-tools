@@ -45,6 +45,7 @@ Check what landed, and wire up the pit aliases:
 ```sh
 cli-tools list                 # * runs from here, ! is shadowed by another copy
 cli-tools aliases --install    # /blog /free /merge /prs /whois
+cli-tools config               # API keys: what is set, and where it came from
 cli-tools update               # git pull, reinstall, relink
 ```
 
@@ -89,6 +90,45 @@ To go back:
 pnpm unlink:bin                                               # remove ours
 ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 ```
+
+## API keys
+
+`generate-names` needs an OpenAI or Anthropic key. Store one once, and nothing
+has to carry it in an environment again:
+
+```sh
+cli-tools config set openai        # prompts; the value is never echoed
+cli-tools config                   # what is set, and which source is winning
+cli-tools config unset openai
+```
+
+Keys live in `~/.config/cli-tools/credentials.json`, written `0600` in a `0700`
+directory (`$CLI_TOOLS_CREDENTIALS` overrides the path). Nothing prints a whole
+key back — `config` shows a masked preview and a length, which is enough to tell
+two keys apart and not enough to use one. `--json` is machine-readable and
+carries the same masked previews, not the values.
+
+| Key | Variable | Used by |
+| --- | --- | --- |
+| `openai` | `OPENAI_API_KEY` | `generate-names` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `generate-names` |
+
+**The environment wins over the file.** A key exported in your shell or injected
+by CI overrides a stored one, so a one-off `OPENAI_API_KEY=… generate-names …`
+still behaves. Because that is otherwise invisible — you store a key, and the
+old one keeps being used — `cli-tools config` reports the *source* of each key
+rather than only whether one exists, and says so explicitly when a stored value
+is being shadowed.
+
+A value can be passed inline (`cli-tools config set openai sk-…`) for scripts,
+and piped (`… | cli-tools config set openai`) when there is no TTY. Inline is
+the worst of the three: it lands in shell history and in `ps`, so the command
+warns when you use it interactively.
+
+This is a machine-local credential store, the same kind of thing as
+`~/.aws/credentials` — not a `.env`, not something to copy between machines, and
+not where a production secret belongs. A secret that a deployed service needs
+goes on that service, with your vault as the record.
 
 ## Usage
 
@@ -201,9 +241,11 @@ and shuffled. Asking a model for 1,000 names directly repeats itself within a
 few hundred, drifts off-brief, and costs far more — and the call count here is
 the same whether you ask for 10 names or 10,000.
 
-Needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Whichever is set is used;
-OpenAI wins if both are. Defaults are the cheap tier on each side
-(`gpt-4.1-mini` / `claude-haiku-4-5`) and are overridable with `--model`.
+Needs a key — `cli-tools config set openai` stores one (see [API
+keys](#api-keys)), and `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` still work and
+take precedence. Whichever provider has a key is used; OpenAI wins if both do.
+Defaults are the cheap tier on each side (`gpt-4.1-mini` / `claude-haiku-4-5`)
+and are overridable with `--model`.
 
 | Flag | Effect |
 | --- | --- |

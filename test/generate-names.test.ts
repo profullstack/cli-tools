@@ -34,8 +34,13 @@ describe('resolveProvider', () => {
     expect(() => resolveProvider({ OPENAI_API_KEY: 'x' }, 'gemini')).toThrow(/expected openai or anthropic/);
   });
 
+  // The message names the command that fixes it, not just the variable: a key
+  // can now be stored as well as exported, and "set OPENAI_API_KEY" sent people
+  // to their shell profile when `cli-tools config set openai` is the better
+  // answer and the one that does not leave the key in a dotfile.
   it('explains what to set when there is no key at all', () => {
-    expect(() => resolveProvider({})).toThrow(/OPENAI_API_KEY or ANTHROPIC_API_KEY/);
+    expect(() => resolveProvider({})).toThrow(/cli-tools config set openai/);
+    expect(() => resolveProvider({})).toThrow(/OPENAI_API_KEY/);
   });
 });
 

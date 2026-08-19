@@ -20,6 +20,15 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { parseArgs, UsageError } from '../src/args.ts';
+import {
+  credentialsPath,
+  keyStates,
+  keyVariable,
+  KNOWN_KEYS,
+  loadStored,
+  mask,
+  saveStored,
+} from '../src/credentials.ts';
 import { isMain } from '../src/is-main.ts';
 import {
   aliasesPath,
@@ -36,6 +45,7 @@ const USAGE = `Usage:
   cli-tools link [--force]
   cli-tools unlink
   cli-tools aliases [--install]
+  cli-tools config [set <key> [value] | unset <key>]
   cli-tools <command> [args…]
 
 Commands:
@@ -44,12 +54,17 @@ Commands:
   link      Symlink the commands into ~/.local/bin
   unlink    Remove the symlinks we own
   aliases   Print the moshcode pit aliases, or write them with --install
+  config    API keys: what is set, where it came from, and how to change it
   where     Print the checkout this command is running from
+
+Keys (config set <key>):
+  openai      OPENAI_API_KEY      generate-names
+  anthropic   ANTHROPIC_API_KEY   generate-names
 
 Options:
   --force   link: take over a symlink owned by another checkout
   --install aliases: merge them into ~/.moshcode/aliases.json
-  --json    list/aliases: machine-readable
+  --json    list/aliases/config: machine-readable (config never prints a key)
   -h, --help
 `;
 
@@ -127,6 +142,157 @@ function writeAliases(): number {
   return 0;
 }
 
+/**
+ * Read one line without echoing it.
+ *
+ * A key typed at a visible prompt ends up in the scrollback of whatever
+ * terminal, screen share or recording happens to be running, which is most of
+ * the reason to have this command rather than telling people to edit the file.
+ * Piped input is read as-is, so `… | cli-tools config set openai` works in a
+ * script without a TTY.
+ */
+async function promptSecret(label: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks).toString('utf8').trim();
+  }
+
+  process.stderr.write(label);
+  process.stdin.setRawMode(true);
+  process.stdin.resume();
+
+  return new Promise<string>((resolve) => {
+    let value = '';
+    const onData = (chunk: Buffer) => {
+      for (const byte of chunk) {
+        // Enter, or EOF/interrupt.
+        if (byte === 0x0d || byte === 0x0a || byte === 0x04) {
+          finish();
+          return;
+        }
+        if (byte === 0x03) {
+          process.stderr.write('\n');
+          process.exit(130);
+        }
+        // Backspace / delete.
+        if (byte === 0x7f || byte === 0x08) {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += String.fromCharCode(byte);
+      }
+    };
+    const finish = () => {
+      process.stdin.off('data', onData);
+      process.stdin.setRawMode(false);
+      process.stdin.pause();
+      process.stderr.write('\n');
+      resolve(value.trim());
+    };
+    process.stdin.on('data', onData);
+  });
+}
+
+async function configCommand(rest: readonly string[], json: boolean): Promise<number> {
+  const [verb, name, ...more] = rest;
+
+  if (!verb) {
+    const states = keyStates();
+    if (json) {
+      process.stdout.write(`${JSON.stringify({ path: credentialsPath(), keys: states }, null, 2)}\n`);
+      return 0;
+    }
+
+    process.stdout.write(`${credentialsPath()}\n\n`);
+    for (const state of states) {
+      const where =
+        state.source === 'env'
+          ? 'environment (overrides the file)'
+          : state.source === 'file'
+            ? 'stored'
+            : 'not set';
+      process.stdout.write(
+        `  ${state.name.padEnd(10)} ${state.variable.padEnd(18)} ${where}\n` +
+          (state.preview ? `${' '.repeat(13)}${state.preview}\n` : ''),
+      );
+    }
+
+    const shadowed = states.filter((state) => state.source === 'env');
+    if (shadowed.length > 0) {
+      // The failure this heads off: storing a key, still getting the old one,
+      // and having nothing on screen explain why.
+      process.stdout.write(
+        `\nNote: ${shadowed.map((s) => s.variable).join(', ')} ${shadowed.length === 1 ? 'is' : 'are'} set in your environment,\n` +
+          'so a stored value would be ignored. Unset the variable to use the stored one.\n',
+      );
+    }
+    if (states.every((state) => state.source === 'unset')) {
+      process.stdout.write('\nNothing set. Add one with:\n  cli-tools config set openai\n');
+    }
+    return 0;
+  }
+
+  if (verb !== 'set' && verb !== 'unset') {
+    process.stderr.write(`config: unknown verb "${verb}" (expected set or unset)\n`);
+    return 1;
+  }
+
+  if (!name) {
+    process.stderr.write(`config ${verb}: name a key — ${Object.keys(KNOWN_KEYS).join(', ')}\n`);
+    return 1;
+  }
+
+  const variable = keyVariable(name);
+  if (!variable) {
+    process.stderr.write(
+      `config: unknown key "${name}". Known keys: ${Object.keys(KNOWN_KEYS).join(', ')}\n`,
+    );
+    return 1;
+  }
+
+  const stored = loadStored();
+
+  if (verb === 'unset') {
+    if (!Object.hasOwn(stored, variable)) {
+      process.stdout.write(`config: ${variable} was not stored — nothing to remove.\n`);
+      return 0;
+    }
+    delete stored[variable];
+    process.stdout.write(`config: removed ${variable} from ${saveStored(stored)}\n`);
+    return 0;
+  }
+
+  // An inline value is accepted because scripts need it, but it lands in shell
+  // history and the process list, so the prompt is the default and this says so.
+  let value = more.length > 0 ? more.join(' ').trim() : '';
+  if (!value) {
+    value = await promptSecret(`${variable}: `);
+  } else if (process.stdin.isTTY) {
+    process.stderr.write(
+      'config: a value on the command line is visible in shell history and `ps`.\n' +
+        `        Prefer \`cli-tools config set ${name}\` and type it at the prompt.\n`,
+    );
+  }
+
+  if (!value) {
+    process.stderr.write('config: no value given — nothing stored.\n');
+    return 1;
+  }
+
+  stored[variable] = value;
+  const path = saveStored(stored);
+  process.stdout.write(`config: stored ${variable} (${mask(value)}) in ${path}\n`);
+
+  if (process.env[variable]) {
+    process.stdout.write(
+      `\nNote: ${variable} is also set in your environment, which wins.\n` +
+        `      Unset it for the stored value to take effect.\n`,
+    );
+  }
+  return 0;
+}
+
 export async function run(argv: readonly string[]): Promise<number> {
   // The first word is the command, and everything after it belongs to that
   // command — parsed here only for our own verbs, and passed through untouched
@@ -145,7 +311,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   // Anything that is not one of ours is one of the commands: pass it straight
   // through, arguments and streams untouched, so `cli-tools gh-prs --orgs x`
   // behaves exactly as `gh-prs --orgs x` does.
-  const known = new Set(['list', 'update', 'link', 'unlink', 'aliases', 'where']);
+  const known = new Set(['list', 'update', 'link', 'unlink', 'aliases', 'config', 'where']);
   if (!known.has(command)) {
     const match = commands(root).find((entry) => entry.name === command);
     if (!match) {
@@ -171,6 +337,12 @@ export async function run(argv: readonly string[]): Promise<number> {
     case 'where':
       process.stdout.write(`${root}\n`);
       return 0;
+
+    // positional, so `--json` is a flag here rather than part of a key's value.
+    // A value that begins with a dash cannot be passed inline for the same
+    // reason; type it at the prompt, which is the better habit anyway.
+    case 'config':
+      return configCommand(options.positional, options.flags.has('--json'));
 
     case 'list': {
       const binDir = join(root, 'bin');

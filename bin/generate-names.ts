@@ -8,6 +8,7 @@
  */
 
 import { UsageError, integer, parseArgs } from '../src/args.ts';
+import { resolveCredentials } from '../src/credentials.ts';
 import { isMain } from '../src/is-main.ts';
 import {
   DEFAULT_COUNT,
@@ -37,8 +38,15 @@ Options:
       --timeout MS  API timeout (default: 60000)
   -h, --help        show this help
 
-Needs OPENAI_API_KEY or ANTHROPIC_API_KEY. Names go to stdout and nothing
-else does, so the output pipes cleanly.
+Needs an OpenAI or Anthropic key. Store one once:
+
+  cli-tools config set openai        # prompts, nothing echoed or logged
+  cli-tools config                   # what is set, and where it came from
+
+kept 0600 in ~/.config/cli-tools/credentials.json. OPENAI_API_KEY and
+ANTHROPIC_API_KEY still work and take precedence over a stored key.
+
+Names go to stdout and nothing else does, so the output pipes cleanly.
 `;
 
 if (isMain(import.meta.url)) {
@@ -70,16 +78,20 @@ if (isMain(import.meta.url)) {
     const tld = (values.get('--tld') ?? DEFAULT_TLD).replace(/^\./, '');
     if (!/^[a-z]{2,}$/i.test(tld)) throw new UsageError(`--tld must be letters, got "${tld}"`);
 
+    // Stored keys first, environment on top — see src/credentials.ts. Shaped
+    // as an environment record so resolveProvider needs no change.
+    const credentials = resolveCredentials(process.env);
+
     let provider;
     try {
-      provider = resolveProvider(process.env, values.get('--provider'));
+      provider = resolveProvider(credentials, values.get('--provider'));
     } catch (error) {
       // A bad --provider is a typo and a missing key is a setup problem; both
       // are the caller's to fix, so report them like any other usage error.
       throw new UsageError(error instanceof Error ? error.message : String(error));
     }
     const model = values.get('--model') ?? DEFAULT_MODELS[provider];
-    const apiKey = process.env[provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY']!;
+    const apiKey = credentials[provider === 'openai' ? 'OPENAI_API_KEY' : 'ANTHROPIC_API_KEY']!;
     const call =
       provider === 'openai'
         ? openaiCaller(apiKey, model, timeout)
