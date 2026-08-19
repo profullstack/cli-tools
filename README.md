@@ -5,12 +5,14 @@ TypeScript, installed as executables on `PATH`.
 
 | Command | What it does |
 | --- | --- |
+| [`cli-tools`](#install) | The dispatcher: list, update, link, and the pit aliases |
 | [`gh-prs`](#gh-prs) | List every open PR across the owners you name |
 | [`gh-prs-merge`](#gh-prs-merge) | Squash-merge the PRs that are genuinely ready |
 | [`gh-prs-fix-all`](#gh-prs-fix-all) | Fix the open threatcrush-scan PRs that are broken because of us |
 | [`tcfeed`](#tcfeed) | Find repositories worth scanning, scan them, print a shortlist |
 | [`domainjson`](#domainjson) | whois-style, JSON-first name lookup |
-| [`blog-post`](#blog-post) | Publish to the plain-HTML blog without breaking the feed |
+| [`domainfree`](#domainfree) | Which of these domains you can actually register |
+| [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 
 ## Requirements
 
@@ -24,11 +26,38 @@ TypeScript, installed as executables on `PATH`.
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/install.sh | sh
+```
+
+That clones to `~/.local/share/cli-tools`, installs dependencies, and symlinks
+every command into `~/.local/bin`. `CLI_TOOLS_HOME` and `CLI_TOOLS_PREFIX`
+override both. If a checkout already owns these command names, the installer
+updates *that* one rather than cloning a second copy beside it.
+
+With moshcode on the box, the same thing:
+
+```sh
+moshcode install cli-tools     # then /cli-tools … in the pit
+```
+
+Check what landed, and wire up the pit aliases:
+
+```sh
+cli-tools list                 # a * marks each command found on PATH
+cli-tools aliases --install    # /blog /free /merge /prs /whois
+cli-tools update               # git pull, reinstall, relink
+```
+
+<details>
+<summary>From a clone, for development</summary>
+
+```sh
 git clone git@github.com:profullstack/cli-tools.git ~/src/profullstack/cli-tools
 cd ~/src/profullstack/cli-tools
 pnpm install
 pnpm link:bin
 ```
+</details>
 
 `link:bin` symlinks every `bin/*.ts` into `~/.local/bin` without the extension,
 so `gh-prs-merge` is a real command. (Not named `link` — that is a pnpm builtin,
@@ -71,8 +100,8 @@ and URL become clickable.
 
 ```sh
 gh-prs --orgs profullstack,moshcoder,h4kr,infernetprotocol
-gh-prs --users ralyodio
-gh-prs --orgs profullstack --users ralyodio --limit 50
+gh-prs --users octocat
+gh-prs --orgs profullstack --users octocat --limit 50
 gh-prs --orgs profullstack --no-links          # plain text, for piping
 ```
 
@@ -226,12 +255,49 @@ blog-post new "A title" --description "..." --body draft.html
 blog-post check          # posts that will break the feed
 blog-post list           # every post with its date
 blog-post feed           # regenerate feed.xml
+blog-post config         # where your identity is read from, and what is in effect
 ```
 
-`new` picks the next `NNN-post.html`, renders the smolweb-valid template with
-the AI-drafting acknowledgment, splices the entry into the hand-maintained
-`index.html`, and runs the blog's own `build-feed.mjs`. Point it elsewhere with
-`--dir` or `$BLOG_DIR`.
+`new` picks the next `NNN-post.html`, renders the smolweb-valid template,
+splices the entry into the hand-maintained `index.html`, and runs the blog's own
+`build-feed.mjs`. Point it elsewhere with `--dir` or `$BLOG_DIR`.
+
+#### Your identity is configuration, not code
+
+Nothing about *you* is baked into this repository. The byline, the site name,
+the `rel="me"` links and any analytics or ad ids come from a config file, and
+with none present a post renders with no byline, no identity links and **no
+third-party scripts at all** — which is the only fully smolweb-valid output.
+
+Copy [`blog.config.example.json`](blog.config.example.json) to whichever of
+these suits, most specific first:
+
+| Path | Use it for |
+| --- | --- |
+| `$BLOG_CONFIG` | a one-off, or CI |
+| `<blog dir>/blog.config.json` | a second blog with its own identity |
+| `~/.config/cli-tools/blog.json` | your own blog — the usual answer |
+
+```json
+{
+  "siteTitle": "Your Blog",
+  "author": "Your Name",
+  "disclosure": "<strong>How this was written:</strong> drafted with an AI assistant, then edited by me.",
+  "links": [{ "label": "Mastodon", "href": "https://example.social/@you" }],
+  "trackerSiteId": null,
+  "adSlotId": null
+}
+```
+
+`BLOG_SITE_TITLE`, `BLOG_AUTHOR`, `BLOG_DISCLOSURE`, `CRAWLPROOF_SITE_ID`,
+`CRAWLPROOF_AD_SLOT` and `CRAWLPROOF_AD_FORMAT` override the file. `links` is
+the only field with no environment equivalent.
+
+`trackerSiteId` and `adSlotId` are **accounts, not settings**: leave them null
+unless they are yours. A shared id would meter your readers' pageviews and your
+ad impressions into somebody else's account, which is why they are not defaults.
+
+Run `blog-post config` to see which file was picked up and what it resolved to.
 
 What it refuses to do:
 
@@ -250,19 +316,33 @@ missing `<h1>`, and exits non-zero, so it works as a pre-publish gate.
 
 ## As a moshcode plugin
 
-This repo is also a plugin marketplace, exposing `blog-post` as slash commands:
+This repo is also a plugin marketplace:
 
 ```sh
 moshcode plugin marketplace add profullstack/cli-tools
-moshcode plugin install blog@cli-tools
+moshcode plugin install tools@cli-tools     # /tools:install, /tools:list
+moshcode plugin install blog@cli-tools      # /blog:post, :check, :list, :feed
+moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
 ```
 
-That adds `/blog:post`, `/blog:check`, `/blog:list` and `/blog:feed`. See
-[plugins/blog](plugins/blog/README.md).
+See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md)
+and [plugins/domain](plugins/domain/README.md).
+
+`cli-tools` is also a moshcode workflow tool, so the whole set installs and
+updates through moshcode itself:
+
+```sh
+moshcode install cli-tools     # then /cli-tools list, /cli-tools update
+```
 
 ## Aliases
 
-Pit aliases live in `~/.moshcode/aliases.json`:
+Pit aliases live in `~/.moshcode/aliases.json`. `cli-tools aliases --install`
+writes a thin default set (`/blog`, `/free`, `/merge`, `/prs`, `/whois`),
+merging rather than replacing — an alias you bound yourself is kept and the
+collision is reported. `cli-tools aliases` prints them without writing anything.
+
+To manage them by hand:
 
 ```
 /alias set prs        "gh-prs --orgs profullstack"

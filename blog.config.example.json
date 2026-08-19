@@ -1,0 +1,13 @@
+{
+  "siteTitle": "Your Blog",
+  "author": "Your Name",
+  "disclosure": "<strong>How this was written:</strong> drafted with an AI assistant from my own notes, then edited by me.",
+  "links": [
+    { "label": "Mastodon", "href": "https://example.social/@you" },
+    { "label": "GitHub", "href": "https://github.com/you" },
+    { "label": "email", "href": "mailto:you@example.com" }
+  ],
+  "trackerSiteId": null,
+  "adSlotId": null,
+  "adFormat": "text_link"
+}

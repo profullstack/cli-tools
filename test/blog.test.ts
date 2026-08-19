@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  AD_UNIT,
+  adUnit,
   blogDir,
   createPost,
   DEFAULT_DIR,
@@ -15,12 +15,27 @@ import {
   nextNumber,
   readPosts,
   renderPost,
-  TRACKER,
+  tracker,
   typogrify,
   type Post,
 } from '../src/blog.ts';
+import { EMPTY_CONFIG, type BlogConfig } from '../src/blog-config.ts';
 
 const NOW = Date.parse('2026-08-16T11:00:00Z');
+
+/** A fully populated config, so the identity-bearing branches are exercised. */
+const CONFIGURED: BlogConfig = {
+  siteTitle: "Someone's Blog",
+  author: 'Some One',
+  disclosure: 'How this was written: drafted with an AI assistant, then edited by me.',
+  links: [
+    { label: 'Mastodon', href: 'https://example.social/@someone' },
+    { label: 'email', href: 'mailto:someone@example.com' },
+  ],
+  trackerSiteId: 'site-id-1234',
+  adSlotId: 'slot-id-5678',
+  adFormat: 'text_link',
+};
 
 const dirs: string[] = [];
 
@@ -86,11 +101,10 @@ describe('esc and typogrify', () => {
 });
 
 describe('renderPost', () => {
-  const html = renderPost({
-    title: 'A Post',
-    description: 'about things',
-    date: '2026-08-16T10:00:00Z',
-  });
+  const html = renderPost(
+    { title: 'A Post', description: 'about things', date: '2026-08-16T10:00:00Z' },
+    CONFIGURED,
+  );
 
   it('emits the smolweb-valid shape the blog requires', () => {
     expect(html).toContain('<html lang="en">');
@@ -103,17 +117,21 @@ describe('renderPost', () => {
     expect(html).toContain('href="feed.xml"');
   });
 
-  it('keeps the AI-drafting acknowledgment, which is required disclosure', () => {
+  it('carries the configured byline, disclosure and identity links', () => {
+    expect(html).toContain('by Some One.');
     expect(html).toContain('How this was written:');
+    expect(html).toContain('<a rel="me" href="https://example.social/@someone">Mastodon</a>');
+    expect(html).toContain("<title>A Post &mdash; Someone's Blog</title>");
   });
 
   it('carries the CrawlProof tracker and ad unit, last thing before </body>', () => {
-    expect(html).toContain(TRACKER);
+    expect(html).toContain(tracker(CONFIGURED.trackerSiteId));
     expect(html).toContain('data-cp-ad');
     // Placement matters: the tags are async, but keeping them after the
     // article means nothing about the post waits on a third-party host.
-    expect(html.indexOf(AD_UNIT)).toBeGreaterThan(html.indexOf('</article>'));
-    expect(html.indexOf(AD_UNIT)).toBeLessThan(html.indexOf('</body>'));
+    const unit = adUnit(CONFIGURED);
+    expect(html.indexOf(unit)).toBeGreaterThan(html.indexOf('</article>'));
+    expect(html.indexOf(unit)).toBeLessThan(html.indexOf('</body>'));
   });
 
   it('runs the thin text_link bar, not a banner', () => {
@@ -129,6 +147,44 @@ describe('renderPost', () => {
     });
     expect(hostile).not.toContain('onload="alert(1)"');
     expect(hostile).toContain('&quot;');
+  });
+
+  // The reason the identity is configuration and not a constant: an unconfigured
+  // checkout must not publish somebody else's name, nor meter that install's
+  // pageviews and ad impressions into an account it inherited from the repo.
+  describe('with no config', () => {
+    const bare = renderPost({
+      title: 'A Post',
+      description: 'about things',
+      date: '2026-08-16T10:00:00Z',
+    });
+
+    it('names nobody and links nowhere', () => {
+      expect(bare).not.toMatch(/\bby\b.*\./);
+      expect(bare).not.toContain('Find me:');
+      expect(bare).not.toContain('rel="me"');
+      expect(bare).toContain('<p><em>2026-08-16</em></p>');
+    });
+
+    it('emits no third-party script at all, which is the smolweb-valid case', () => {
+      expect(bare).not.toContain('crawlproof.com');
+      expect(bare).not.toContain('data-cp-ad');
+      expect(bare).not.toContain('<script');
+      expect(adUnit(EMPTY_CONFIG)).toBe('');
+      expect(tracker(null)).toBe('');
+    });
+
+    it('still renders the shape the feed needs', () => {
+      expect(bare).toContain('<h1>A Post</h1>');
+      expect(bare).toContain('<meta name="date" content="2026-08-16T10:00:00Z">');
+      expect(bare).toContain('href="feed.xml"');
+    });
+  });
+
+  it('emits the tracker without an ad unit when only a site id is set', () => {
+    const only = adUnit({ ...EMPTY_CONFIG, trackerSiteId: 'site-id-1234' });
+    expect(only).toBe(tracker('site-id-1234'));
+    expect(only).not.toContain('ad.js');
   });
 });
 

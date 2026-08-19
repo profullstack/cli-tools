@@ -1,3 +1,14 @@
 node_modules/
 *.log
 .DS_Store
+
+# Your blog identity: byline, rel="me" links, analytics and ad account ids.
+# Belongs in ~/.config/cli-tools/blog.json, never in the repository.
+blog.config.json
+
+# Local environment and credentials, in every form they usually turn up in.
+.env
+.env.*
+!.env.example
+*.pem
+*.key

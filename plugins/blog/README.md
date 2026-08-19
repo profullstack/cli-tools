@@ -27,7 +27,14 @@ saying anything useful.
 `<meta charset>`, and closes everything.
 
 **Forgetting the AI-drafting acknowledgment.** It goes in every post; Kagi
-Small Web and others require disclosure, and the index states the policy.
+Small Web and others require disclosure, and the index states the policy. It
+comes from the `disclosure` field of your blog config — `blog-post config`
+shows whether one is set.
+
+**Publishing with nobody's name on it.** The byline, site name and `rel="me"`
+links are configuration, not constants, so an unconfigured checkout writes a
+post with no byline and no identity links. Copy `blog.config.example.json` to
+`~/.config/cli-tools/blog.json` before the first post.
 
 ## Install
 

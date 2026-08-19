@@ -23,18 +23,21 @@ import {
   lint,
   readPosts,
 } from '../src/blog.ts';
+import { configPaths, loadBlogConfig } from '../src/blog-config.ts';
 
 const USAGE = `Usage:
   blog-post new <title> --description <text> [--body file.html] [--date ISO]
   blog-post check
   blog-post list
   blog-post feed
+  blog-post config
 
 Commands:
   new      Write the next post, list it in index.html, rebuild the feed
   check    Report posts that will break the feed (non-zero exit if any)
   list     Every post with its date
   feed     Regenerate feed.xml
+  config   Where the blog identity is read from, and what is in effect
 
 Options:
   --description TEXT  Feed summary. Required by \`new\`.
@@ -126,12 +129,19 @@ export async function run(argv: readonly string[]): Promise<number> {
       const bodyFile = values.get('--body');
       const body = bodyFile ? await readFile(bodyFile, 'utf8') : '';
 
-      const { file, path } = await createPost(dir, {
-        title,
-        description,
-        date: isoSeconds(when),
-        body,
-      });
+      const config = await loadBlogConfig(dir);
+      if (!config.author) {
+        process.stderr.write(
+          'note: no blog config found, so this post has no byline and no identity links.\n' +
+            `      Write one to ${configPaths(dir).at(-1)} — see \`blog-post config\`.\n`,
+        );
+      }
+
+      const { file, path } = await createPost(
+        dir,
+        { title, description, date: isoSeconds(when), body },
+        config,
+      );
 
       process.stdout.write(`created ${file}\n        ${path}\n        listed in index.html\n`);
       return rebuildFeed(dir);
@@ -153,6 +163,24 @@ export async function run(argv: readonly string[]): Promise<number> {
       for (const post of await readPosts(dir)) {
         const title = (post.title ?? '(no h1)').replace(/&mdash;/g, '—').slice(0, 52);
         process.stdout.write(`${post.file}  ${(post.date ?? 'NO-DATE').padEnd(22)} ${title}\n`);
+      }
+      return 0;
+    }
+
+    case 'config': {
+      const config = await loadBlogConfig(dir);
+      const paths = configPaths(dir);
+      process.stdout.write('Config is read from the first of these that exists:\n');
+      for (const path of paths) {
+        process.stdout.write(`  ${existsSync(path) ? '*' : ' '} ${path}\n`);
+      }
+      process.stdout.write(`\nIn effect:\n${JSON.stringify(config, null, 2)}\n`);
+      if (!config.author) {
+        process.stdout.write(
+          '\nNothing is configured, so posts render with no byline, no identity links\n' +
+            'and no third-party scripts. Copy blog.config.example.json to\n' +
+            `${paths.at(-1)} and fill it in.\n`,
+        );
       }
       return 0;
     }
