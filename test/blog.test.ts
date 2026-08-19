@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  AD_UNIT,
   blogDir,
   createPost,
   DEFAULT_DIR,
@@ -106,12 +107,18 @@ describe('renderPost', () => {
     expect(html).toContain('How this was written:');
   });
 
-  it('carries the CrawlProof tracker, last thing before </body>', () => {
+  it('carries the CrawlProof tracker and ad unit, last thing before </body>', () => {
     expect(html).toContain(TRACKER);
-    // Placement matters: the tag is async, but keeping it after the article
-    // means nothing about the post waits on a third-party host.
-    expect(html.indexOf(TRACKER)).toBeGreaterThan(html.indexOf('</article>'));
-    expect(html.indexOf(TRACKER)).toBeLessThan(html.indexOf('</body>'));
+    expect(html).toContain('data-cp-ad');
+    // Placement matters: the tags are async, but keeping them after the
+    // article means nothing about the post waits on a third-party host.
+    expect(html.indexOf(AD_UNIT)).toBeGreaterThan(html.indexOf('</article>'));
+    expect(html.indexOf(AD_UNIT)).toBeLessThan(html.indexOf('</body>'));
+  });
+
+  it('runs the thin text_link bar, not a banner', () => {
+    expect(html).toContain('data-format="text_link"');
+    expect(html).not.toMatch(/banner_\d+x\d+/);
   });
 
   it('escapes a description that tries to break out of its attribute', () => {

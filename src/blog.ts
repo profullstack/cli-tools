@@ -108,6 +108,21 @@ export const TRACKER =
   '<script data-site="099436d8-e1b1-4b4e-bc04-b3fbff5c4ead" src="https://crawlproof.com/stats.js" async></script>';
 
 /**
+ * The sponsored bar that runs at the foot of every page.
+ *
+ * `text_link` on purpose, not a 728x90 or 300x250: it is a 40px full-width
+ * strip that carries its own "Sponsored" mark inside the frame, so `ad.js`
+ * prepends no extra caption, and an unsold or blocked slot collapses to
+ * nothing instead of leaving a banner-shaped hole.
+ */
+export const AD_UNIT = [
+  '<aside data-cp-ad data-slot="50ba73a3-22b6-4264-9b2d-7f866759e287" data-format="text_link"></aside>',
+  '',
+  TRACKER,
+  '<script src="https://crawlproof.com/ad.js" async></script>',
+].join('\n');
+
+/**
  * Render a post file.
  *
  * Deliberately smolweb-valid, which is stricter than "valid HTML": an explicit
@@ -154,7 +169,7 @@ ${content}
 
 </article>
 
-${TRACKER}
+${AD_UNIT}
 
 </body>
 </html>
