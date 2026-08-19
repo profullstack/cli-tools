@@ -430,10 +430,20 @@ moshcode plugin marketplace add profullstack/cli-tools
 moshcode plugin install tools@cli-tools     # /tools:install, /tools:list
 moshcode plugin install blog@cli-tools      # /blog:post, :check, :list, :feed
 moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
+moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
 ```
 
-See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md)
-and [plugins/domain](plugins/domain/README.md).
+See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),
+[plugins/domain](plugins/domain/README.md) and [plugins/bo](plugins/bo/README.md).
+
+`bo` is the one that fronts a command this repo does **not** install.
+[BufferOverride](https://bufferoverride.com/docs/cli) ships its own npm package
+(`npm i -g @profullstack/bufferoverride`, or `moshcode install bo`) and updates
+on its own release cycle, so shipping a second executable of that name from here
+would put two implementations on `PATH` and let them drift — the failure `cli-tools
+list` marks with `!`. The plugin adds the part an agent needs instead: when to
+reach for it, which flag keeps a capture off the internet, and how to read an
+answer's version range before repeating it to somebody.
 
 `cli-tools` is also a moshcode workflow tool, so the whole set installs and
 updates through moshcode itself:

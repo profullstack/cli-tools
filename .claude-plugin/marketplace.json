@@ -62,6 +62,25 @@
         "naming",
         "llm"
       ]
+    },
+    {
+      "name": "bo",
+      "description": "BufferOverride from the terminal: wrap a failing command, keep what it printed with the environment that produced it, strip the secrets, and find the existing answer before asking. Answers declare the versions they are valid for, who or what wrote them, and how many people reproduced them.",
+      "source": "./plugins/bo",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://bufferoverride.com/docs/cli",
+      "keywords": [
+        "debugging",
+        "errors",
+        "capture",
+        "redaction",
+        "provenance",
+        "bufferoverride"
+      ]
     }
   ]
 }

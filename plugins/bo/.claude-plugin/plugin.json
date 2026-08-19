@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "bo",
+  "description": "BufferOverride from the terminal: wrap a failing command, keep what it printed with the environment that produced it, strip the secrets, and find the existing answer before asking. Publishing declares the versions an answer is valid for and who or what wrote it.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://bufferoverride.com/docs/cli",
+  "license": "MIT",
+  "keywords": ["debugging", "errors", "capture", "redaction", "provenance", "bufferoverride"]
+}
