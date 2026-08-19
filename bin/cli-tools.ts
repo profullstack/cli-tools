@@ -29,6 +29,7 @@ import {
   mask,
   saveStored,
 } from '../src/credentials.ts';
+import { pullVault, vaultTarget } from '../src/vault.ts';
 import { isMain } from '../src/is-main.ts';
 import {
   aliasesPath,
@@ -45,7 +46,7 @@ const USAGE = `Usage:
   cli-tools link [--force]
   cli-tools unlink
   cli-tools aliases [--install]
-  cli-tools config [set <key> [value] | unset <key>]
+  cli-tools config [pull | set <key> [value] | unset <key>]
   cli-tools <command> [args…]
 
 Commands:
@@ -55,6 +56,7 @@ Commands:
   unlink    Remove the symlinks we own
   aliases   Print the moshcode pit aliases, or write them with --install
   config    API keys: what is set, where it came from, and how to change it
+            "config pull" imports them from the logicsrc team vault
   where     Print the checkout this command is running from
 
 Keys (config set <key>):
@@ -233,8 +235,77 @@ async function configCommand(rest: readonly string[], json: boolean): Promise<nu
     return 0;
   }
 
+  if (verb === 'pull') {
+    const target = vaultTarget();
+    const label = `${target.team}/${target.project}--${target.env}`;
+    process.stderr.write(`config: pulling ${label}…\n`);
+
+    let vault: Record<string, string>;
+    try {
+      vault = pullVault(target);
+    } catch (error) {
+      process.stderr.write(`config: ${(error as Error).message}\n`);
+      return 1;
+    }
+
+    // Only the keys these commands use. Copying the whole vault down would make
+    // this file a second, drifting copy of every team secret — which is the
+    // thing the vault exists to avoid.
+    const stored = loadStored();
+    const imported: string[] = [];
+    const unchanged: string[] = [];
+    for (const variable of Object.values(KNOWN_KEYS)) {
+      const value = vault[variable];
+      if (!value) continue;
+      if (stored[variable] === value) {
+        unchanged.push(variable);
+        continue;
+      }
+      stored[variable] = value;
+      imported.push(variable);
+    }
+
+    if (imported.length === 0 && unchanged.length === 0) {
+      process.stderr.write(
+        `config: ${label} has ${Object.keys(vault).length} keys, none of them ones these ` +
+          `commands use (${Object.values(KNOWN_KEYS).join(', ')}).\n`,
+      );
+      return 1;
+    }
+
+    if (imported.length > 0) {
+      const path = saveStored(stored);
+      for (const variable of imported) {
+        process.stdout.write(`config: imported ${variable} (${mask(stored[variable]!)})\n`);
+      }
+      process.stdout.write(`config: written to ${path}\n`);
+    }
+    for (const variable of unchanged) {
+      process.stdout.write(`config: ${variable} already matches the vault\n`);
+    }
+
+    const ignored = Object.keys(vault).filter(
+      (key) => !Object.values(KNOWN_KEYS).includes(key),
+    ).length;
+    if (ignored > 0) {
+      process.stdout.write(
+        `\n${ignored} other key(s) in the vault were left there — this stores only what\n` +
+          'these commands read. The vault stays the authority.\n',
+      );
+    }
+
+    const shadowed = imported.filter((variable) => process.env[variable]);
+    if (shadowed.length > 0) {
+      process.stdout.write(
+        `\nNote: ${shadowed.join(', ')} ${shadowed.length === 1 ? 'is' : 'are'} also set in your\n` +
+          'environment, which wins over what was just stored.\n',
+      );
+    }
+    return 0;
+  }
+
   if (verb !== 'set' && verb !== 'unset') {
-    process.stderr.write(`config: unknown verb "${verb}" (expected set or unset)\n`);
+    process.stderr.write(`config: unknown verb "${verb}" (expected set, unset or pull)\n`);
     return 1;
   }
 

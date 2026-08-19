@@ -97,10 +97,41 @@ ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 has to carry it in an environment again:
 
 ```sh
-cli-tools config set openai        # prompts; the value is never echoed
+cli-tools config pull              # import them from the logicsrc team vault
+cli-tools config set openai        # or set one by hand; the value is never echoed
 cli-tools config                   # what is set, and which source is winning
 cli-tools config unset openai
 ```
+
+### From the team vault
+
+`cli-tools config pull` decrypts the shared logicsrc vault and imports the keys
+these commands use — the fastest way to set a new machine up, and the way a
+rotated key reaches it:
+
+```sh
+cli-tools config pull
+# config: imported OPENAI_API_KEY (sk-pr…ZyAA (164 chars))
+# config: imported ANTHROPIC_API_KEY (sk-an…uAAA (108 chars))
+# 11 other key(s) in the vault were left there
+```
+
+It defaults to `profullstack/profullstack-sharable-keys--prod`, overridable with
+`CLI_TOOLS_VAULT_TEAM`, `CLI_TOOLS_VAULT_PROJECT` and `CLI_TOOLS_VAULT_ENV`.
+Needs the `logicsrc` CLI and a login (`moshcode install secrets`, then
+`logicsrc login`); if it is missing, the error says so rather than failing
+obscurely.
+
+**It imports only the keys these commands read, and leaves the rest in the
+vault.** Copying a whole vault down would make the local file a second copy of
+every team secret that nobody remembers to invalidate — which is the thing the
+vault exists to avoid. The vault stays the authority; this is a cache of the two
+or three keys `generate-names` actually needs.
+
+`logicsrc teams pull` can only write a decrypted `.env` to a path, so the
+plaintext exists for the length of one read: it goes to a `0700` temporary
+directory and is removed in a `finally`, including when the pull or the parse
+fails.
 
 Keys live in `~/.config/cli-tools/credentials.json`, written `0600` in a `0700`
 directory (`$CLI_TOOLS_CREDENTIALS` overrides the path). Nothing prints a whole
