@@ -9,11 +9,36 @@ Set up, inspect or clear the API keys `cli-tools` commands use.
 
 ```bash
 cli-tools config                  # what is set, and where each key came from
-cli-tools config set openai       # prompts; the value is never echoed
-cli-tools config set anthropic
+cli-tools config pull             # import from the logicsrc team vault
+cli-tools config set openai       # or by hand; prompts, never echoed
 cli-tools config unset openai
 cli-tools config --json           # machine-readable, still masked
 ```
+
+## From the team vault
+
+`cli-tools config pull` is the normal way to set a machine up, and the way a
+rotated key reaches one:
+
+```bash
+cli-tools config pull
+```
+
+It decrypts `profullstack/profullstack-sharable-keys--prod` and imports the keys
+these commands use. Override the target with `CLI_TOOLS_VAULT_TEAM`,
+`CLI_TOOLS_VAULT_PROJECT`, `CLI_TOOLS_VAULT_ENV`.
+
+Needs the `logicsrc` CLI and a login — `moshcode install secrets`, then
+`logicsrc login`. A missing CLI is reported as such rather than as a generic
+failure.
+
+**Only the keys these commands read are imported; the rest stay in the vault.**
+Pulling a whole vault down would leave a second copy of every team secret on the
+machine, drifting from the vault that is supposed to be the authority. This is a
+cache of two or three keys, not a mirror.
+
+The decrypted `.env` logicsrc writes lives in a `0700` temp directory for the
+length of one read and is removed in a `finally`, including on failure.
 
 Keys live in `~/.config/cli-tools/credentials.json`, written `0600` inside a
 `0700` directory. `$CLI_TOOLS_CREDENTIALS` overrides the path.
