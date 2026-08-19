@@ -97,12 +97,39 @@ export function nextNumber(posts: readonly Pick<Post, 'n'>[]): string {
 }
 
 /**
+ * CrawlProof's cookieless pageview tracker, on every page of the blog.
+ *
+ * This is the one deliberate departure from smolweb validity: the guidelines
+ * forbid scripts served from another host. Nothing on the page depends on it —
+ * the post reads identically with JavaScript off — so the "usable without
+ * JavaScript" half of the rule still holds.
+ */
+export const TRACKER =
+  '<script data-site="099436d8-e1b1-4b4e-bc04-b3fbff5c4ead" src="https://crawlproof.com/stats.js" async></script>';
+
+/**
+ * The sponsored bar that runs at the foot of every page.
+ *
+ * `text_link` on purpose, not a 728x90 or 300x250: it is a 40px full-width
+ * strip that carries its own "Sponsored" mark inside the frame, so `ad.js`
+ * prepends no extra caption, and an unsold or blocked slot collapses to
+ * nothing instead of leaving a banner-shaped hole.
+ */
+export const AD_UNIT = [
+  '<aside data-cp-ad data-slot="50ba73a3-22b6-4264-9b2d-7f866759e287" data-format="text_link"></aside>',
+  '',
+  TRACKER,
+  '<script src="https://crawlproof.com/ad.js" async></script>',
+].join('\n');
+
+/**
  * Render a post file.
  *
  * Deliberately smolweb-valid, which is stricter than "valid HTML": an explicit
  * `<html lang>`, `<head>` and `<body>`; `<meta http-equiv="Content-Type">`
  * rather than a bare `<meta charset>`, because every `<meta>` needs a `content`
- * attribute; and every `<p>` closed.
+ * attribute; and every `<p>` closed. The one exception is {@link TRACKER}, the
+ * external analytics tag, which smolweb's no-third-party-script rule forbids.
  */
 export function renderPost({ title, description, date, body = '' }: NewPost): string {
   const day = date.slice(0, 10);
@@ -141,6 +168,8 @@ ${content}
 </nav>
 
 </article>
+
+${AD_UNIT}
 
 </body>
 </html>
