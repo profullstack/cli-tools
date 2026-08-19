@@ -167,6 +167,10 @@ ${content}
 	<a href="../blog">back to my blog postings</a>
 </nav>
 
+<p>Find me: <a rel="me" href="https://defcon.social/@chovy">Mastodon</a> &middot;
+<a rel="me" href="https://github.com/ralyodio">GitHub</a> &middot;
+<a rel="me" href="mailto:anthony@profullstack.com">email</a></p>
+
 </article>
 
 ${AD_UNIT}
