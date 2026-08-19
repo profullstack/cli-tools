@@ -184,6 +184,39 @@ The scanner itself lives in the threatcrush checkout, so this is a launcher.
 Point it elsewhere with `TCFEED_REPO`; every other `TCFEED_*` variable is read
 by the script it launches and works unchanged.
 
+### `generate-names`
+
+Turn a sentence describing a product into a long list of candidate names, ready
+to pipe into `domainfree`.
+
+```sh
+generate-names "a registry that checks whether Lean proofs actually compile"
+generate-names "a tool that finds dead states in agent graphs" -n 1000 --tld dev
+generate-names "an open directory of independent blogs" | domainfree
+```
+
+**It asks the model for vocabulary, not for a thousand names.** One cheap call
+returns ~40 head words and ~40 modifiers; the cross product is expanded locally
+and shuffled. Asking a model for 1,000 names directly repeats itself within a
+few hundred, drifts off-brief, and costs far more — and the call count here is
+the same whether you ask for 10 names or 10,000.
+
+Needs `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`. Whichever is set is used;
+OpenAI wins if both are. Defaults are the cheap tier on each side
+(`gpt-4.1-mini` / `claude-haiku-4-5`) and are overridable with `--model`.
+
+| Flag | Effect |
+| --- | --- |
+| `-n, --count N` | how many names to print, default 1000 |
+| `--tld TLD` | extension to append, default `com` |
+| `--words N` | 1 or 2 English words per name, default 2 |
+| `--provider P` | `openai` or `anthropic`, default whichever key is set |
+| `--model M` | override the model |
+| `--seed N` | shuffle seed; the same seed reproduces the same list |
+| `--timeout MS` | API timeout, default 60000 |
+
+Names go to stdout and the summary to stderr, so the output pipes cleanly.
+
 ### `domainfree`
 
 Bulk domain availability, straight from the registry. Prints only the names you
@@ -192,7 +225,8 @@ can actually buy, one per line, so it pipes into anything.
 ```sh
 domainfree sorrycheck.com sinkstate.com
 domainfree --file candidates.txt
-generate-names | domainfree --jobs 24
+generate-names "a registry that checks Lean proofs" | domainfree --jobs 24
+printf '%s\n' sorry{check,lint,scan}.com | domainfree
 domainfree --all example.com          # show TAKEN rows too
 ```
 

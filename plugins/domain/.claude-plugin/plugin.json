@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "domain",
-  "description": "Find domains you can actually register, and look one up in depth. Availability is read from the registry over RDAP, never guessed from DNS, so parked names and registrations with no nameservers are not mistaken for free.",
+  "description": "Generate candidate product names from a sentence, find the ones you can actually register, and look one up in depth. Availability is read from the registry over RDAP, never guessed from DNS, so parked names and registrations with no nameservers are not mistaken for free.",
   "version": "0.1.0",
   "author": {
     "name": "profullstack",
@@ -9,5 +9,13 @@
   },
   "homepage": "https://github.com/profullstack/cli-tools#domainfree",
   "license": "MIT",
-  "keywords": ["domain", "rdap", "dns", "whois", "availability", "naming"]
+  "keywords": [
+    "domain",
+    "rdap",
+    "dns",
+    "whois",
+    "availability",
+    "naming",
+    "llm"
+  ]
 }

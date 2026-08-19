@@ -5,6 +5,7 @@ than guessing from DNS.
 
 | Command | Does |
 | --- | --- |
+| `/domain:names` | Turn a sentence about your product into a thousand candidates. |
 | `/domain:free` | Filter a list of names down to the ones you can actually register. |
 | `/domain:lookup` | Everything about one name — RDAP record, dates, nameservers, DNS, reverse PTR — as JSON. |
 
