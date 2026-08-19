@@ -155,6 +155,49 @@ The scanner itself lives in the threatcrush checkout, so this is a launcher.
 Point it elsewhere with `TCFEED_REPO`; every other `TCFEED_*` variable is read
 by the script it launches and works unchanged.
 
+### `domainfree`
+
+Bulk domain availability, straight from the registry. Prints only the names you
+can actually buy, one per line, so it pipes into anything.
+
+```sh
+domainfree sorrycheck.com sinkstate.com
+domainfree --file candidates.txt
+generate-names | domainfree --jobs 24
+domainfree --all example.com          # show TAKEN rows too
+```
+
+Availability is read from **RDAP, never inferred from DNS**, because DNS cannot
+tell registration apart from configuration:
+
+- a parked domain resolves fine and is taken;
+- a domain registered with no nameservers returns `NXDOMAIN` — identical to a
+  name nobody owns.
+
+Measured over 8,513 generated candidates, the DNS shortcut
+(`dig NAME | grep "ANSWER: 0"`) reported 20 registered domains as free while
+missing none that were genuinely free. `oubliette.com` is the instructive one:
+registered in 1996, paid through 2034, three nameservers, no `A` record — so
+`dig` says `ANSWER: 0` and it reads as available. Fine as a cheap prefilter,
+useless as a buy signal.
+
+Lookups run through a fixed-size pool (16 by default; about 8,500 names in 45
+seconds). Anything indeterminate — a 429, a 5xx, a timeout — is retried once
+and then reported as `ERR:<code>`, never as available, and the exit status is
+`2` so an unknown cannot be mistaken for a free name.
+
+| Flag | Effect |
+| --- | --- |
+| `-f, --file FILE` | read names from FILE, one per line (`-` for stdin) |
+| `-j, --jobs N` | parallel lookups, default 16 |
+| `-t, --timeout MS` | per-lookup timeout, default 20000 |
+| `-a, --all` | print every name as `STATUS domain`, not just the free ones |
+| `-q, --quiet` | suppress the summary, which is written to stderr |
+
+The summary goes to stderr and the names to stdout, so `domainfree -f in.txt |
+wc -l` counts what you can buy. For a deep look at one name rather than a
+verdict across thousands, use `domainjson`.
+
 ### `domainjson`
 
 One JSON object on stdout: `{ name, rdap | moshpit, dns }`.

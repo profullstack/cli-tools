@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "cli-tools",
-  "description": "Profullstack's command-line tools as installable plugins — publish to the plain-HTML blog without getting a convention wrong.",
+  "description": "Profullstack's command-line tools as installable plugins \u2014 publish to the plain-HTML blog without getting a convention wrong.",
   "owner": {
     "name": "profullstack",
     "url": "https://profullstack.com"
@@ -17,7 +17,32 @@
         "url": "https://profullstack.com"
       },
       "homepage": "https://github.com/profullstack/cli-tools#blog",
-      "keywords": ["blog", "rss", "feed", "publishing", "smolweb"]
+      "keywords": [
+        "blog",
+        "rss",
+        "feed",
+        "publishing",
+        "smolweb"
+      ]
+    },
+    {
+      "name": "domain",
+      "description": "Find domains you can actually register, and look one up in depth. Availability is read from the registry over RDAP, never guessed from DNS, so parked names and registrations with no nameservers are not mistaken for free.",
+      "source": "./plugins/domain",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#domainfree",
+      "keywords": [
+        "domain",
+        "rdap",
+        "dns",
+        "whois",
+        "availability",
+        "naming"
+      ]
     }
   ]
 }
