@@ -34,6 +34,7 @@ const SUMMARIES: Record<string, string> = {
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
+  genrewatch: 'What is coming out, and whether it exists at all',
   'gh-prs': 'Every open PR across the owners you name',
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
