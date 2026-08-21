@@ -91,11 +91,19 @@ asked with `--fix`. Taking it over silently changes what a merge run does.
 
 | Alias | Expands to |
 | --- | --- |
+| `/aff` | `affiliate` |
 | `/blog` | `blog-post` |
 | `/free` | `domainfree` |
 | `/merge` | `gh-prs-merge --apply` |
 | `/prs` | `gh-prs` |
+| `/speak` | `tts` |
+| `/web` | `ask-web` |
 | `/whois` | `domainjson` |
+
+`/web`, `/speak` and `/aff` are named around a collision rather than for
+elegance: `/ask` and `/say` both already resolve to something else on a normal
+box, and `/tts` would shadow our own command. An alias beats `PATH`, so binding
+any of those three would shadow the real program from inside the pit only.
 
 An alias you already bound is never overwritten — the collision is reported and
 yours is kept. The pit re-reads the file on every lookup, so an open pit picks

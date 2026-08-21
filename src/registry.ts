@@ -141,15 +141,25 @@ export function resolveCommand(
  * having, and `merge` is the one with a flag baked in because the long form is
  * what everybody types anyway.
  *
+ * Three of these are named around a collision rather than for elegance. `/ask`
+ * and `/say` are the words you would reach for, and both already resolve to
+ * something else on a normal box — and because a pit alias beats PATH, binding
+ * them would shadow those programs from inside the pit only, which is about the
+ * most confusing failure available. `/tts` is worse still: it would shadow our
+ * own command. Hence `/web`, `/speak` and `/aff`.
+ *
  * Keep them thin for a reason — `gh-prs-merge` repairs by default under
  * `--apply`, so baking `--fix` in as well is what once made `/merge --fix`
  * expand to `--apply --fix --fix`.
  */
 export const PIT_ALIASES: Record<string, string> = {
+  aff: 'affiliate',
   blog: 'blog-post',
   free: 'domainfree',
   merge: 'gh-prs-merge --apply',
   prs: 'gh-prs',
+  speak: 'tts',
+  web: 'ask-web',
   whois: 'domainjson',
 };
 
