@@ -16,10 +16,21 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import { parseArgs, UsageError } from '../src/args.ts';
+import { integer, parseArgs, UsageError } from '../src/args.ts';
+import {
+  SERVICE_NAME,
+  TIMER_NAME,
+  decide,
+  formatInterval,
+  isDue,
+  parseStatus,
+  renderService,
+  renderTimer,
+} from '../src/selfupdate.ts';
 import {
   credentialsPath,
   keyStates,
@@ -42,7 +53,8 @@ import {
 
 const USAGE = `Usage:
   cli-tools list
-  cli-tools update
+  cli-tools update [--auto]
+  cli-tools autoupdate [--install [--hours N] | --remove]
   cli-tools link [--force]
   cli-tools unlink
   cli-tools aliases [--install]
@@ -52,6 +64,9 @@ const USAGE = `Usage:
 Commands:
   list      Every command here, and whether it is on PATH
   update    git pull, reinstall dependencies, relink
+            "--auto" is the unattended form: at most once a day, and only on a
+            clean checkout of the default branch with nothing unpushed
+  autoupdate  A systemd user timer that runs "update --auto" for you
   link      Symlink the commands into ~/.local/bin
   unlink    Remove the symlinks we own
   aliases   Print the moshcode pit aliases, or write them with --install
@@ -62,17 +77,24 @@ Commands:
 Keys (config set <key>):
   openai      OPENAI_API_KEY      generate-names
   anthropic   ANTHROPIC_API_KEY   generate-names
+  perplexity  PERPLEXITY_API_KEY  ask-web
+  elevenlabs  ELEVENLABS_API_KEY  tts
 
 Options:
   --force   link: take over a symlink owned by another checkout
+            update --auto: check now, ignoring the once-a-day stamp
   --install aliases: merge them into ~/.moshcode/aliases.json
+            autoupdate: write and enable the systemd user timer
+  --remove  autoupdate: disable it and delete the units
+  --hours N autoupdate --install: how often to check (default: 24)
+  --auto    update: the unattended form, safe to run from a timer
   --json    list/aliases/config: machine-readable (config never prints a key)
   -h, --help
 `;
 
 const SPEC = {
-  boolean: ['--force', '--install', '--json', '-h', '--help'],
-  string: [],
+  boolean: ['--force', '--install', '--json', '--auto', '--remove', '-h', '--help'],
+  string: ['--hours'],
 } as const;
 
 function runLinks(root: string, args: readonly string[]): number {
@@ -103,6 +125,147 @@ function update(root: string): number {
   }
 
   return runLinks(root, []);
+}
+
+/** Where the last automatic check is remembered. */
+function stampPath(env: NodeJS.ProcessEnv = process.env): string {
+  const state = env.XDG_STATE_HOME || join(env.HOME ?? homedir(), '.local', 'state');
+  return join(state, 'cli-tools', 'update-stamp');
+}
+
+function readStamp(): number | null {
+  try {
+    return Number(readFileSync(stampPath(), 'utf8').trim());
+  } catch {
+    return null;
+  }
+}
+
+function writeStamp(now: number): void {
+  const path = stampPath();
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${now}\n`);
+}
+
+/** `origin/HEAD` when the remote publishes it, else master. */
+function defaultBranch(root: string): string {
+  const result = spawnSync('git', ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (result.status !== 0) return 'master';
+  const name = (result.stdout ?? '').trim().split('/').pop();
+  return name || 'master';
+}
+
+/**
+ * The unattended path: check rarely, move only when it is unambiguously safe.
+ *
+ * Every refusal is printed rather than swallowed. This normally runs from a
+ * timer, where stderr lands in the journal, and "why is my checkout not
+ * updating" is otherwise unanswerable without reproducing the decision by hand.
+ */
+function autoUpdate(root: string, force: boolean): number {
+  const now = Date.now();
+  if (!force && !isDue(readStamp(), now)) return 0;
+
+  // Stamped before the work, not after: a fetch that fails should not mean a
+  // retry on every single invocation for as long as the network is down.
+  writeStamp(now);
+
+  const fetched = spawnSync('git', ['fetch', '--quiet'], { cwd: root, encoding: 'utf8' });
+  if (fetched.status !== 0) {
+    process.stderr.write(`update --auto: git fetch failed — ${(fetched.stderr ?? '').trim()}\n`);
+    return 0;
+  }
+
+  const status = spawnSync('git', ['status', '--porcelain=v2', '--branch'], {
+    cwd: root,
+    encoding: 'utf8',
+  });
+  if (status.status !== 0) {
+    process.stderr.write('update --auto: could not read git status\n');
+    return 0;
+  }
+
+  const decision = decide(parseStatus(status.stdout ?? ''), {
+    defaultBranch: defaultBranch(root),
+  });
+  if (decision.action === 'skip') {
+    process.stderr.write(`update --auto: skipped — ${decision.reason}\n`);
+    return 0;
+  }
+
+  process.stderr.write(`update --auto: ${decision.reason}\n`);
+  return update(root);
+}
+
+function unitDir(env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.XDG_CONFIG_HOME || join(env.HOME ?? homedir(), '.config'), 'systemd', 'user');
+}
+
+function systemctl(args: readonly string[]): number {
+  const result = spawnSync('systemctl', ['--user', ...args], { stdio: 'inherit' });
+  if (result.error) {
+    process.stderr.write('autoupdate: systemctl --user is not available on this machine.\n');
+    return 1;
+  }
+  return result.status ?? 1;
+}
+
+/**
+ * Install, remove or report the timer.
+ *
+ * systemd rather than cron because the units are declarative, `Persistent=true`
+ * catches up a machine that was asleep, and the output of a failed run is in
+ * the journal instead of an email nobody configured.
+ */
+function autoupdate(root: string, flags: Set<string>, hours: number): number {
+  const dir = unitDir();
+  const service = join(dir, SERVICE_NAME);
+  const timer = join(dir, TIMER_NAME);
+
+  if (flags.has('--remove')) {
+    systemctl(['disable', '--now', TIMER_NAME]);
+    for (const path of [service, timer]) {
+      try {
+        rmSync(path);
+      } catch {
+        // Already gone is the outcome we wanted.
+      }
+    }
+    systemctl(['daemon-reload']);
+    process.stdout.write('autoupdate: removed\n');
+    return 0;
+  }
+
+  if (flags.has('--install')) {
+    // The installed symlink is preferred over this checkout's path: it is the
+    // name the operator actually uses, and it keeps working if the checkout
+    // moves and is re-linked.
+    const linked = join(process.env.HOME ?? homedir(), '.local', 'bin', 'cli-tools');
+    const exec = existsSync(linked) ? linked : join(root, 'bin', 'cli-tools.ts');
+
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(service, renderService(exec, process.env.PATH));
+    writeFileSync(timer, renderTimer(hours * 3600));
+
+    if (systemctl(['daemon-reload']) !== 0) return 1;
+    if (systemctl(['enable', '--now', TIMER_NAME]) !== 0) return 1;
+
+    process.stdout.write(`autoupdate: enabled, every ${formatInterval(hours * 3600)}\n${timer}\n`);
+    process.stdout.write(
+      'Note: user timers stop when you log out unless lingering is on\n' +
+        '      (`loginctl enable-linger` — needs root).\n',
+    );
+    return 0;
+  }
+
+  if (!existsSync(timer)) {
+    process.stdout.write('autoupdate: not installed — `cli-tools autoupdate --install`\n');
+    return 0;
+  }
+  return systemctl(['list-timers', '--all', TIMER_NAME]);
 }
 
 function writeAliases(): number {
@@ -382,7 +545,9 @@ export async function run(argv: readonly string[]): Promise<number> {
   // Anything that is not one of ours is one of the commands: pass it straight
   // through, arguments and streams untouched, so `cli-tools gh-prs --orgs x`
   // behaves exactly as `gh-prs --orgs x` does.
-  const known = new Set(['list', 'update', 'link', 'unlink', 'aliases', 'config', 'where']);
+  const known = new Set([
+    'list', 'update', 'autoupdate', 'link', 'unlink', 'aliases', 'config', 'where',
+  ]);
   if (!known.has(command)) {
     const match = commands(root).find((entry) => entry.name === command);
     if (!match) {
@@ -465,7 +630,16 @@ export async function run(argv: readonly string[]): Promise<number> {
     }
 
     case 'update':
-      return update(root);
+      return options.flags.has('--auto')
+        ? autoUpdate(root, options.flags.has('--force'))
+        : update(root);
+
+    case 'autoupdate':
+      return autoupdate(
+        root,
+        options.flags,
+        integer(options.values, '--hours', 24, { min: 1, max: 24 * 30 }),
+      );
 
     case 'link':
       return runLinks(root, options.flags.has('--force') ? ['--force'] : []);
