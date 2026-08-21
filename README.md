@@ -15,6 +15,7 @@ TypeScript, installed as executables on `PATH`.
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
 | [`tts`](#tts) | Read text aloud and keep the audio |
+| [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
 
 ## Requirements
 
@@ -491,6 +492,55 @@ screen to explain why. A voice given as an ID skips the lookup entirely, so
 ask: a full settings object would override whatever the voice was tuned with in
 the dashboard, on an account other people share. Synthesis spends characters from
 that shared quota, and nothing here retries, so a failed call never costs twice.
+
+### `affiliate`
+
+Walks a list of signup pages one at a time, remembers which you have dealt
+with, and keeps the referral link each one hands back:
+
+```sh
+affiliate list --file programs.md
+affiliate next --open                  # open the next one you have not done
+affiliate join elevenlabs https://try.elevenlabs.io/abc123
+affiliate skip notion --note "closed to new affiliates"
+affiliate links --format markdown      # → - [ElevenLabs](https://try.…)
+```
+
+**The list is any text with links in it.** A bare column of URLs, a markdown
+table, a bullet list, a CSV someone exported — the first URL on a line is the
+program and whatever precedes it is the name. Rather than asking which format it
+is, it takes the first URL and works out the name from context: the bracketed
+text of a markdown link, the first cell of a table row, or the host when there
+is nothing else. A line with no URL is a heading, not an error.
+
+Two entries that differ only by `utm_*` are one program, so the same page shared
+from a newsletter and from a tweet does not ask you to sign up twice.
+
+Progress lives in `~/.config/cli-tools/affiliates.json` and the application
+answers in `affiliate-profile.json`, both `0600` in a `0700` directory. **An
+entry you have joined survives being removed from the list** — it moves to the
+end rather than disappearing, because losing a referral link to somebody tidying
+the source file would be the worst thing this could do.
+
+The contact address resolves from `--email`, then `$AFFILIATE_EMAIL`, then the
+profile file, then whoever `moshcode whoami` reports. The account is last on
+purpose: it is the one you cannot override in the moment, and signing up as the
+wrong identity is not undone by re-running the command.
+
+```sh
+affiliate profile --site https://profullstack.com --audience "…"
+affiliate answers        # the four things every application asks, ready to paste
+```
+
+`answers` prints gaps as `(not set)` rather than filling them in. A form that
+asks for audience size and receives a number nobody checked is the fastest way
+to lose the account it was meant to open.
+
+**It never submits anything.** Signing up accepts terms and hands over payout
+identity as a named person, which is not something a script should do on
+someone's behalf — and every one of these is behind an email-verification loop
+regardless, so a form-filler would stop at the same wall with one more moving
+part.
 
 ## As a moshcode plugin
 

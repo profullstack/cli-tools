@@ -27,6 +27,7 @@ export interface Command {
 
 /** One-line summaries, so `cli-tools list` says what each command is for. */
 const SUMMARIES: Record<string, string> = {
+  affiliate: 'Work through a list of programs you mean to sign up for',
   'ask-web': 'Answer a question from the live web, with its sources',
   'blog-post': 'Publish to a plain-HTML blog without breaking the feed',
   'cli-tools': 'This dispatcher: list, update and wire up the others',
