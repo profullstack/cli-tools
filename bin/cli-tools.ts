@@ -73,6 +73,7 @@ Commands:
   config    API keys: what is set, where it came from, and how to change it
             "config pull" imports them from the logicsrc team vault
   where     Print the checkout this command is running from
+  help      This usage
 
 Keys (config set <key>):
   openai      OPENAI_API_KEY      generate-names
@@ -545,8 +546,11 @@ export async function run(argv: readonly string[]): Promise<number> {
   // Anything that is not one of ours is one of the commands: pass it straight
   // through, arguments and streams untouched, so `cli-tools gh-prs --orgs x`
   // behaves exactly as `gh-prs --orgs x` does.
+  // `help` is here because it is what people type. Without it the word fell
+  // through to the passthrough below, which reported "unknown command: help"
+  // and exited 1 — before printing the usage that answers the question.
   const known = new Set([
-    'list', 'update', 'autoupdate', 'link', 'unlink', 'aliases', 'config', 'where',
+    'help', 'list', 'update', 'autoupdate', 'link', 'unlink', 'aliases', 'config', 'where',
   ]);
   if (!known.has(command)) {
     const match = commands(root).find((entry) => entry.name === command);
@@ -628,6 +632,10 @@ export async function run(argv: readonly string[]): Promise<number> {
       }
       return 0;
     }
+
+    case 'help':
+      process.stdout.write(USAGE);
+      return 0;
 
     case 'update':
       return options.flags.has('--auto')

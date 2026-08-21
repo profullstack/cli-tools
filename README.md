@@ -47,7 +47,7 @@ Check what landed, and wire up the pit aliases:
 
 ```sh
 cli-tools list                 # * runs from here, ! is shadowed by another copy
-cli-tools aliases --install    # /blog /free /merge /prs /whois
+cli-tools aliases --install    # /aff /blog /free /merge /prs /speak /web /whois
 cli-tools config               # API keys: what is set, and where it came from
 cli-tools update               # git pull, reinstall, relink
 cli-tools autoupdate --install # …or have a timer do that daily
@@ -606,9 +606,27 @@ moshcode install cli-tools     # then /cli-tools list, /cli-tools update
 ## Aliases
 
 Pit aliases live in `~/.moshcode/aliases.json`. `cli-tools aliases --install`
-writes a thin default set (`/blog`, `/free`, `/merge`, `/prs`, `/whois`),
-merging rather than replacing — an alias you bound yourself is kept and the
-collision is reported. `cli-tools aliases` prints them without writing anything.
+writes a thin default set, merging rather than replacing — an alias you bound
+yourself is kept and the collision is reported. `cli-tools aliases` prints them
+without writing anything.
+
+| Alias | Expands to |
+| --- | --- |
+| `/aff` | `affiliate` |
+| `/blog` | `blog-post` |
+| `/free` | `domainfree` |
+| `/merge` | `gh-prs-merge --apply` |
+| `/prs` | `gh-prs` |
+| `/speak` | `tts` |
+| `/web` | `ask-web` |
+| `/whois` | `domainjson` |
+
+Three of those are named around a collision rather than for elegance. `/ask` and
+`/say` are the words you would reach for, and both already resolve to something
+else on a normal box; because a pit alias beats `PATH`, binding them would
+shadow those programs *from inside the pit only*, which is about the most
+confusing failure available. `/tts` would be worse — it would shadow our own
+command. Hence `/web`, `/speak` and `/aff`.
 
 To manage them by hand:
 

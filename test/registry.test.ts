@@ -247,6 +247,19 @@ describe('mergeAliases', () => {
     }
   });
 
+  // /ask and /say are the words you would reach for, and both already resolve
+  // to something else on a normal box. A pit alias beats PATH, so binding them
+  // would shadow those programs from inside the pit only — which is about the
+  // most confusing failure available.
+  it('avoids the names that would shadow something on PATH', () => {
+    for (const taken of ['ask', 'say']) {
+      expect(Object.keys(PIT_ALIASES)).not.toContain(taken);
+    }
+    expect(PIT_ALIASES.web).toBe('ask-web');
+    expect(PIT_ALIASES.speak).toBe('tts');
+    expect(PIT_ALIASES.aff).toBe('affiliate');
+  });
+
   // Every alias has to start with a command that actually exists here, or it is
   // a `command not found` the moment somebody types it.
   it('expands to a command this repository installs', () => {
