@@ -35,11 +35,13 @@ const SUMMARIES: Record<string, string> = {
   domainjson: 'whois-style, JSON-first name lookup',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
+  img: 'Resize, convert and inspect images, with sharp or ImageMagick',
   'gh-prs': 'Every open PR across the owners you name',
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
   tts: 'Read text aloud and keep the audio',
+  vid: 'Inspect, thumbnail, clip and shrink video, through ffmpeg',
 };
 
 /** The repository root, found from this file rather than from the cwd. */
