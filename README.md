@@ -50,7 +50,37 @@ cli-tools list                 # * runs from here, ! is shadowed by another copy
 cli-tools aliases --install    # /blog /free /merge /prs /whois
 cli-tools config               # API keys: what is set, and where it came from
 cli-tools update               # git pull, reinstall, relink
+cli-tools autoupdate --install # …or have a timer do that daily
 ```
+
+### Keeping it current
+
+`cli-tools autoupdate --install` writes a systemd **user** timer that runs
+`cli-tools update --auto` once a day — `--hours N` to change the interval,
+`--remove` to take it away, bare `autoupdate` to see when it last ran.
+
+`update --auto` is mostly a set of reasons not to act, and deliberately so. The
+install is symlinks into a working tree, so updating moves your actual checkout;
+an unattended pull that discards work is much worse than a command being a day
+old. It proceeds only on a clean tree, on the default branch, with nothing
+unpushed, and only when genuinely behind — and names the blocker otherwise, on
+stderr, which is the journal when a timer runs it:
+
+```sh
+cli-tools update --auto --force        # ignore the once-a-day stamp
+journalctl --user -u cli-tools-update  # what it decided, and why
+```
+
+A checkout parked on a feature branch is therefore left alone. That is the
+design rather than a failure.
+
+The unit **carries your current `PATH`**, because a user unit otherwise starts
+with roughly `/usr/bin:/bin` while every command here runs through a `npx --yes
+tsx` shebang whose node is usually a version manager's shim under `$HOME`. Get
+that wrong and the timer fires perfectly on schedule, fails to find node, and
+nothing anywhere looks broken. Note also that **user timers stop at logout**
+unless lingering is on (`loginctl enable-linger`, which needs root);
+`Persistent=true` means it catches up at the next login instead.
 
 <details>
 <summary>From a clone, for development</summary>

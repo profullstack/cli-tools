@@ -34,14 +34,22 @@ The installer clones to `~/.local/share/cli-tools` (override with
 
 | Command | What it does |
 | --- | --- |
+| `affiliate` | Work through a list of programs you mean to sign up for |
+| `ask-web` | Answer a question from the live web, with its sources |
 | `blog-post` | Publish to a plain-HTML blog without breaking the feed |
 | `cli-tools` | This dispatcher |
 | `domainfree` | Which of these domains you can actually register |
 | `domainjson` | whois-style, JSON-first name lookup |
+| `generate-names` | Turn a sentence about a product into candidate names |
 | `gh-prs` | Every open PR across the owners you name |
 | `gh-prs-fix-all` | Repair the open scan PRs that are broken because of us |
 | `gh-prs-merge` | Squash-merge the PRs that are genuinely ready |
 | `tcfeed` | Find repositories worth scanning, scan them, print a shortlist |
+| `tts` | Read text aloud and keep the audio |
+
+Rather than listing them by hand, `cli-tools list` reads `bin/` — a new command
+is a new file there and nothing else has to be edited, so that output is right
+when this table has gone stale.
 
 Check what took:
 
@@ -109,11 +117,41 @@ been sourced first. The aliases only buy you a shorter word.
 ## Keeping it current
 
 ```bash
-cli-tools update        # git pull, reinstall dependencies, relink
+cli-tools autoupdate --install     # a systemd user timer; check daily from now on
+cli-tools update                   # or do it now, by hand
 ```
 
 `update` refuses to move a dirty or diverged checkout rather than discarding
 work. If it stops, sort the checkout out at `cli-tools where` and retry.
+
+### Auto-update
+
+`cli-tools autoupdate --install` writes a systemd **user** timer that runs
+`cli-tools update --auto` once a day (`--hours N` to change it, `--remove` to
+take it away, and bare `autoupdate` to see when it last ran).
+
+`update --auto` is the unattended form, and almost all of it is about deciding
+*not* to act. The install is symlinks into a working tree, so updating means
+moving somebody's real checkout — an unattended pull that discards work is far
+worse than a command being a day out of date. It proceeds only when all of
+these hold, and names the one in the way otherwise:
+
+- the tree is clean,
+- HEAD is the default branch (`origin/HEAD`, else `master`),
+- nothing is unpushed,
+- and it is genuinely behind.
+
+So on a checkout parked on a feature branch it does nothing and says so. That is
+the design, not a failure — the refusals go to stderr, which is the journal when
+the timer runs it (`journalctl --user -u cli-tools-update`).
+
+Two things worth knowing. The unit **bakes today's `PATH` in**, because a user
+unit otherwise starts with roughly `/usr/bin:/bin` while these commands run
+through a `npx --yes tsx` shebang whose node is usually a version manager's shim
+under `$HOME` — without it the timer fires on schedule, fails to find node, and
+nothing looks wrong. And **user timers stop when you log out** unless lingering
+is enabled (`loginctl enable-linger`, which needs root); on a laptop that is
+fine, since `Persistent=true` makes it catch up on the next login.
 
 Note that the installed command runs **whatever branch the checkout is on** —
 these are symlinks into a working tree, not a copied build. A checkout parked on
