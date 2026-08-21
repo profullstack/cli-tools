@@ -13,6 +13,8 @@ TypeScript, installed as executables on `PATH`.
 | [`domainjson`](#domainjson) | whois-style, JSON-first name lookup |
 | [`domainfree`](#domainfree) | Which of these domains you can actually register |
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
+| [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
+| [`tts`](#tts) | Read text aloud and keep the audio |
 
 ## Requirements
 
@@ -93,8 +95,9 @@ ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 
 ## API keys
 
-`generate-names` needs an OpenAI or Anthropic key. Store one once, and nothing
-has to carry it in an environment again:
+Four commands here call a paid API: `generate-names` (OpenAI or Anthropic),
+`ask-web` (Perplexity) and `tts` (ElevenLabs). Store the keys once, and nothing
+has to carry them in an environment again:
 
 ```sh
 cli-tools config pull              # import them from the logicsrc team vault
@@ -125,8 +128,8 @@ obscurely.
 **It imports only the keys these commands read, and leaves the rest in the
 vault.** Copying a whole vault down would make the local file a second copy of
 every team secret that nobody remembers to invalidate — which is the thing the
-vault exists to avoid. The vault stays the authority; this is a cache of the two
-or three keys `generate-names` actually needs.
+vault exists to avoid. The vault stays the authority; this is a cache of the
+handful of keys these commands actually read.
 
 `logicsrc teams pull` can only write a decrypted `.env` to a path, so the
 plaintext exists for the length of one read: it goes to a `0700` temporary
@@ -143,6 +146,12 @@ carries the same masked previews, not the values.
 | --- | --- | --- |
 | `openai` | `OPENAI_API_KEY` | `generate-names` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `generate-names` |
+| `perplexity` | `PERPLEXITY_API_KEY` | `ask-web` |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
+
+A key earns a row here by being read by a command in this repository, not by
+being a key the team owns. The vault holds more than twice as many; the rest
+stay in it.
 
 **The environment wins over the file.** A key exported in your shell or injected
 by CI overrides a stored one, so a one-off `OPENAI_API_KEY=… generate-names …`
@@ -420,6 +429,68 @@ What it refuses to do:
 
 `check` reports missing, unparseable and future dates, empty descriptions and a
 missing `<h1>`, and exits non-zero, so it works as a pre-publish gate.
+
+### `ask-web`
+
+Answers a question from a live web search and prints the pages the answer came
+from, numbered to match the `[n]` markers in the text:
+
+```sh
+ask-web "what is the latest Node LTS" --recency month
+# The latest stable Node.js LTS version is v24.19.0.[3][5]
+#
+# Sources:
+#   [1] Node.js — https://endoflife.date/nodejs (2026-08-06)
+#   [3] Node.js 24.19.0 (LTS) — https://nodejs.org/en/blog/release/v24.19.0 (2026-08-03)
+```
+
+```sh
+ask-web "…" --domains nodejs.org,github.com   # only these hosts
+ask-web "…" --model sonar-pro                 # search wider
+ask-web "…" --bare                            # prose only, for piping
+ask-web "…" --json                            # answer and sources as JSON
+```
+
+It is not named `ask` because that name is already taken on `PATH` here, and a
+command that shadows another one silently is worse than a longer name.
+
+**The sources are the feature.** An answer whose `[1]` resolves to nothing is
+indistinguishable from an answer that was invented, so two fields of the
+response are treated differently on purpose: `citations` is a positional URL
+list whose order *is* the numbering, while `search_results` carries the titles in
+whatever order it likes and is joined on by URL. Numbering from `search_results`
+would mislabel every source. When the answer cites a marker no source backs,
+that is reported on stderr rather than dropped.
+
+Answers go to stdout and status to stderr, so `ask-web … | pbcopy` gets prose.
+
+### `tts`
+
+Reads text aloud with ElevenLabs and keeps the audio, printing the path it
+wrote:
+
+```sh
+tts "the deploy finished"          # → the-deploy-finished.mp3
+mpv "$(tts 'build is green')"
+cat post.md | tts --voice George --out post.mp3
+tts --voices                       # the account's voices, by name and ID
+```
+
+The file is named after the text rather than a timestamp, because a directory of
+`speech-1755794400.mp3` tells you nothing about which one it was.
+
+A voice can be given as an ID, a full label, or just the human part of it —
+the account's are called things like `River - Relaxed, Neutral, Informative`,
+which nobody is going to type. An ambiguous prefix is an error naming the
+candidates rather than a pick of the first match: choosing one would be a coin
+flip that changes narrator the day the account gains a voice, with nothing on
+screen to explain why. A voice given as an ID skips the lookup entirely, so
+`--voice <id>` works on a key whose plan cannot list voices.
+
+`--stability`, `--similarity` and `--style` take 0–1. Nothing is sent unless you
+ask: a full settings object would override whatever the voice was tuned with in
+the dashboard, on an account other people share. Synthesis spends characters from
+that shared quota, and nothing here retries, so a failed call never costs twice.
 
 ## As a moshcode plugin
 

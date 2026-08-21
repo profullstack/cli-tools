@@ -35,7 +35,7 @@ failure.
 **Only the keys these commands read are imported; the rest stay in the vault.**
 Pulling a whole vault down would leave a second copy of every team secret on the
 machine, drifting from the vault that is supposed to be the authority. This is a
-cache of two or three keys, not a mirror.
+cache of the handful of keys these commands read, not a mirror.
 
 The decrypted `.env` logicsrc writes lives in a `0700` temp directory for the
 length of one read and is removed in a `finally`, including on failure.
@@ -47,6 +47,11 @@ Keys live in `~/.config/cli-tools/credentials.json`, written `0600` inside a
 | --- | --- | --- |
 | `openai` | `OPENAI_API_KEY` | `generate-names` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `generate-names` |
+| `perplexity` | `PERPLEXITY_API_KEY` | `ask-web` |
+| `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
+
+A key earns a row by being read by a command here, not by being a key the team
+owns.
 
 ## Never print a key
 

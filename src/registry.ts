@@ -27,6 +27,7 @@ export interface Command {
 
 /** One-line summaries, so `cli-tools list` says what each command is for. */
 const SUMMARIES: Record<string, string> = {
+  'ask-web': 'Answer a question from the live web, with its sources',
   'blog-post': 'Publish to a plain-HTML blog without breaking the feed',
   'cli-tools': 'This dispatcher: list, update and wire up the others',
   domainfree: 'Which of these domains can you actually register',
@@ -36,6 +37,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
+  tts: 'Read text aloud and keep the audio',
 };
 
 /** The repository root, found from this file rather than from the cwd. */

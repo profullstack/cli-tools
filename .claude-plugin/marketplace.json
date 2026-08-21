@@ -64,6 +64,25 @@
       ]
     },
     {
+      "name": "ai",
+      "description": "Ask a question and get an answer from the live web with the pages it came from, numbered to match the markers in the text, and read text aloud in a named voice. The paid APIs worth a command: a grounded answer you can check, and speech you can keep.",
+      "source": "./plugins/ai",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#ask-web",
+      "keywords": [
+        "search",
+        "citations",
+        "perplexity",
+        "tts",
+        "speech",
+        "elevenlabs"
+      ]
+    },
+    {
       "name": "bo",
       "description": "BufferOverride from the terminal: wrap a failing command, keep what it printed with the environment that produced it, strip the secrets, and find the existing answer before asking. Answers declare the versions they are valid for, who or what wrote them, and how many people reproduced them.",
       "source": "./plugins/bo",

@@ -18,10 +18,20 @@ import { dirname, join } from 'node:path';
  * each key is coming from rather than only whether one exists.
  */
 
-/** Friendly name → the environment variable the tools already read. */
+/**
+ * Friendly name → the environment variable the tools already read.
+ *
+ * The rule for this list is that a key earns its place by being read by a
+ * command in this repository, not by being a key the team happens to own. The
+ * team vault has more than twice as many; importing all of them would make this
+ * file a second, drifting copy of the vault, which is the thing the vault
+ * exists to avoid.
+ */
 export const KNOWN_KEYS: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
+  perplexity: 'PERPLEXITY_API_KEY',
+  elevenlabs: 'ELEVENLABS_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';
