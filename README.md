@@ -16,6 +16,9 @@ TypeScript, installed as executables on `PATH`.
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
 | [`tts`](#tts) | Read text aloud and keep the audio |
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
+| [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
+| [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
+| [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 
 ## Requirements
 
@@ -25,6 +28,10 @@ TypeScript, installed as executables on `PATH`.
 - **`dig`** at `/usr/bin/dig` — `domainjson` only
 - **[OpenRDAP](https://github.com/openrdap/rdap)** (`rdap` on `PATH`, or
   `~/go/bin/rdap`) — `domainjson` only, and it degrades to DNS-only without it
+- **`ffmpeg`** — `vid` only, and it is a hard requirement rather than a
+  degradation: nothing on npm decodes video the way sharp handles images
+- **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
+  (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
 
 ## Install
 
@@ -571,6 +578,62 @@ identity as a named person, which is not something a script should do on
 someone's behalf — and every one of these is behind an email-verification loop
 regardless, so a form-filler would stop at the same wall with one more moving
 part.
+
+### `genrewatch`
+
+What is coming out, and whether a thing exists at all:
+
+```sh
+genrewatch search blade runner        # back catalogue as well as the calendar
+genrewatch upcoming -c film -n 10
+genrewatch categories                 # tv | film | anime | music | space
+genrewatch upcoming -g drama-tv --json
+```
+
+Search reaches the back catalogue, so a film from 1999 is a valid answer, and
+anything the site does not already hold is looked up live. `--base` points at
+another deployment.
+
+A date with no time prints as a date. The API says which is which, and a release
+genuinely has no hour — printing one would be inventing it.
+
+### `img`
+
+Image work without opening an editor:
+
+```sh
+img info logo.png                     # dimensions, format, size
+img resize hero.jpg -w 1200 -o hero@2x.jpg
+img convert shot.png --to webp
+img icons logo.png --out public/      # the favicon/PWA set
+```
+
+**It never enlarges by default.** Scaling a 96px mark up to 512 produces a
+blurry file that looks like a bug in whatever renders it, so that needs
+`--force`.
+
+Two engines: `sharp` arrives with this repo as an optional dependency and is
+fast; ImageMagick is a system binary and handles PDF, PSD and animated GIF,
+which sharp does not. `--engine` picks.
+
+### `vid`
+
+The four things anybody actually needs ffmpeg for:
+
+```sh
+vid info clip.mp4                     # duration, streams, size
+vid thumb talk.mp4 --at 00:01:30
+vid clip talk.mp4 --from 00:01:00 --to 00:02:00
+vid shrink talk.mp4 --height 720      # --crf 28 by default
+vid audio talk.mp4                    # → talk.m4a
+```
+
+`clip` copies streams rather than re-encoding, so it is nearly instant and cuts
+at the nearest keyframe — which can be a second or two off what you asked for.
+That is the trade: re-encoding to hit an exact frame takes as long as the clip.
+
+Needs `ffmpeg` on `PATH`. There is no bundled fallback — nothing on npm decodes
+video the way sharp handles images.
 
 ## As a moshcode plugin
 

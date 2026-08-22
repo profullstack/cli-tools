@@ -41,11 +41,14 @@ The installer clones to `~/.local/share/cli-tools` (override with
 | `domainfree` | Which of these domains you can actually register |
 | `domainjson` | whois-style, JSON-first name lookup |
 | `generate-names` | Turn a sentence about a product into candidate names |
+| `genrewatch` | What is coming out, and whether it exists at all |
 | `gh-prs` | Every open PR across the owners you name |
 | `gh-prs-fix-all` | Repair the open scan PRs that are broken because of us |
 | `gh-prs-merge` | Squash-merge the PRs that are genuinely ready |
+| `img` | Resize, convert and inspect images, with sharp or ImageMagick |
 | `tcfeed` | Find repositories worth scanning, scan them, print a shortlist |
 | `tts` | Read text aloud and keep the audio |
+| `vid` | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 
 Rather than listing them by hand, `cli-tools list` reads `bin/` — a new command
 is a new file there and nothing else has to be edited, so that output is right
