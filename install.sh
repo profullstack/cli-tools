@@ -13,6 +13,8 @@
 #   CLI_TOOLS_REPO     clone URL
 #   CLI_TOOLS_BRANCH   branch to track (default master)
 #   CLI_TOOLS_FORCE    set to 1 to take over links owned by another checkout
+#   CLI_TOOLS_SKIP_STRIPE  set to 1 to skip the Stripe CLI
+#   STRIPE_CLI_VERSION     pin the Stripe CLI (default: latest release)
 
 set -eu
 
@@ -101,9 +103,143 @@ LINK_ARGS=""
 # shellcheck disable=SC2086
 CLI_TOOLS_PREFIX="$PREFIX" node "$HOME_DIR/scripts/install-links.mjs" $LINK_ARGS
 
+# ── Stripe CLI ───────────────────────────────────────────────────────────────
+#
+# Not one of this repo's commands: it is the official binary from
+# stripe/stripe-cli. It lives here because the payment work needs it on every
+# box, and "install the Stripe CLI first" is exactly the setup step that
+# quietly never happens.
+#
+# Vendored under $HOME_DIR/vendor/stripe for the same reason codeburn is: the
+# name should exist once. If some other stripe is already on PATH, that one is
+# left alone and nothing is linked over it.
+#
+# This runs AFTER the commands are linked, and warns rather than dying. A
+# GitHub outage or an unknown architecture should not fail an install that has
+# otherwise already succeeded.
+
+# Last release verified against this installer. Used when the version cannot be
+# resolved from the API, which is mostly rate limiting on a shared IP.
+STRIPE_FALLBACK_VERSION="1.50.4"
+
+stripe_platform() {
+	# Asset names look like stripe_1.50.4_linux_x86_64.tar.gz — note that the
+	# macOS ones say mac-os, and that arm64 is arm64 on both.
+	os="$(uname -s)"
+	arch="$(uname -m)"
+	case "$os" in
+		Linux) os="linux" ;;
+		Darwin) os="mac-os" ;;
+		*) return 1 ;;
+	esac
+	case "$arch" in
+		x86_64 | amd64) arch="x86_64" ;;
+		aarch64 | arm64) arch="arm64" ;;
+		*) return 1 ;;
+	esac
+	printf '%s_%s\n' "$os" "$arch"
+}
+
+stripe_sha256() {
+	if command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | cut -d' ' -f1
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | cut -d' ' -f1
+	else
+		return 1
+	fi
+}
+
+install_stripe() {
+	[ "${CLI_TOOLS_SKIP_STRIPE:-0}" = "1" ] && return 0
+
+	vendor="$HOME_DIR/vendor/stripe"
+
+	# Someone else's stripe on PATH wins. Ours would only shadow it depending on
+	# the order of two directories, which is not a thing to leave to chance.
+	existing="$(command -v stripe 2>/dev/null || true)"
+	if [ -n "$existing" ] && [ "$existing" != "$PREFIX/stripe" ]; then
+		say "  stripe already on PATH at $existing — left alone."
+		return 0
+	fi
+
+	command -v curl >/dev/null 2>&1 || { say "  skipped: curl is required."; return 0; }
+	command -v tar >/dev/null 2>&1 || { say "  skipped: tar is required."; return 0; }
+
+	platform="$(stripe_platform)" || {
+		say "  skipped: no Stripe CLI build for $(uname -s)/$(uname -m)."
+		return 0
+	}
+
+	version="${STRIPE_CLI_VERSION:-}"
+	if [ -z "$version" ]; then
+		# Plain grep/sed rather than jq, which is not a dependency anywhere else
+		# in this installer.
+		version="$(curl -fsSL https://api.github.com/repos/stripe/stripe-cli/releases/latest 2>/dev/null \
+			| sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+		[ -n "$version" ] || version="$STRIPE_FALLBACK_VERSION"
+	fi
+	version="${version#v}"
+
+	# Already at the wanted version? Then there is nothing to download.
+	if [ -x "$vendor/stripe" ] && [ "$($vendor/stripe --version 2>/dev/null | sed -n 's/.*version \([0-9.]*\).*/\1/p')" = "$version" ]; then
+		say "  stripe $version already installed."
+		return 0
+	fi
+
+	case "$platform" in
+		mac-os_*) sums="stripe-mac-checksums.txt" ;;
+		*) sums="stripe-linux-checksums.txt" ;;
+	esac
+	tarball="stripe_${version}_${platform}.tar.gz"
+	base="https://github.com/stripe/stripe-cli/releases/download/v${version}"
+
+	tmp="$(mktemp -d)" || { say "  skipped: could not create a temp dir."; return 0; }
+
+	if ! curl -fsSL "$base/$tarball" -o "$tmp/$tarball"; then
+		say "  skipped: could not download $tarball."
+		rm -rf "$tmp"
+		return 0
+	fi
+
+	# The checksum comes from the same host as the tarball, so this is not a
+	# supply-chain guarantee — it catches a truncated or corrupted download,
+	# which is the failure this actually sees.
+	if curl -fsSL "$base/$sums" -o "$tmp/sums.txt" 2>/dev/null; then
+		want="$(grep " $tarball\$" "$tmp/sums.txt" 2>/dev/null | cut -d' ' -f1)"
+		got="$(stripe_sha256 "$tmp/$tarball" 2>/dev/null || true)"
+		if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+			say "  skipped: checksum mismatch on $tarball."
+			rm -rf "$tmp"
+			return 0
+		fi
+	fi
+
+	if ! tar -xzf "$tmp/$tarball" -C "$tmp" stripe 2>/dev/null; then
+		say "  skipped: could not extract stripe from $tarball."
+		rm -rf "$tmp"
+		return 0
+	fi
+
+	mkdir -p "$vendor"
+	# mv onto the old binary rather than writing in place: a running stripe
+	# keeps its inode, and the replacement is atomic.
+	mv "$tmp/stripe" "$vendor/stripe"
+	chmod +x "$vendor/stripe"
+	rm -rf "$tmp"
+
+	mkdir -p "$PREFIX"
+	ln -sf "$vendor/stripe" "$PREFIX/stripe"
+	say "  stripe $version -> $PREFIX/stripe"
+}
+
+say "Installing the Stripe CLI"
+install_stripe
+
 # install-links.mjs already warns when $PREFIX is not on PATH, so there is
 # deliberately no second warning here.
 say ""
 say "Installed. Try:"
 say "  cli-tools list             # what landed, and what is on PATH"
 say "  cli-tools aliases --install  # the moshcode pit aliases"
+say "  stripe login               # authenticate the Stripe CLI"
