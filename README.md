@@ -48,6 +48,16 @@ every command into `~/.local/bin`. `CLI_TOOLS_HOME` and `CLI_TOOLS_PREFIX`
 override both. If a checkout already owns these command names, the installer
 updates *that* one rather than cloning a second copy beside it.
 
+The installer also puts the official [Stripe CLI](https://docs.stripe.com/cli)
+on PATH, because the payment work needs it on every box and installing it by
+hand is the setup step that never happens. It is vendored under
+`~/.local/share/cli-tools/vendor/stripe` and linked into `~/.local/bin`, so the
+name exists once; a `stripe` already on PATH from somewhere else is left alone.
+`STRIPE_CLI_VERSION` pins a version, `CLI_TOOLS_SKIP_STRIPE=1` skips it. It
+downloads the release tarball and checks the published sha256, and if any of
+that fails it warns and moves on rather than failing an install that otherwise
+worked. Authenticate it once with `stripe login`.
+
 With moshcode on the box, the same thing:
 
 ```sh
