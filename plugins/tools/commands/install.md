@@ -38,6 +38,7 @@ The installer clones to `~/.local/share/cli-tools` (override with
 | `ask-web` | Answer a question from the live web, with its sources |
 | `blog-post` | Publish to a plain-HTML blog without breaking the feed |
 | `cli-tools` | This dispatcher |
+| `codeburn` | See where your AI spend goes, by task, tool, model and project |
 | `domainfree` | Which of these domains you can actually register |
 | `domainjson` | whois-style, JSON-first name lookup |
 | `generate-names` | Turn a sentence about a product into candidate names |

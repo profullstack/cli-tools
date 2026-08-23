@@ -19,6 +19,7 @@ TypeScript, installed as executables on `PATH`.
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
+| [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 
 ## Requirements
 
@@ -32,6 +33,9 @@ TypeScript, installed as executables on `PATH`.
   degradation: nothing on npm decodes video the way sharp handles images
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
+- **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
+  npm package, installed on first use, and upstream's engine floor is higher
+  than this repo's
 
 ## Install
 
@@ -634,6 +638,40 @@ That is the trade: re-encoding to hit an exact frame takes as long as the clip.
 
 Needs `ffmpeg` on `PATH`. There is no bundled fallback — nothing on npm decodes
 video the way sharp handles images.
+
+### `codeburn`
+
+Where your AI spend actually went — [codeburn](https://www.npmjs.com/package/codeburn),
+wrapped so it is a command rather than something you `npx`:
+
+```sh
+codeburn                              # the dashboard, last 7 days; q quits
+codeburn overview -p all              # last 6 months, copy-pasteable
+codeburn optimize --provider claude   # what is wasting tokens, and the fix
+codeburn --help                       # it is upstream's CLI: upstream's flags
+```
+
+Everything is handed through untouched, so upstream's docs are the docs. Two
+flags are ours, spelled `--self-*` because every plain word belongs to them:
+
+```sh
+codeburn --self-update                # reinstall the latest release
+codeburn --self-where                 # which copy runs, and from where
+```
+
+**The first run installs it**, with `pnpm` and with `npm` when pnpm is absent or
+fails — the same order `install.sh` uses. It lands in
+`~/.local/share/cli-tools/vendor/codeburn`, not globally, and that is the whole
+point: a global install would put a second executable called `codeburn` on
+`PATH` beside this repo's own link to this wrapper, and which one won would come
+down to the order of two directories. Ours would then shell out to whatever
+`codeburn` resolves to, which is ours. A private prefix means the name exists
+once. `CODEBURN_BIN` points at a copy you would rather run.
+
+Installed rather than `pnpm dlx`-ed each time because dlx checks the registry
+before every launch, which is fine for a one-shot and wrong for a dashboard you
+open twenty times a day. Upstream wants **Node 22.13+**; on an older one it says
+so and tries anyway, since that floor is theirs to move.
 
 ## As a moshcode plugin
 
