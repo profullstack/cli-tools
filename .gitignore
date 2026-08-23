@@ -16,3 +16,8 @@ credentials.json
 !.env.example
 *.pem
 *.key
+
+# Third-party binaries the installer fetches (codeburn, the Stripe CLI). They
+# land in the checkout that owns the links, which for a contributor is this
+# repo, so without this a 37MB stripe binary shows up as untracked.
+vendor/
