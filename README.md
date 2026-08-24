@@ -21,6 +21,12 @@ TypeScript, installed as executables on `PATH`.
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 
+One thing here is not a `PATH` command and does not need Node:
+
+| Script | What it does |
+| --- | --- |
+| [`root-ubuntu.sh`](#root-ubuntush) | Provision an Ubuntu/Debian server: dev environment, accounts, web, TLS |
+
 ## Requirements
 
 - **Node 20+**
@@ -682,6 +688,83 @@ Installed rather than `pnpm dlx`-ed each time because dlx checks the registry
 before every launch, which is fine for a one-shot and wrong for a dashboard you
 open twenty times a day. Upstream wants **Node 22.13+**; on an older one it says
 so and tries anyway, since that floor is theirs to move.
+
+### `root-ubuntu.sh`
+
+Sets up a server the way we like them, and keeps it that way. It is the odd one
+out in this repository: a single bash script rather than a TypeScript command,
+because it has to run on a machine where nothing is installed yet — including
+Node. Nothing links it onto `PATH`; you curl it onto the box.
+
+```sh
+# on the server, as root
+curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/root-ubuntu.sh \
+  | bash -s -- --refresh
+```
+
+**`bash`, not `sh`.** `/bin/sh` on Ubuntu is dash and this script is bash
+throughout. Piping it into `sh` stops with one sentence telling you so rather
+than a syntax error on a line you never typed.
+
+A pipe has no terminal on stdin, so that form is always non-interactive: it
+takes defaults instead of reading answers out of its own source. To be asked the
+questions, download it first:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/profullstack/cli-tools/master/root-ubuntu.sh
+chmod +x root-ubuntu.sh
+./root-ubuntu.sh                    # as root
+./root-ubuntu.sh alice bob          # ...and provision two accounts
+./root-ubuntu.sh alice --groups sudo,docker
+```
+
+What a run does:
+
+- apt update/upgrade, base packages, unattended security updates
+- `ufw`, with ssh opened *before* the firewall is enabled
+- accounts and groups — created, or refreshed if an earlier run made them
+- zsh + oh-my-zsh, oh-my-tmux, mise, moshcode, chawan
+- nginx: `~/public_html` at `/~user` and `user.$WEB_DOMAIN`, plus per-user dev
+  apps at `<app>.<user>.$WEB_DOMAIN`, static or reverse-proxied
+- Let's Encrypt, wildcard via DNS-01 where credentials allow it
+
+**Re-running is the update path.** Every step converges rather than assuming a
+blank machine: files it owns are rewritten only when the content really changed,
+so nginx is not reloaded for nothing; files a user has since edited are never
+clobbered, and the new version is left beside them as `.new`; and a lock file
+makes two concurrent runs impossible. On a settled box a re-run reports that
+nothing changed, which is the point.
+
+#### Configuring it
+
+Read from the environment first, then `$SERVER_CONFIG`, then
+`/etc/cli-tools/server.conf`. Copy [`server.conf.example`](server.conf.example),
+which documents every value:
+
+```sh
+install -d -m 0755 /etc/cli-tools
+install -m 0600 server.conf.example /etc/cli-tools/server.conf
+```
+
+`KEY=value`, one per line, `#` for comments. The file is **read, not sourced**:
+nothing in it executes, so `$(…)` in a config file stays literal text instead of
+running as root, and the environment still wins over the file. It is not JSON
+either — the script runs before apt has put `jq` on the box, and a bootstrap
+that cannot read its own config until it has installed a parser has a hole in
+it.
+
+**Dotfiles are optional and are not in this repository.** They cannot be: a
+dotfiles tree carries ssh config, `known_hosts` and sometimes keys, and this
+repo is public. Point `DOTFILES_REPO` at your own and the script clones it;
+leave it unset and the box still gets everything else, with each account keeping
+whatever dotfiles it already had. Running the script from inside a dotfiles
+checkout also works — it recognises one by its content, not its name.
+
+**No credentials, ever, in the file itself.** `ACME_EMAIL` has no default,
+because a public script must not ship somebody's address and a made-up one sends
+a stranger's certificate warnings into a black hole. There is no default ad slot
+for the same shape of reason: a slot id is an account, so shipping one would bill
+every box that ever ran this to whoever owned it.
 
 ## As a moshcode plugin
 
