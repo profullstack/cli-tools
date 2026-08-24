@@ -1,0 +1,100 @@
+# Example configuration for root-ubuntu.sh.
+#
+# Copy to /etc/cli-tools/server.conf on the box, and give it 0600 if you put
+# any credentials in it:
+#
+#   install -d -m 0755 /etc/cli-tools
+#   install -m 0600 server.conf.example /etc/cli-tools/server.conf
+#
+# KEY=value, one per line, # for comments. Surrounding quotes are stripped, so
+# quote anything with a space in it.
+#
+# The file is READ, not sourced: nothing in it is executed, and $(...) or
+# backticks stay literal text rather than running as root. It is deliberately
+# not JSON either, because the script runs before apt has installed jq and a
+# bootstrap that cannot read its own config until it has installed a parser has
+# a hole in it.
+#
+# The environment wins over this file, so a one-off run can override any line
+# here without editing it. Everything is optional; a box with no config file at
+# all still provisions.
+
+# ── the box ──────────────────────────────────────────────────────────────────
+
+# Per-user pages are served at https://$WEB_DOMAIN/~user and
+# https://user.$WEB_DOMAIN, and dev apps at https://<app>.<user>.$WEB_DOMAIN.
+#WEB_DOMAIN=dev.example.com
+
+# Each account's address is <login>@$MAIL_DOMAIN on the landing page.
+#MAIL_DOMAIN=example.com
+
+# Port to open in ufw. Change it here if sshd is not on 22, or the firewall
+# will happily lock you out of the box you are provisioning.
+#SSH_PORT=22
+
+# ── accounts ─────────────────────────────────────────────────────────────────
+
+# Groups new accounts land in when nothing is passed on the command line.
+#DEFAULT_GROUPS=sudo,admin
+
+# ── dotfiles (optional) ──────────────────────────────────────────────────────
+
+# The shell/editor/tmux/irssi config to install into every account. It is not
+# in this repository and cannot be: a dotfiles tree carries ssh config,
+# known_hosts and sometimes keys, and cli-tools is public.
+#
+# With none of these set the box still gets everything else -- packages,
+# firewall, accounts, zsh, oh-my-zsh, mise, moshcode, nginx, TLS -- and each
+# account keeps whatever dotfiles it already had.
+#DOTFILES_REPO=git@github.com:example/dotfiles.git
+
+# Or point at a checkout that is already on the box, instead of cloning.
+#DOTFILES_DIR=/root/dotfiles
+
+# Where a pasted public key is filed so re-runs and rebuilds keep working.
+# Defaults to $DOTFILES_DIR/ssh-keys, or /var/lib/profullstack/ssh-keys when
+# there is no dotfiles checkout.
+#KEYS_DIR=/etc/cli-tools/ssh-keys
+
+# ── TLS ──────────────────────────────────────────────────────────────────────
+
+# Where Let's Encrypt sends expiry warnings. There is no default: a public
+# script must not ship somebody's address. Certificates issue without one --
+# you just do not get the reminder mail.
+#ACME_EMAIL=ops@example.com
+
+# A wildcard certificate needs a DNS-01 challenge, which needs API access to
+# whoever hosts the zone. Without either pair below the box still gets a
+# certificate, but only for names that already resolve to it, and per-user dev
+# app wildcards (*.<user>.$WEB_DOMAIN) are not possible at all.
+#
+# Keep this file 0600 if you put these here. Better still, pass them in the
+# environment for the one run that issues the certificate and leave them out of
+# the file entirely -- renewal does not need them again.
+#PORKBUN_API_KEY=
+#PORKBUN_SECRET_API_KEY=
+
+# ...or, for a zone at Cloudflare instead:
+#CLOUDFLARE_API_TOKEN=
+
+# ── tailscale ────────────────────────────────────────────────────────────────
+
+# Joins the tailnet unattended. Without it the script prints the command to run
+# by hand, which is the right answer for a box you are sitting in front of.
+#TS_AUTHKEY=
+#TS_HOSTNAME=
+
+# ── the landing page ─────────────────────────────────────────────────────────
+
+# The team blog is one account's userdir rather than its own vhost, so the
+# landing page has to be told whose. Unset means no blog section at all, which
+# beats a link to a 404.
+#BLOG_USER=
+#BLOG_TITLE=the team blog
+
+# ── sponsor ad ───────────────────────────────────────────────────────────────
+
+# Off unless a slot id is set, and there is deliberately no default one: an ad
+# slot is an account, so a shared default would bill every box that ever ran
+# this script to whoever owned that slot.
+#SPONSOR_AD_SLOT=
