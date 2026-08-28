@@ -18,6 +18,7 @@ TypeScript, installed as executables on `PATH`.
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
+| [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 
@@ -39,6 +40,10 @@ One thing here is not a `PATH` command and does not need Node:
   degradation: nothing on npm decodes video the way sharp handles images
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
+- **Network on first use** — `favicon` only: the generation is
+  [`@profullstack/favicon-generator`](https://github.com/profullstack/favicon-generator),
+  fetched by `npx` rather than installed here (about seven seconds the first
+  time on a box, under two warm)
 - **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
   npm package, installed on first use, and upstream's engine floor is higher
   than this repo's
@@ -625,7 +630,7 @@ Image work without opening an editor:
 img info logo.png                     # dimensions, format, size
 img resize hero.jpg -w 1200 -o hero@2x.jpg
 img convert shot.png --to webp
-img icons logo.png --out public/      # the favicon/PWA set
+img icons logo.png --out public/      # a quick PWA-sized set; see `favicon`
 ```
 
 **It never enlarges by default.** Scaling a 96px mark up to 512 produces a
@@ -635,6 +640,41 @@ blurry file that looks like a bug in whatever renders it, so that needs
 Two engines: `sharp` arrives with this repo as an optional dependency and is
 fast; ImageMagick is a system binary and handles PDF, PSD and animated GIF,
 which sharp does not. `--engine` picks.
+
+### `favicon`
+
+Every icon a site links, rendered from one SVG:
+
+```sh
+favicon logo.svg                          # -> ./icons
+favicon logo.svg --out public/icons
+favicon mark.svg --out public --quality 90 --no-favicons
+favicon logo.svg --dry-run                # print the command, run nothing
+```
+
+It writes `icon-16` through `icon-512`, an `apple-touch-icon` at every size iOS
+has ever asked for, `favicon.png` / `.svg` / `.ico`, and the `manifest.json`,
+`browserconfig.xml` and `<link>` tags that reference them. A PNG source works;
+an SVG is better, because each size is then rendered from the vector rather
+than resampled from one raster.
+
+**Not the same tool as `img icons`.** That one resamples a raster into the nine
+sizes a manifest normally asks for, with whichever engine the box has. This is
+the full iOS and PWA set, plus the markup.
+
+The generation is [`@profullstack/favicon-generator`](https://github.com/profullstack/favicon-generator),
+run through `npx` rather than installed here — it brings its own `sharp` and a
+postinstall that shells out, neither of which the other fifteen tools should
+pay for at install time. What lives in this repo is the command name, the
+argument handling and the refusal to prompt: upstream's CLI ignores a
+positional file and an unrecognised flag, and with nothing left to go on drops
+into an interactive prompt, which in a script with no TTY dies with `User force
+closed the prompt`. Here the file is a positional, unknown flags are an error,
+and `-i`/`-o` are always passed on, so that prompt is unreachable.
+
+`FAVICON_SPEC` is what `npx` runs. Pin it (`@profullstack/favicon-generator@1.2.1`)
+when a release breaks you, or point it at a checkout while working on the
+generator itself.
 
 ### `vid`
 

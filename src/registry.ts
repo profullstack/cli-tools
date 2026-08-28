@@ -34,6 +34,7 @@ const SUMMARIES: Record<string, string> = {
   codeburn: 'See where your AI spend goes, by task, tool, model and project',
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
+  favicon: 'Every icon a site links, rendered from one SVG',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',

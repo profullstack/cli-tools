@@ -41,6 +41,7 @@ The installer clones to `~/.local/share/cli-tools` (override with
 | `codeburn` | See where your AI spend goes, by task, tool, model and project |
 | `domainfree` | Which of these domains you can actually register |
 | `domainjson` | whois-style, JSON-first name lookup |
+| `favicon` | Every icon a site links, rendered from one SVG |
 | `generate-names` | Turn a sentence about a product into candidate names |
 | `genrewatch` | What is coming out, and whether it exists at all |
 | `gh-prs` | Every open PR across the owners you name |
