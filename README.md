@@ -211,6 +211,8 @@ carries the same masked previews, not the values.
 | `anthropic` | `ANTHROPIC_API_KEY` | `generate-names` |
 | `perplexity` | `PERPLEXITY_API_KEY` | `ask-web` |
 | `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
+| `porkbun` | `PORKBUN_API_KEY` | `porkbun` |
+| `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
 
 A key earns a row here by being read by a command in this repository, not by
 being a key the team owns. The vault holds more than twice as many; the rest
@@ -421,6 +423,52 @@ Names ending in a Moshpit TLD are served from the registry API; everything else
 goes through OpenRDAP. Either way `dig` adds records, hosts, reverse lookups and
 per-nameserver AXFR attempts. Errors are JSON too — a tool whose output gets
 parsed should not change shape when it fails.
+
+### `porkbun`
+
+DNS at Porkbun, without the dashboard.
+
+```sh
+porkbun ls example.com                                   # the zone, apex first
+porkbun ls example.com --type TXT                        # one type
+porkbun set example.com www CNAME app.up.railway.app     # create, or edit in place
+porkbun set example.com @ ALIAS app.up.railway.app       # apex, via Porkbun's ALIAS
+porkbun rm example.com www --type CNAME --yes
+porkbun unpark example.com                               # stop the parking page winning
+porkbun domains                                          # everything on the account
+```
+
+Write the host the way you would say it. `@`, an empty value and the bare domain
+all mean the apex; `www` and `www.example.com` are the same record. Getting this
+wrong is how you end up with `www.example.com.example.com`, so all four forms are
+accepted and normalised.
+
+`set` is an upsert: it creates the record, or edits the existing one **in place**,
+keeping its id. The obvious alternative — delete then create — has a window where
+the name does not resolve at all. When the value already matches it reports
+`unchanged` and sends no write. If several records share a name and type (two TXT
+values, a set of A records) it refuses rather than guessing which to overwrite.
+
+`unpark` is the one worth knowing about. A domain you bought and left alone answers
+with an `ALIAS` at the apex and a wildcard `CNAME`, both pointing at a
+`*.porkbun.com` host — and **those records belong to a URL forwarding rule** rather
+than standing on their own. So adding your own ALIAS beside them changes nothing:
+the forward keeps winning, the new host never sees a request, and it looks exactly
+like a broken deploy rather than a DNS problem. `unpark` deletes the forward, which
+takes its records with it, then removes anything that survived. `--dry-run` prints
+the plan first.
+
+It is deliberately narrow about what counts as parking: only `ALIAS` and `CNAME`
+records pointing at `porkbun.com`. The `MX` records at `fwd1.porkbun.com` are
+Porkbun's *email forwarding* and the `NS` records are the zone's delegation —
+sweeping either up would break mail or take the domain off the internet.
+
+Two Porkbun-specific traps the errors call out by name. Every call is a `POST`
+with the credentials in the body, and **`status` is a field rather than the HTTP
+code**: a bad key, an unknown domain and a malformed record all return `200 OK`
+with `{"status":"ERROR"}`, so checking the response code reports success for all
+three. And API access is **off per domain** until you switch it on in that
+domain's settings — a key that pings fine still gets `Invalid domain` until you do.
 
 ### `blog-post`
 

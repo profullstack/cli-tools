@@ -32,6 +32,8 @@ export const KNOWN_KEYS: Record<string, string> = {
   anthropic: 'ANTHROPIC_API_KEY',
   perplexity: 'PERPLEXITY_API_KEY',
   elevenlabs: 'ELEVENLABS_API_KEY',
+  porkbun: 'PORKBUN_API_KEY',
+  porkbun_secret: 'PORKBUN_SECRET_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';
@@ -54,10 +56,14 @@ export function credentialsPath(env: NodeJS.ProcessEnv = process.env): string {
 
 /** Resolve a friendly name or an env var name to the env var name, or null. */
 export function keyVariable(name: string): string | null {
+  // Hyphens and underscores are the same separator here. The single-word keys
+  // never needed this; `porkbun-secret-api-key` and `porkbun_secret_api_key`
+  // are the same key and both have to land on the same entry.
   const key = String(name ?? '')
     .trim()
     .toLowerCase()
-    .replace(/[-_]?(api[-_]?)?key$/, '');
+    .replace(/-/g, '_')
+    .replace(/_?(api_?)?key$/, '');
   if (Object.hasOwn(KNOWN_KEYS, key)) return KNOWN_KEYS[key]!;
 
   const upper = String(name ?? '')
