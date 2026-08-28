@@ -42,6 +42,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
+  shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
   tts: 'Read text aloud and keep the audio',
   vid: 'Inspect, thumbnail, clip and shrink video, through ffmpeg',

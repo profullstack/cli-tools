@@ -34,6 +34,11 @@ export const KNOWN_KEYS: Record<string, string> = {
   elevenlabs: 'ELEVENLABS_API_KEY',
   porkbun: 'PORKBUN_API_KEY',
   porkbun_secret: 'PORKBUN_SECRET_API_KEY',
+  // Read by `shorten`. Usually not needed: on a machine where the pit works,
+  // `moshcode login` has already written the same token to
+  // ~/.moshcode/credentials.json and that is what gets picked up. This is for a
+  // box that has the key but not moshcode.
+  moshcode: 'MOSHCODE_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';

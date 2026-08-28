@@ -21,6 +21,7 @@ TypeScript, installed as executables on `PATH`.
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
+| [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -213,6 +214,7 @@ carries the same masked previews, not the values.
 | `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
 | `porkbun` | `PORKBUN_API_KEY` | `porkbun` |
 | `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
+| `moshcode` | `MOSHCODE_API_KEY` | `shorten` |
 
 A key earns a row here by being read by a command in this repository, not by
 being a key the team owns. The vault holds more than twice as many; the rest
@@ -776,6 +778,39 @@ Installed rather than `pnpm dlx`-ed each time because dlx checks the registry
 before every launch, which is fine for a one-shot and wrong for a dashboard you
 open twenty times a day. Upstream wants **Node 22.13+**; on an older one it says
 so and tries anyway, since that floor is theirs to move.
+
+### `shorten`
+
+Mints a short link on the Moshpit registry and prints it. `/f/<code>` answers a
+`302` to wherever it points, from anywhere — no resolver, no extension, nothing
+installed on the other end.
+
+```sh
+shorten https://pit.moshcode.sh/n/blue.eggs/the-post-i-wrote-on-tuesday
+#      → https://pit.moshcode.sh/f/k7mq2xd
+
+shorten https://example.com/x --name blue.eggs   # file it under a name you hold
+shorten list                                     # yours, with hit counts
+shorten rm k7mq2xd                               # it stops resolving
+shorten https://example.com/x --bare | pbcopy    # just the url
+```
+
+**Nothing to configure on a machine where the pit works.** The token
+`moshcode login` already wrote is picked up from `~/.moshcode/credentials.json`;
+`cli-tools config set moshcode` and `MOSHCODE_API_KEY` are for a box that has the
+key but not moshcode.
+
+Minting is authenticated because an anonymous shortener is an open redirector
+with a database attached. It is also idempotent per account — the same url twice
+returns the same code — so this is safe to retry and cannot quietly split one
+destination's hits across two codes.
+
+The registry owns what may be shortened (`http(s)` only, and a short link may
+not point at itself), and this passes its refusals through verbatim rather than
+keeping a second, looser copy of those rules that would drift. The short url is
+the only thing on stdout, so it pipes.
+
+The same thing lives inside moshcode as `/shorten`; this is the copy that pipes.
 
 ### `root-ubuntu.sh`
 
