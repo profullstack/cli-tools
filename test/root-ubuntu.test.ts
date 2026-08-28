@@ -311,3 +311,213 @@ describe('upgrading a box that this script already provisioned', () => {
     expect(SOURCE).toContain('User pages are at');
   });
 });
+
+describe('valid_group', () => {
+  it('accepts the names groupadd accepts', () => {
+    expect(status(['valid_group'], 'valid_group users')).toBe(0);
+    expect(status(['valid_group'], 'valid_group www-data')).toBe(0);
+    expect(status(['valid_group'], 'valid_group _svc9')).toBe(0);
+  });
+
+  it('rejects the ones it does not', () => {
+    expect(status(['valid_group'], 'valid_group 9lives')).toBe(1);
+    expect(status(['valid_group'], 'valid_group WWW')).toBe(1);
+    expect(status(['valid_group'], 'valid_group ../root')).toBe(1);
+    expect(status(['valid_group'], "valid_group ''")).toBe(1);
+  });
+});
+
+describe('_split_list', () => {
+  // Mirrors --groups, which has always taken either separator. A subcommand
+  // that accepted only one of them would be a second, stricter spelling of a
+  // list the same script already parses loosely.
+  it('splits on commas and on spaces alike', () => {
+    expect(shell(['_split_list'], '_split_list sudo,docker')).toBe('sudo\ndocker');
+    expect(shell(['_split_list'], '_split_list sudo docker')).toBe('sudo\ndocker');
+    expect(shell(['_split_list'], '_split_list "sudo, docker" users')).toBe('sudo\ndocker\nusers');
+  });
+
+  it('drops empty fields rather than emitting a blank group name', () => {
+    expect(shell(['_split_list'], '_split_list "sudo,,docker,"')).toBe('sudo\ndocker');
+    expect(shell(['_split_list'], "_split_list ''")).toBe('');
+  });
+});
+
+describe('_orphans_admin', () => {
+  // The lockout guard. It is handed the member list rather than reading
+  // /etc/group, which is the only reason it can be tested at all — the box
+  // running the suite has no say in what `sudo` contains.
+  it('fires when the login is the only member left of an admin group', () => {
+    expect(status(['_orphans_admin'], '_orphans_admin sudo alice alice')).toBe(0);
+    expect(status(['_orphans_admin'], '_orphans_admin admin alice alice')).toBe(0);
+    expect(status(['_orphans_admin'], '_orphans_admin wheel alice alice')).toBe(0);
+  });
+
+  it('is quiet when somebody else is still in the group', () => {
+    expect(status(['_orphans_admin'], '_orphans_admin sudo alice alice,bob')).toBe(1);
+    expect(status(['_orphans_admin'], '_orphans_admin sudo alice bob,alice')).toBe(1);
+  });
+
+  it('does not guard groups that cannot lock the box', () => {
+    // Being the last member of docker or users is not an outage, and refusing
+    // it would make the guard something people learn to pass --force through.
+    expect(status(['_orphans_admin'], '_orphans_admin docker alice alice')).toBe(1);
+    expect(status(['_orphans_admin'], '_orphans_admin users alice alice')).toBe(1);
+  });
+});
+
+describe('_extra_share_groups', () => {
+  const call = (extra: string, share = 'users') =>
+    shell(['_extra_share_groups'], `SHARE_GROUP=${share} SHARE_EXTRA_GROUPS=${extra} _extra_share_groups`);
+
+  it('takes commas or spaces, like every other group list here', () => {
+    expect(call('www-data,backup')).toBe('www-data\nbackup');
+    expect(call("'www-data backup'")).toBe('www-data\nbackup');
+  });
+
+  it('drops $SHARE_GROUP, which is already the owning group', () => {
+    // An ACL entry restating the group in the mode is not wrong, it is just
+    // one more line of getfacl for a later reader to work out is redundant.
+    expect(call('users,www-data')).toBe('www-data');
+    expect(call('users')).toBe('');
+  });
+
+  it('deduplicates, so --group twice is not two ACL entries', () => {
+    expect(call('www-data,www-data')).toBe('www-data');
+  });
+
+  it('is empty when nothing was asked for', () => {
+    expect(call("''")).toBe('');
+  });
+});
+
+describe('sharing a volume with a second group', () => {
+  it('grants nothing at all unless asked, so no share silently gains an ACL', () => {
+    // The early return matters more than it looks: without it, every existing
+    // mount would start calling setfacl on a box that may not even have it.
+    expect(
+      status(
+        ['_extra_share_groups', '_share_acl'],
+        "warn() { :; }; info() { :; }; SHARE_GROUP=users SHARE_EXTRA_GROUPS='' _share_acl /nonexistent",
+      ),
+    ).toBe(0);
+  });
+
+  it('says which package is missing rather than failing silently', () => {
+    // setfacl is not on a minimal Ubuntu image, and "nothing happened" is the
+    // worst possible answer for a permission grant.
+    expect(SOURCE).toContain('setfacl is missing');
+    expect(SOURCE).toMatch(/apt install acl/);
+  });
+
+  it('installs acl, since --group cannot work without it', () => {
+    expect(SOURCE).toMatch(/^\tacl$/m);
+  });
+
+  it('sets the mode before the ACL, never after', () => {
+    // chmod recomputes the ACL mask from the group bits, and the mask caps
+    // every named entry — so a grant made first is quietly narrowed by the
+    // chmod that follows it, and getfacl then shows an entry that does not
+    // apply. Order is the whole correctness argument here.
+    const shared = SOURCE.slice(SOURCE.indexOf('_share_perms() {'));
+    const chmod = shared.indexOf('chmod "$SHARE_DIR_MODE"');
+    const acl = shared.indexOf('_share_acl "$dir" 0');
+    expect(chmod).toBeGreaterThan(-1);
+    expect(acl).toBeGreaterThan(chmod);
+  });
+
+  it('takes the ACL away again when a share goes private', () => {
+    // 00700 says private while a leftover g:www-data:rwx entry still hands the
+    // directory to a daemon, and `ls -l` shows the reassuring number.
+    expect(SOURCE).toContain('setfacl -b "$dir"');
+  });
+});
+
+describe('the groups subcommand', () => {
+  const groups = (...args: string[]) =>
+    execFileSync('bash', [SCRIPT, 'groups', ...args], { encoding: 'utf8' });
+
+  it('lists accounts without being root, since reading is not a privileged act', () => {
+    const out = groups();
+    expect(out).toContain('LOGIN');
+    expect(out).toContain('PRIMARY');
+    // Whoever is running the suite is an account on this box, so they are in it.
+    expect(out).toContain(execFileSync('id', ['-un'], { encoding: 'utf8' }).trim());
+  });
+
+  it('is peeled off before the root check, like the share subcommands', () => {
+    expect(SOURCE).toContain('mount|umount|mounts|share|groups)');
+    expect(SOURCE).toMatch(/groups\)\s+cmd_groups/);
+  });
+
+  it('refuses every mutation without root, and names the verb that needs it', () => {
+    const cases: [string, ...string[]][] = [
+      ['add', 'root', 'docker'],
+      ['rm', 'root', 'docker'],
+      ['set', 'root', 'docker'],
+      ['create', 'sometestgroup'],
+      ['delete', 'sometestgroup'],
+    ];
+    for (const [verb, ...rest] of cases) {
+      let failed = false;
+      try {
+        execFileSync('bash', [SCRIPT, 'groups', verb, ...rest], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (error) {
+        failed = true;
+        expect(String((error as { stderr?: Buffer }).stderr)).toContain(
+          `groups: ${verb} must run as root`,
+        );
+      }
+      expect(failed).toBe(true);
+    }
+  });
+
+  it('reports a group nobody is in without inventing a failure', () => {
+    // `users` exists on every Ubuntu box; the point is that a group whose
+    // member field is empty prints a row rather than an error.
+    expect(groups('members', 'users')).toContain('gid 100');
+  });
+
+  it('counts the accounts whose PRIMARY group it is as members', () => {
+    // /etc/group's member field holds supplementary members only, so a naive
+    // reading of it says the www-data group does not contain www-data.
+    expect(SOURCE).toContain('(primary)');
+    expect(groups('members', 'www-data')).toContain('www-data (primary)');
+  });
+
+  it('never reaches groupdel from rm, nor gpasswd from delete', () => {
+    // The one confusion this pair of verbs is named to survive. `rm` changes a
+    // membership and `delete` removes a group; if either could reach the
+    // other's tool, a slip of one word would be unrecoverable.
+    const body = (fn: string) => {
+      const start = SOURCE.indexOf(`${fn}() {`);
+      expect(start).toBeGreaterThan(-1);
+      return SOURCE.slice(start, SOURCE.indexOf('\n}\n', start));
+    };
+    expect(body('_groups_rm')).toContain('gpasswd -d');
+    expect(body('_groups_rm')).not.toContain('groupdel');
+    expect(body('_groups_delete')).toContain('groupdel');
+    expect(body('_groups_delete')).not.toContain('gpasswd');
+  });
+
+  it('checks the login before the argument count, so a mixed-up rm says so', () => {
+    // `groups rm docker` has to answer "no such user: docker", not print usage
+    // and leave the reader to work out which of the two commands they held.
+    const body = SOURCE.slice(SOURCE.indexOf('_groups_rm() {'));
+    expect(body.indexOf('_groups_user "$login"')).toBeLessThan(
+      body.indexOf('[[ $# -gt 0 ]] || { groups_usage; return 2; }'),
+    );
+  });
+
+  it('documents both refusals in its own help', () => {
+    const help = groups('--help');
+    expect(help).toContain('--force');
+    expect(help).toContain('--create');
+    expect(help).toContain('locks this box out of root');
+  });
+
+  it('is offered by the top-level help', () => {
+    const out = execFileSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
+    expect(out).toContain('groups add alice docker');
+  });
+});

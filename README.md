@@ -823,6 +823,62 @@ clobbered, and the new version is left beside them as `.new`; and a lock file
 makes two concurrent runs impossible. On a settled box a re-run reports that
 nothing changed, which is the point.
 
+#### Accounts and groups
+
+A full run is the wrong tool for a one-line change — putting somebody in
+`docker` should not drag an apt upgrade and a possible reboot behind it — and
+`--groups` could only ever *add*. `groups` is the rest of it:
+
+```sh
+./root-ubuntu.sh groups                          # every account, and its groups
+./root-ubuntu.sh groups alice                    # just this one
+./root-ubuntu.sh groups add alice docker,users   # as root
+./root-ubuntu.sh groups rm alice docker          # as root
+./root-ubuntu.sh groups set alice sudo,admin     # exactly these, drop the rest
+./root-ubuntu.sh groups create|delete|members deploy
+```
+
+Listing needs no privilege; everything that changes something needs root. Each
+verb is a thin wrapper over the tool that already does the job — `gpasswd -a`,
+`gpasswd -d`, `usermod -G`, `groupadd`, `groupdel` — so nothing here has its own
+idea of what `/etc/group` looks like.
+
+`rm` and `delete` are one word apart and one of them is destructive, so they are
+told apart by what their first argument *is*: `rm` takes a login and refuses
+anything else, `delete` takes group names and refuses anything else. `groups rm
+docker` is *"no such user: docker"*, not a deleted `docker` group.
+
+Two refusals, both liftable with `--force`: taking the **last** member out of
+`sudo`/`admin`/`wheel`, which locks the box out of root with no way back in from
+the box itself, and deleting a group below gid 1000, which is the system's and
+cannot be recreated on the same gid.
+
+#### Shared volumes
+
+`share` opens a mounted volume to the `users` group — `2775 root:users`,
+setgid, so the first writer does not lock everyone else out. A
+provider-attached block volume arrives `root:root 0755` and needs it applied
+after the fact:
+
+```sh
+./root-ubuntu.sh share /mnt/volume_example -R
+```
+
+A directory has exactly one group, so a volume that **both people and a daemon**
+write to cannot be said in a mode at all. `--group` adds the second one as a
+POSIX ACL — the grant plus the inherited default, so files created later are
+covered too:
+
+```sh
+./root-ubuntu.sh share /mnt/volume_example --group www-data -R
+```
+
+That needs the `acl` package (a run installs it) and a filesystem mounted with
+ACL support; `ls -l` then shows a trailing `+` and `getfacl` shows the rest.
+`--private` puts a share back to `0700` and strips the ACL with it, because a
+mode that says private while a leftover entry still hands the directory to a
+daemon is worse than no lock at all.
+
 #### Configuring it
 
 Read from the environment first, then `$SERVER_CONFIG`, then

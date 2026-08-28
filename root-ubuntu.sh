@@ -48,6 +48,15 @@
 #   ./root-ubuntu.sh mounts                 # list what is mounted, and who can reach it
 #   ./root-ubuntu.sh umount host
 #   ./root-ubuntu.sh share /mnt/volume -R   # open an existing volume
+#   ./root-ubuntu.sh share /mnt/volume --group www-data -R
+#                                           # ...to a second group as well (acl)
+#
+# Accounts and groups (see "accounts" below, or `groups --help`):
+#   ./root-ubuntu.sh groups                 # every account, and the groups it is in
+#   ./root-ubuntu.sh groups add alice docker
+#   ./root-ubuntu.sh groups rm alice docker
+#   ./root-ubuntu.sh groups set alice sudo,admin,users
+#   ./root-ubuntu.sh groups create|delete|members <group>...
 #
 # Mounts land at /mnt/<how>.<host>/<remote/path> -- e.g.
 # /mnt/tailscale.host/data -- so a remote share is never mistaken for local
@@ -662,6 +671,86 @@ SHARE_FILE_MODE="${SHARE_FILE_MODE:-0664}"
 # it is deliberately NOT $SHARE_GROUP, which is who may write to a mount.
 WEB_GROUP="${WEB_GROUP:-www-data}"
 
+# Groups beyond $SHARE_GROUP that also need to WRITE to a share. Comma or space
+# separated in the environment; `share --group NAME` adds one for a single run.
+#
+# A directory has exactly one group, so a second one cannot be said in a mode at
+# all -- it takes a POSIX ACL. That has a real cost: `ls -l` then shows a mode
+# that is no longer the whole truth, marked only by a trailing `+`, and getfacl
+# is the only way to read what is actually granted. So it stays opt-in, and the
+# plain mode remains the entire story for every share that does not ask for it.
+#
+# The case it exists for is a volume that both people and a daemon write to: the
+# humans are in `users`, nginx is www-data, and neither belongs in the other's
+# group. Putting www-data in `users` hands the web server every other `users`
+# share on the box; putting the humans in www-data is the same trade backwards.
+# An ACL on the one directory that needs it grants exactly what was meant.
+SHARE_EXTRA_GROUPS="${SHARE_EXTRA_GROUPS:-}"
+
+# The extra groups, one per line, deduplicated, with $SHARE_GROUP itself dropped
+# -- it is already the owning group, and an ACL entry restating that is noise
+# that whoever reads getfacl later has to work out is redundant.
+_extra_share_groups() {
+	local raw="${SHARE_EXTRA_GROUPS//,/ }" g seen=" "
+	for g in $raw; do
+		[[ -n "$g" && "$g" != "$SHARE_GROUP" ]] || continue
+		[[ "$seen" == *" $g "* ]] && continue
+		seen+="$g "
+		printf '%s\n' "$g"
+	done
+}
+
+# Grant $SHARE_EXTRA_GROUPS on a directory. Two entries per group, not one:
+#
+#   g:NAME:rwx     what NAME may do to this directory as it stands
+#   d:g:NAME:rwx   the default, inherited by whatever is created inside it later
+#
+# Without the default entry the grant covers the directory and nothing that ever
+# lands in it -- the same "the first writer locks everyone else out" failure the
+# setgid bit exists to prevent, one level down and invisible in `ls -l`.
+#
+# setfacl recomputes the mask from the entries it is handed, and the mask caps
+# every named entry. Spelling out rwx is what keeps the mask open; a plain
+# `chmod g+w` afterwards narrows it again, which is why _share_perms sets the
+# mode BEFORE calling this and never the other way round.
+_share_acl() {
+	local dir="$1" recurse="${2:-0}" grp ok rc=0
+	local -a extras=()
+	while read -r grp; do [[ -n "$grp" ]] && extras+=("$grp"); done < <(_extra_share_groups)
+	[[ ${#extras[@]} -gt 0 ]] || return 0
+
+	if ! command -v setfacl >/dev/null 2>&1; then
+		warn "share: setfacl is missing -- '${extras[*]}' not granted on $dir (apt install acl)"
+		return 1
+	fi
+
+	for grp in "${extras[@]}"; do
+		if ! getent group "$grp" >/dev/null; then
+			warn "share: no group '$grp' -- not granted on $dir"
+			rc=1; continue
+		fi
+		ok=1
+		if [[ "$recurse" == 1 ]]; then
+			# rwX with a capital X: execute for directories and for files that
+			# already had it, nothing else. A flat rwx here would make every
+			# data file on the volume executable, which is the thing the
+			# separate $SHARE_FILE_MODE exists to avoid.
+			setfacl -R -m "g:$grp:rwX" "$dir" 2>/dev/null || ok=0
+			# Default entries are a directory-only concept, so they cannot ride
+			# along on the -R above -- it would fail on the first plain file.
+			[[ "$ok" == 1 ]] && { find "$dir" -type d -exec setfacl -m "d:g:$grp:rwx" {} + 2>/dev/null || ok=0; }
+		else
+			setfacl -m "g:$grp:rwx" -m "d:g:$grp:rwx" "$dir" 2>/dev/null || ok=0
+		fi
+		if [[ "$ok" == 0 ]]; then
+			warn "share: could not grant '$grp' on $dir -- is the filesystem mounted with ACL support?"
+			rc=1; continue
+		fi
+		info "also writable by group '$grp' (acl)"
+	done
+	return "$rc"
+}
+
 # Resolve a tailnet peer name, as it appears in `tailscale status`, to its IP.
 _tailnet_ip() {
 	local peer="$1" ip
@@ -710,6 +799,9 @@ _share_perms() {
 		chgrp "$SHARE_GROUP" "$dir" || warn "could not set group $SHARE_GROUP on $dir"
 		chmod "$SHARE_DIR_MODE" "$dir" || warn "could not open $dir to $SHARE_GROUP"
 		info "shared: anyone in '$SHARE_GROUP' can read and write $dir"
+		# After the chmod, never before: chmod rewrites the ACL mask from the
+		# group bits, so an ACL granted first would be capped by it a line later.
+		_share_acl "$dir" 0 || true
 	else
 		chown "${SUDO_USER:-root}" "$dir" 2>/dev/null || true
 		# 00700, not 0700: chmod leaves a directory's setgid bit alone unless a
@@ -717,6 +809,11 @@ _share_perms() {
 		# with 0700 lands on 2700 -- harmless while the group has no bits, but
 		# it comes back the moment someone loosens them again.
 		chmod 00700 "$dir" || warn "could not lock down $dir"
+		# An ACL outlives a mode. 00700 says private while a leftover
+		# g:www-data:rwx entry still hands the directory to a daemon, and `ls -l`
+		# shows the reassuring number rather than the entry. Going private has to
+		# take both away.
+		command -v setfacl >/dev/null 2>&1 && setfacl -b "$dir" 2>/dev/null || true
 		info "private: only $(_owner_desc) can traverse $dir"
 	fi
 }
@@ -794,7 +891,7 @@ mount_usage() {
 	  root-ubuntu.sh mount [user@]host:/remote/path [options]
 	  root-ubuntu.sh umount <mountpoint|host>
 	  root-ubuntu.sh mounts
-	  root-ubuntu.sh share <mountpoint>... [--private] [-R]
+	  root-ubuntu.sh share <mountpoint>... [--private] [--group NAME] [-R]
 
 	Mounts a remote share at /mnt/<how>.<host>/<remote/path> and adds an fstab
 	entry so it comes back after a reboot. Re-running for the same share just
@@ -829,6 +926,12 @@ mount_usage() {
 	  --name PATH   override the derived mountpoint entirely
 	  --shared      open the share to the $SHARE_GROUP group (2775, setgid) -- the default
 	  --private     keep it to one account (0700)
+	  --group NAME  let a SECOND group write too, e.g. www-data. A directory has
+	                one group, so this is a POSIX ACL (g:NAME:rwx plus the
+	                inherited default) rather than a mode -- `ls -l` shows a
+	                trailing + and getfacl shows the rest. Repeatable; needs the
+	                acl package and a filesystem mounted with ACL support.
+	                $SHARE_EXTRA_GROUPS is the same thing from the environment.
 	  --ro          mount read-only
 	  --no-fstab    mount now, do not persist across reboots
 	  --dry-run     print the mountpoint, fstab line and unit, change nothing
@@ -854,6 +957,8 @@ cmd_mount() {
 			--no-link)  want_link=0 ;;
 			--shared)   shared=1 ;;
 			--private)  shared=0 ;;
+			--group)    SHARE_EXTRA_GROUPS="${SHARE_EXTRA_GROUPS:+$SHARE_EXTRA_GROUPS,}${2:-}"; shift ;;
+			--group=*)  SHARE_EXTRA_GROUPS="${SHARE_EXTRA_GROUPS:+$SHARE_EXTRA_GROUPS,}${1#*=}" ;;
 			--ro)       ro=1 ;;
 			--no-fstab) persist=0 ;;
 			--dry-run)  dry=1 ;;
@@ -1061,6 +1166,11 @@ cmd_share() {
 		case "$1" in
 			--private)     shared=0 ;;
 			--shared)      shared=1 ;;
+			# Appends rather than replaces, so --group can be given more than
+			# once and still means "these as well", which is the only reading
+			# that makes sense for a grant.
+			--group)       SHARE_EXTRA_GROUPS="${SHARE_EXTRA_GROUPS:+$SHARE_EXTRA_GROUPS,}${2:-}"; shift ;;
+			--group=*)     SHARE_EXTRA_GROUPS="${SHARE_EXTRA_GROUPS:+$SHARE_EXTRA_GROUPS,}${1#*=}" ;;
 			-R|--recursive) recurse=1 ;;
 			-h|--help)     mount_usage; return 0 ;;
 			-*)            die "share: unknown option: $1" ;;
@@ -1096,13 +1206,443 @@ cmd_share() {
 				chgrp -R "$SHARE_GROUP" "$p" 2>/dev/null || warn "chgrp -R fell short on $p"
 				find "$p" -type d -exec chmod "$SHARE_DIR_MODE"  {} + 2>/dev/null || warn "chmod on dirs fell short under $p"
 				find "$p" -type f -exec chmod "$SHARE_FILE_MODE" {} + 2>/dev/null || warn "chmod on files fell short under $p"
+				# Last, for the same reason as in _share_perms: the two chmods
+				# above would each reset the mask on everything they touched.
+				_share_acl "$p" 1 || true
 			else
 				chown -R "${SUDO_USER:-root}" "$p" 2>/dev/null || warn "chown -R fell short on $p"
 				chmod -R go-rwx,g-s "$p" 2>/dev/null || warn "chmod -R fell short on $p"
+				command -v setfacl >/dev/null 2>&1 && setfacl -R -b "$p" 2>/dev/null || true
 			fi
 		fi
 	done
 	return 0
+}
+
+# ------------------------------------------------------------- accounts ---
+#
+# Read and change which groups the humans on this box are in.
+#
+# A provisioning run already sets groups, but only for the accounts named on
+# that run and only ever additively (--groups). There was no way to see what
+# everyone is in, and no way at all to take a group back -- so "take alice out
+# of docker" meant `gpasswd -d` typed from memory, on a box where getting it
+# slightly wrong locks somebody out of root. It is also the wrong shape of tool
+# for a one-line change: adding an account to docker should not drag an apt
+# upgrade, a certbot renewal and a possible reboot along behind it.
+#
+# Reading needs no privilege. Every mutation asks for root and is a thin wrapper
+# over the shadow-utils command that already does the work, so nothing in here
+# carries its own idea of what /etc/group looks like:
+#
+#   add    gpasswd -a        rm      gpasswd -d
+#   set    usermod -G        create  groupadd       delete  groupdel
+#
+# On `rm` sitting next to `delete`. They are one word apart and one of them is
+# destructive, so they are told apart by what their first argument IS rather
+# than by the reader being careful: `rm` takes a LOGIN first and dies on
+# anything that is not one, `delete` takes GROUP names and dies on anything that
+# is not one. `groups rm docker` is "no such user: docker", not a deleted docker
+# group, and `groups delete alice` is "no such group: alice". Both directions of
+# the mix-up fail before anything is touched.
+
+GROUPS_FORCE=0            # --force: lift the two refusals below
+GROUPS_CREATE_MISSING=0   # --create: groupadd a named group that is not there
+GROUPS_RC=0               # non-zero if any single operation fell short
+
+# Below this gid a group is the system's, not ours. `users` is 100 and
+# `www-data` is 33 -- between them they are the whole idea of who may write to a
+# shared volume on these boxes, and groupadd cannot put either back on the same
+# gid afterwards, so every file left on disk would keep a numeric group with no
+# name. Deleting one is almost always a typo for `groups rm`.
+GROUPS_SYSTEM_FLOOR="${GROUPS_SYSTEM_FLOOR:-1000}"
+
+# Same rule as a login: groupadd is as fussy as useradd about names, and a group
+# with an uppercase letter or a slash in it breaks the same nginx maps that
+# valid_login exists to protect.
+valid_group() { [[ "$1" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; }
+
+# The primary group is not a supplementary one and must never be handled as if
+# it were: usermod -G takes the supplementary list alone, so feeding the primary
+# back into it is at best a no-op and at worst hides that it was dropped.
+_primary_group() { id -gn "$1" 2>/dev/null; }
+
+# Supplementary groups only, one per line, sorted. An account with none is not
+# an error -- the `|| true` is there because grep exits 1 on no match and
+# pipefail would otherwise turn "alice is in nothing extra" into a failure.
+_supp_groups() {
+	local login="$1" primary all
+	primary="$(id -gn "$login" 2>/dev/null)" || return 1
+	all="$(id -Gn "$login" 2>/dev/null)" || return 1
+	{ printf '%s\n' $all | grep -vxF -- "$primary" | sort -u; } || true
+}
+
+# "sudo,docker" and "sudo docker" are the same list, because --groups already
+# accepts either and a subcommand that mirrors a flag must not be stricter than
+# the flag it mirrors.
+_split_list() {
+	local raw="${*//,/ }" tok
+	for tok in $raw; do
+		[[ -n "$tok" ]] && printf '%s\n' "$tok"
+	done
+}
+
+# The one change on this box that cannot be undone from this box.
+#
+# Take the last account out of the admin group and there is nobody left who can
+# put it back: the fix is a console or a rescue image, not another run of this
+# script. gpasswd, usermod and groupdel will all do it without a word, so the
+# refusal has to live here.
+#
+# root is not itself in `sudo` and does not need to be, so "no members left" is
+# the lockout rather than a false alarm.
+#
+# Given the member list rather than reading /etc/group, so the decision is a
+# pure function and can be tested without a box that has these groups on it.
+_orphans_admin() {
+	local group="$1" login="$2" members="$3"
+	case "$group" in
+		sudo|admin|wheel) ;;
+		*) return 1 ;;
+	esac
+	[[ "$members" == "$login" ]]
+}
+
+_groups_root() { [[ $EUID -eq 0 ]] || die "groups: $1 must run as root (try: $0 groups $1 ... as root)"; }
+_groups_user() { id -u "$1" >/dev/null 2>&1 || die "groups: no such user: $1"; }
+_groups_in()   { id -nG "$1" 2>/dev/null | tr ' ' '\n' | grep -qxF -- "$2"; }
+
+# groupadd on demand, so --create is one rule in one place rather than the same
+# three lines repeated in add and set.
+_groups_ensure() {
+	local g="$1"
+	getent group "$g" >/dev/null && return 0
+	if [[ "$GROUPS_CREATE_MISSING" != 1 ]]; then
+		warn "groups: no group '$g' -- skipped (pass --create to make it)"
+		GROUPS_RC=1
+		return 1
+	fi
+	valid_group "$g" || { warn "groups: '$g' is not a valid group name -- skipped"; GROUPS_RC=1; return 1; }
+	if groupadd "$g"; then
+		note "created group $g"
+		return 0
+	fi
+	warn "groups: could not create group '$g'"
+	GROUPS_RC=1
+	return 1
+}
+
+_groups_list() {
+	local -a logins=("$@")
+	local login primary supp
+	if [[ ${#logins[@]} -eq 0 ]]; then
+		load_known_users
+		logins=(${KNOWN_USERS[@]+"${KNOWN_USERS[@]}"})
+	fi
+	if [[ ${#logins[@]} -eq 0 ]]; then
+		info "no accounts found"
+		return 0
+	fi
+	# Every name checked before the first row is printed. A misspelling in a
+	# list of five otherwise prints four accounts and then dies, which reads as
+	# a partial answer rather than a rejected question.
+	for login in "${logins[@]}"; do _groups_user "$login"; done
+	printf '  %-16s %-16s %s\n' LOGIN PRIMARY GROUPS
+	for login in "${logins[@]}"; do
+		primary="$(_primary_group "$login")"
+		supp="$(_supp_groups "$login" | paste -sd, -)"
+		printf '  %-16s %-16s %s\n' "$login" "$primary" "${supp:--}"
+	done
+}
+
+_groups_add() {
+	local login="${1:-}" g
+	[[ -n "$login" ]] || { groups_usage; return 2; }
+	shift
+	_groups_root add
+	_groups_user "$login"
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		_groups_ensure "$g" || continue
+		if _groups_in "$login" "$g"; then
+			info "$login is already in $g"
+			continue
+		fi
+		if gpasswd -a "$login" "$g" >/dev/null 2>&1; then
+			note "$login added to $g"
+		else
+			warn "groups: could not add $login to $g"
+			GROUPS_RC=1
+		fi
+	done < <(_split_list "$@")
+	return "$GROUPS_RC"
+}
+
+_groups_rm() {
+	local login="${1:-}" g primary members
+	[[ -n "$login" ]] || { groups_usage; return 2; }
+	shift
+	_groups_root rm
+	# The login is checked BEFORE the arity, so that `groups rm docker` -- the
+	# mix-up this verb is named to survive -- answers "no such user: docker"
+	# rather than printing usage and leaving the reader to work out which of the
+	# two commands they were actually holding.
+	_groups_user "$login"
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	primary="$(_primary_group "$login")"
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		if ! getent group "$g" >/dev/null; then
+			warn "groups: no group '$g' -- skipped"
+			GROUPS_RC=1
+			continue
+		fi
+		# gpasswd -d cannot take away a primary group, and says so obscurely.
+		# Changing one is `usermod -g`: a different decision, with consequences
+		# for every file the account already owns, so it is named rather than
+		# quietly done on the way past.
+		if [[ "$g" == "$primary" ]]; then
+			warn "groups: $g is $login's primary group -- not removed (usermod -g changes that)"
+			GROUPS_RC=1
+			continue
+		fi
+		if ! _groups_in "$login" "$g"; then
+			info "$login is not in $g"
+			continue
+		fi
+		members="$(getent group "$g" | cut -d: -f4)"
+		if _orphans_admin "$g" "$login" "$members" && [[ "$GROUPS_FORCE" != 1 ]]; then
+			die "groups: $login is the last member of '$g' -- removing them locks this box out of root (--force if you have another way in)"
+		fi
+		if gpasswd -d "$login" "$g" >/dev/null 2>&1; then
+			note "$login removed from $g"
+		else
+			warn "groups: could not remove $login from $g"
+			GROUPS_RC=1
+		fi
+	done < <(_split_list "$@")
+	return "$GROUPS_RC"
+}
+
+# Replace the supplementary set exactly: anything not named is taken away.
+#
+# One usermod -G call, not a sequence of adds and removes, because the sequence
+# has a window in the middle where the account is in neither the old set nor the
+# new one -- and anything that reads its groups during that window (a login, a
+# daemon restart, another run of this script) gets an answer that was never
+# meant to be true.
+#
+# There is deliberately no way to spell "no groups at all" here. `set` with an
+# empty list and `set` with a typo that swallowed the list look identical on the
+# command line, and one of them strips an account bare. Use `rm` for that, where
+# each group taken away is a word somebody actually typed.
+_groups_set() {
+	local login="${1:-}" g gone members primary
+	[[ -n "$login" ]] || { groups_usage; return 2; }
+	shift
+	_groups_root set
+	_groups_user "$login"
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	primary="$(_primary_group "$login")"
+
+	local -a want=()
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		[[ "$g" == "$primary" ]] && continue   # not a supplementary group
+		_groups_ensure "$g" || continue
+		want+=("$g")
+	done < <(_split_list "$@")
+	[[ ${#want[@]} -gt 0 ]] || die "groups: set needs at least one group that exists"
+
+	# The lockout guard runs over what would be LOST, not over what was typed:
+	# `set` takes a group away by not mentioning it, so the dangerous group is
+	# precisely the one absent from the command line.
+	while read -r gone; do
+		[[ -n "$gone" ]] || continue
+		printf '%s\n' "${want[@]}" | grep -qxF -- "$gone" && continue
+		members="$(getent group "$gone" | cut -d: -f4)"
+		if _orphans_admin "$gone" "$login" "$members" && [[ "$GROUPS_FORCE" != 1 ]]; then
+			die "groups: set would drop $login from '$gone', its last member -- that locks this box out of root (--force if you have another way in)"
+		fi
+	done < <(_supp_groups "$login")
+
+	if usermod -G "$(IFS=,; printf '%s' "${want[*]}")" "$login"; then
+		note "$login groups set to ${want[*]}"
+	else
+		warn "groups: could not set groups for $login"
+		GROUPS_RC=1
+	fi
+	return "$GROUPS_RC"
+}
+
+_groups_create() {
+	local g
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	_groups_root create
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		if getent group "$g" >/dev/null; then
+			info "group $g already exists (gid $(getent group "$g" | cut -d: -f3))"
+			continue
+		fi
+		# create IS the request to make it, so --create is implied here and
+		# only here; add and set still refuse to invent a group nobody asked for.
+		GROUPS_CREATE_MISSING=1 _groups_ensure "$g" || true
+	done < <(_split_list "$@")
+	return "$GROUPS_RC"
+}
+
+# groupdel already refuses a group that is somebody's PRIMARY group, which is
+# the accident that would break logins outright. The two it does not refuse are
+# guarded here: a system group (see $GROUPS_SYSTEM_FLOOR) and an admin group
+# that still has members (see _orphans_admin).
+_groups_delete() {
+	local g gid members
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	_groups_root delete
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		if ! getent group "$g" >/dev/null; then
+			warn "groups: no such group: $g -- skipped (did you mean: groups rm <user> $g ?)"
+			GROUPS_RC=1
+			continue
+		fi
+		gid="$(getent group "$g" | cut -d: -f3)"
+		if [[ "$gid" -lt "$GROUPS_SYSTEM_FLOOR" && "$GROUPS_FORCE" != 1 ]]; then
+			warn "groups: '$g' is a system group (gid $gid) -- refusing (--force to insist)"
+			GROUPS_RC=1
+			continue
+		fi
+		members="$(getent group "$g" | cut -d: -f4)"
+		case "$g" in
+			sudo|admin|wheel)
+				if [[ -n "$members" && "$GROUPS_FORCE" != 1 ]]; then
+					warn "groups: '$g' still has members ($members) -- refusing (--force to insist)"
+					GROUPS_RC=1
+					continue
+				fi
+				;;
+		esac
+		if groupdel "$g"; then
+			note "deleted group $g"
+		else
+			warn "groups: could not delete $g"
+			GROUPS_RC=1
+		fi
+	done < <(_split_list "$@")
+	return "$GROUPS_RC"
+}
+
+_groups_members() {
+	local g gid line l ugid
+	[[ $# -gt 0 ]] || { groups_usage; return 2; }
+	while read -r g; do
+		[[ -n "$g" ]] || continue
+		if ! line="$(getent group "$g")"; then
+			warn "groups: no such group: $g"
+			GROUPS_RC=1
+			continue
+		fi
+		gid="$(printf '%s' "$line" | cut -d: -f3)"
+		local -a members=()
+		while read -r l; do [[ -n "$l" ]] && members+=("$l"); done \
+			< <(printf '%s' "$line" | cut -d: -f4 | tr ',' '\n')
+		# /etc/group's member field holds the SUPPLEMENTARY members only. Anyone
+		# whose primary group this is does not appear in it at all -- printed
+		# verbatim, `www-data` would list every human on the box and not the
+		# www-data account, which is the one member that matters for a share
+		# nginx has to write to.
+		while IFS=: read -r l _ _ ugid _; do
+			[[ "$ugid" == "$gid" ]] || continue
+			printf '%s\n' "${members[@]+"${members[@]}"}" | grep -qxF -- "$l" && continue
+			members+=("$l (primary)")
+		done < <(getent passwd)
+		printf '  %-16s gid %-8s %s\n' "$g" "$gid" "${members[*]:--}"
+	done < <(_split_list "$@")
+	return "$GROUPS_RC"
+}
+
+groups_usage() {
+	cat <<-'EOF'
+	Usage:
+	  root-ubuntu.sh groups                           every account, and its groups
+	  root-ubuntu.sh groups [list] <user>...          just these accounts
+	  root-ubuntu.sh groups add     <user> <group>... put a user in groups
+	  root-ubuntu.sh groups rm      <user> <group>... take a user out of groups
+	  root-ubuntu.sh groups set     <user> <group>... exactly these, drop the rest
+	  root-ubuntu.sh groups create  <group>...        make a group
+	  root-ubuntu.sh groups delete  <group>...        remove a group
+	  root-ubuntu.sh groups members <group>...        who is in a group
+
+	Group lists take commas or spaces: 'docker,www-data' and 'docker www-data'
+	are the same thing, as they are for --groups.
+
+	Listing is unprivileged. Everything that changes something needs root.
+
+	add/rm/set take a LOGIN first and refuse anything that is not one.
+	create/delete/members take GROUP names and refuse anything that is not one.
+	So `groups rm docker` is an error, not a deleted docker group.
+
+	set replaces the supplementary groups outright -- a group left off the line
+	is a group taken away. The primary group is never touched by any of these;
+	usermod -g is how that changes.
+
+	Two refusals, both liftable with --force: taking the last member out of
+	sudo/admin/wheel, which locks this box out of root with no way back in from
+	the box itself, and deleting a group below gid 1000 ($GROUPS_SYSTEM_FLOOR),
+	which is the system's and cannot be recreated on the same gid.
+
+	Options:
+	  --create   groupadd a named group that does not exist yet (add, set)
+	  --force    lift the two refusals above
+	  -h|--help  this
+
+	Examples:
+	  root-ubuntu.sh groups
+	  root-ubuntu.sh groups alice
+	  root-ubuntu.sh groups add alice docker,www-data     # as root
+	  root-ubuntu.sh groups rm alice docker               # as root
+	  root-ubuntu.sh groups set alice sudo,admin,users    # as root
+	  root-ubuntu.sh groups members www-data
+	EOF
+}
+
+cmd_groups() {
+	local verb=""
+	local -a rest=()
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			-h|--help) groups_usage; return 0 ;;
+			--force)   GROUPS_FORCE=1 ;;
+			--create)  GROUPS_CREATE_MISSING=1 ;;
+			-*)        die "groups: unknown option: $1  (try: $0 groups --help)" ;;
+			*)         rest+=("$1") ;;
+		esac
+		shift
+	done
+
+	# A verb is only a verb in first position, and only if it is one of these.
+	# An account genuinely called `add` would otherwise be unreachable, which is
+	# what the explicit `list` verb is for: `groups list add` still names it.
+	if [[ ${#rest[@]} -gt 0 ]]; then
+		case "${rest[0]}" in
+			list|add|rm|set|create|delete|members)
+				verb="${rest[0]}"
+				rest=("${rest[@]:1}")
+				;;
+		esac
+	fi
+
+	case "${verb:-list}" in
+		list)    _groups_list    ${rest[@]+"${rest[@]}"} ;;
+		add)     _groups_add     ${rest[@]+"${rest[@]}"} ;;
+		rm)      _groups_rm      ${rest[@]+"${rest[@]}"} ;;
+		set)     _groups_set     ${rest[@]+"${rest[@]}"} ;;
+		create)  _groups_create  ${rest[@]+"${rest[@]}"} ;;
+		delete)  _groups_delete  ${rest[@]+"${rest[@]}"} ;;
+		members) _groups_members ${rest[@]+"${rest[@]}"} ;;
+	esac
 }
 
 usage() {
@@ -1115,7 +1655,7 @@ usage() {
 SUBCMD=""
 SUBARGS=()
 case "${1:-}" in
-	mount|umount|mounts|share) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
+	mount|umount|mounts|share|groups) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
 esac
 
 ARGS=()
@@ -1149,14 +1689,16 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 [[ "${NO_REBOOT:-0}" == 1 ]] && REBOOT_POLICY=0
 
-# The share helpers are self-contained: no apt, no lock, no dotfiles
-# checkout needed. They come before the root check so that --help and
-# --dry-run work as a normal user; each asks for root only when it mutates.
+# The share and groups helpers are self-contained: no apt, no lock, no dotfiles
+# checkout needed. They come before the root check so that --help, --dry-run and
+# a plain `groups` listing work as a normal user; each asks for root only when
+# it mutates.
 case "$SUBCMD" in
 	mount)  cmd_mount  ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 	umount) cmd_umount ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 	mounts) cmd_mounts; exit $? ;;
 	share)  cmd_share  ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
+	groups) cmd_groups ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 esac
 
 # Root, not sudo-capable: this writes to /etc, creates accounts and drives
@@ -1414,6 +1956,10 @@ BASE_PACKAGES=(
 	# the tools whose dotfiles this repo ships -- without them the configs
 	# are dead weight and the box feels half-provisioned
 	vim htop ack screen rsync unzip jq openssl
+	# setfacl/getfacl, for `share --group`: a shared volume that a daemon also
+	# has to write to needs a second group, and a second group is only sayable
+	# as an ACL. Not installed by default on a minimal Ubuntu image.
+	acl
 	# ripgrep gives you rg, which is what anyone reaching for `find | rg`
 	# expects to already be there. ack stays -- it is what .ackrc configures.
 	ripgrep
