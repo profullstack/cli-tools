@@ -715,9 +715,10 @@ describe('previewRegistration', () => {
         wouldSucceed: true,
         cost: 1108,
         costDisplay: '$11.08',
-        balance: '$0.00',
-        sufficientFunds: false,
+        balance: 5000,
+        sufficientFunds: true,
         withinMonthlySpendLimit: true,
+        message: 'Dry run: this registration would succeed and cost $11.08.',
       },
     });
 
@@ -725,12 +726,26 @@ describe('previewRegistration', () => {
     expect(preview).toEqual({
       wouldSucceed: true,
       costDisplay: '$11.08',
-      balance: '$0.00',
-      sufficientFunds: false,
+      balanceCents: 5000,
+      balance: '$50.00',
+      sufficientFunds: true,
       withinMonthlySpendLimit: true,
+      message: 'Dry run: this registration would succeed and cost $11.08.',
     });
     // The flag that makes it free to run.
     expect(seen[0]?.body.dryRun).toBe(true);
+  });
+
+  // `balance` is pennies as a number, not a rendered string. Reading it as a
+  // string gave null for every account — a bug that looks like missing data.
+  it('reads balance as pennies rather than a dollar string', async () => {
+    const { call } = scripted({
+      '/domain/create/diskpush.com': { status: 'SUCCESS', wouldSucceed: true, balance: 0 },
+    });
+    const preview = await previewRegistration(call, samplePlan());
+
+    expect(preview.balanceCents).toBe(0);
+    expect(preview.balance).toBe('$0.00');
   });
 
   it('sends the same cost and terms the real call would', async () => {
@@ -749,5 +764,7 @@ describe('previewRegistration', () => {
     const preview = await previewRegistration(call, samplePlan());
     expect(preview.withinMonthlySpendLimit).toBeNull();
     expect(preview.sufficientFunds).toBeNull();
+    expect(preview.balanceCents).toBeNull();
+    expect(preview.balance).toBeNull();
   });
 });

@@ -28,6 +28,7 @@ import {
   deleteForward,
   deleteRecord,
   formatForwards,
+  formatPrice,
   formatRecords,
   fqdn,
   hostLabel,
@@ -92,9 +93,13 @@ Credentials come from PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY, via
 to be switched on per domain, in the domain's settings — a key that pings fine
 still gets "Invalid domain" until that is on.
 
-\`register\` pays from the Porkbun account balance, topping up the card on file
-if it is short. It registers for the TLD's minimum term with auto-renew on and
-WHOIS privacy on, using the account's default contacts.
+\`register\` spends **prepaid account credit** — it does not charge a card. An
+account with a zero balance cannot register anything, however valid the request;
+add credit at porkbun.com first. Porkbun also requires the account's email and
+phone to be verified, and at least one registration placed previously, before it
+will sell through the API at all. It registers for the TLD's minimum term with
+auto-renew on and WHOIS privacy on, using the account's default contacts.
+Premium names cannot be bought through the API at any price.
 `;
 
 function fail(message: string, code = 2): never {
@@ -370,15 +375,30 @@ if (isMain(import.meta.url)) {
         // cap and account verification are account-level gates that no read
         // endpoint reports, so this is the only way to see them before paying.
         const preview = await previewRegistration(call, plan);
-        process.stderr.write(
-          `  balance: ${preview.balance ?? 'unknown'}` +
-            `${preview.sufficientFunds === false ? ' — will top up the card on file' : ''}\n`,
-        );
+        process.stderr.write(`  credit: ${preview.balance ?? 'unknown'}\n`);
+
         if (preview.withinMonthlySpendLimit === false) {
           throw new PorkbunError(`${plan.domain} would exceed the account's monthly API spend cap`);
         }
+        // Registration spends prepaid credit; there is no card to fall back on,
+        // so short funds is a stop rather than a note. Say the shortfall, since
+        // "insufficient funds" without a number means another round trip.
+        if (preview.sufficientFunds === false) {
+          const short =
+            preview.balanceCents === null
+              ? ''
+              : ` — ${formatPrice((plan.costCents - preview.balanceCents) / 100)} short`;
+          throw new PorkbunError(
+            `not enough Porkbun credit to register ${plan.domain}${short}.\n` +
+              '  Registration spends prepaid credit, not a card. Add credit at ' +
+              'https://porkbun.com/account/billing',
+          );
+        }
         if (!preview.wouldSucceed) {
-          throw new PorkbunError(`Porkbun refused the pre-flight for ${plan.domain}`);
+          throw new PorkbunError(
+            `Porkbun refused the pre-flight for ${plan.domain}` +
+              `${preview.message ? `: ${preview.message}` : ''}`,
+          );
         }
 
         if (parsed.flags.has('--dry-run')) {
