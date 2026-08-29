@@ -860,6 +860,12 @@ nothing changed, which is the point.
 
 #### Accounts and groups
 
+New accounts land in `DEFAULT_GROUPS` (`sudo,admin` unless configured) when
+`--groups` is not passed. An unattended run — `--refresh`, or anything piped
+into bash — never reaches the group prompt, so that default is what *every*
+account it creates gets; set the key in `server.conf` on a box where new people
+should not be root-equivalent.
+
 A full run is the wrong tool for a one-line change — putting somebody in
 `docker` should not drag an apt upgrade and a possible reboot behind it — and
 `--groups` could only ever *add*. `groups` is the rest of it:

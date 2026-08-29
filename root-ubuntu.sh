@@ -93,7 +93,10 @@
 #
 # Env overrides:
 #   SSH_PORT=22    port to open in ufw
-#   ASSUME_YES=1   don't prompt (defaults: groups sudo,admin; no privkey copy)
+#   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
+#   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed
+#                  (default sudo,admin). An unattended run never prompts, so
+#                  this is what every account it creates gets.
 #   NO_REBOOT=1    skip the reboot at the end
 #   MOTD_URL=...   override the motd endpoint
 #   TS_AUTHKEY=... tailscale auth key, to join the tailnet unattended
@@ -367,7 +370,11 @@ LOGO_FILE=/var/www/userdirs/assets/logo.svg
 
 # Group menu offered when creating a user. Default selection is 1,2.
 GROUP_CHOICES=(sudo admin docker adm www-data users)
-DEFAULT_GROUPS="sudo,admin"
+# Overridable like every other setting -- server.conf documents this key, and an
+# unattended run takes it verbatim for every account it creates. Assigning it
+# unconditionally (as this line used to) meant a box that had configured, say,
+# www-data,users,docker still got its new accounts put in sudo,admin.
+DEFAULT_GROUPS="${DEFAULT_GROUPS:-sudo,admin}"
 
 USERS=()         # alice@example -- new this run, get the full treatment
 USER_GROUPS=()   # sudo,admin           -- index-matched to USERS

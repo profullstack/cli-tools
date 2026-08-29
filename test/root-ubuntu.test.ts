@@ -184,6 +184,62 @@ describe('read_server_config', () => {
   });
 });
 
+describe('every documented setting is actually overridable', () => {
+  /**
+   * read_server_config runs near the top of the file, but the settings it
+   * fills in are DECLARED further down. A declaration written as
+   *
+   *     KEY="a default"
+   *
+   * rather than
+   *
+   *     KEY="${KEY:-a default}"
+   *
+   * therefore silently throws away whatever the config file (or the
+   * environment) just said, and does it long after the config was read, so
+   * nothing about the run looks wrong. DEFAULT_GROUPS shipped that way: a box
+   * that configured www-data,users,docker still put every new account in
+   * sudo,admin, which is root-equivalent and the opposite of what was asked
+   * for. These two tests cover the whole class rather than that one key.
+   */
+
+  /** Keys server.conf.example advertises, i.e. what we promise to honour. */
+  const documented = [
+    ...readFileSync(resolve(here, '..', 'server.conf.example'), 'utf8').matchAll(
+      /^#([A-Z][A-Z0-9_]*)=/gm,
+    ),
+  ].map((m) => m[1]);
+
+  it('advertises a useful number of keys, so the sweep below cannot pass vacuously', () => {
+    expect(documented.length).toBeGreaterThan(10);
+    expect(documented).toContain('DEFAULT_GROUPS');
+  });
+
+  it.each(documented)('%s survives its own declaration', (key) => {
+    // Not assigned at the top level at all is fine -- it is then only ever
+    // read, and the config value stands untouched.
+    const decl = new RegExp(`^${key}=(.*)$`, 'm').exec(SOURCE);
+    if (decl === null) return;
+    expect(decl[1]).toContain(`\${${key}:-`);
+  });
+
+  it('keeps a configured DEFAULT_GROUPS instead of forcing sudo,admin', () => {
+    // The regression itself, exercised rather than pattern-matched: read a
+    // config file, then run the real declaration line out of the script.
+    const decl = /^DEFAULT_GROUPS=.*$/m.exec(SOURCE)?.[0] ?? '';
+    const out = shell(
+      ['read_server_config'],
+      `f=$(mktemp); printf 'DEFAULT_GROUPS=www-data,users,docker\\n' >"$f"; read_server_config "$f"; ${decl}; echo "$DEFAULT_GROUPS"`,
+    );
+    expect(out).toBe('www-data,users,docker');
+  });
+
+  it('still falls back to sudo,admin when nothing configures it', () => {
+    const decl = /^DEFAULT_GROUPS=.*$/m.exec(SOURCE)?.[0] ?? '';
+    expect(shell([], `unset DEFAULT_GROUPS; ${decl}; echo "$DEFAULT_GROUPS"`)).toBe('sudo,admin');
+  });
+});
+
 describe('login handling', () => {
   it('takes the login from the part before the @', () => {
     expect(shell(['user_login'], 'user_login alice@example')).toBe('alice');
