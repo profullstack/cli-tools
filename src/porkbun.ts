@@ -681,10 +681,15 @@ export interface RegistrationPreview {
   wouldSucceed: boolean;
   /** Porkbun's own rendering of the charge, e.g. `$11.08`. */
   costDisplay: string | null;
+  /** Remaining account credit, in whole cents. `balance` is pennies, not dollars. */
+  balanceCents: number | null;
+  /** The same, rendered: `$0.00`. */
   balance: string | null;
   sufficientFunds: boolean | null;
   /** Null when no monthly API spend cap is set on the account. */
   withinMonthlySpendLimit: boolean | null;
+  /** Porkbun's own sentence about the outcome, worth printing verbatim. */
+  message: string | null;
 }
 
 /**
@@ -704,13 +709,21 @@ export async function previewRegistration(
 ): Promise<RegistrationPreview> {
   const body = await call(`/domain/create/${plan.domain}`, { ...createBody(plan), dryRun: true });
   const bool = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+  const text = (value: unknown): string | null => (typeof value === 'string' ? value : null);
+
+  // `balance` is pennies as a NUMBER (5000 meaning $50.00), not a rendered
+  // string. Reading it as a string yields null for every account, which is
+  // exactly the sort of nothing that looks like "no data" rather than a bug.
+  const balanceCents = typeof body.balance === 'number' ? body.balance : null;
 
   return {
     wouldSucceed: body.wouldSucceed === true,
-    costDisplay: typeof body.costDisplay === 'string' ? body.costDisplay : null,
-    balance: typeof body.balance === 'string' ? body.balance : null,
+    costDisplay: text(body.costDisplay),
+    balanceCents,
+    balance: balanceCents === null ? null : formatPrice(balanceCents / 100),
     sufficientFunds: bool(body.sufficientFunds),
     withinMonthlySpendLimit: bool(body.withinMonthlySpendLimit),
+    message: text(body.message),
   };
 }
 

@@ -540,8 +540,15 @@ it is the same number. `--dry-run` prices it and stops, `--max-price` refuses
 anything dearer (a premium name can be hundreds), and a promotional first year is
 called out because it is not what you will pay next year. WHOIS privacy is on
 unless you pass `--no-whois-privacy`, and a TLD that cannot do privacy is refused
-rather than quietly publishing your address. It pays from the account balance,
-topping up the card on file if that is short.
+rather than quietly publishing your address.
+
+**It spends prepaid Porkbun credit, and there is no card behind it.** A zero
+balance cannot register anything, however valid the request, so `register` stops
+on short funds and says how much is missing rather than reporting a vague
+refusal. Porkbun gates API registration behind three further account facts, none
+of which any read endpoint exposes: a verified email *and* phone, at least one
+registration placed previously, and the name not being premium — premium is
+website-only at any price.
 
 Before charging anything it runs Porkbun's **own** pre-flight (`dryRun`), which is
 the only way to see the account-level gates — funds, the monthly API spend cap and
