@@ -20,6 +20,7 @@ TypeScript, installed as executables on `PATH`.
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
+| [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 
@@ -37,8 +38,12 @@ One thing here is not a `PATH` command and does not need Node:
 - **`dig`** at `/usr/bin/dig` — `domainjson` only
 - **[OpenRDAP](https://github.com/openrdap/rdap)** (`rdap` on `PATH`, or
   `~/go/bin/rdap`) — `domainjson` only, and it degrades to DNS-only without it
-- **`ffmpeg`** — `vid` only, and it is a hard requirement rather than a
-  degradation: nothing on npm decodes video the way sharp handles images
+- **`ffmpeg`** — `vid` and `dl`, and it is a hard requirement rather than a
+  degradation: nothing on npm decodes video the way sharp handles images.
+  `dl audio` cannot run without it at all; `dl` on its own falls back to the
+  best single stream and says so
+- **[`yt-dlp`](https://github.com/yt-dlp/yt-dlp)** — `dl` only
+  (`moshcode install yt-dlp`, `pipx install yt-dlp`, `brew install yt-dlp`)
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
 - **Network on first use** — `favicon` only: the generation is
@@ -772,6 +777,35 @@ That is the trade: re-encoding to hit an exact frame takes as long as the clip.
 
 Needs `ffmpeg` on `PATH`. There is no bundled fallback — nothing on npm decodes
 video the way sharp handles images.
+
+### `dl`
+
+A thin front for [yt-dlp](https://github.com/yt-dlp/yt-dlp), in the same shape
+`vid` is a thin front for ffmpeg:
+
+```sh
+dl https://example.com/watch?v=abc          # the video
+dl --height 720 https://example.com/v/abc   # capped
+dl audio https://example.com/watch?v=abc    # → .m4a, --format mp3 for anything else
+dl info https://example.com/watch?v=abc     # title, uploader, duration; nothing downloaded
+dl formats https://example.com/watch?v=abc  # everything yt-dlp will give you
+dl --to ~/Downloads https://a/1 https://b/2 # several at once
+```
+
+**One entry, not the list.** A YouTube link copied from the browser while a mix
+is playing carries `list=`, and yt-dlp reads that as "download all of it" — the
+difference between one file and two hundred, on a command whose entire input is
+a pasted URL. So `--no-playlist` is the default here and `--playlist` is how you
+ask for the rest.
+
+**ffmpeg is the other half.** Above about 720p the picture and the sound arrive
+as separate streams that have to be muxed, so without ffmpeg on `PATH` `dl`
+restricts itself to the best single stream and warns that it did — rather than
+picking a format it cannot finish, downloading both halves, and failing at the
+merge. `dl audio` is `-x`, which *is* ffmpeg, so there it is a hard requirement.
+
+A URL that fails does not stop the ones after it; the exit code still reports
+the failure.
 
 ### `codeburn`
 
