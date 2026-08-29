@@ -165,3 +165,17 @@ describe('against a real client', () => {
     expect(magnetFor(buf)).toContain(infoHash(buf));
   });
 });
+
+describe('web seeds', () => {
+  /*
+   * A web seed is what makes a torrent downloadable before any peer has it: an
+   * HTTP URL every client can pull the same bytes from, with no seeding process
+   * in the path at all.
+   */
+  it('adds one --urlList per URL, and none when there are none', () => {
+    expect(createArgs('dir')).not.toContain('--urlList');
+    const args = createArgs('dir', { webSeeds: ['https://a.test/f', 'https://b.test/f'] });
+    expect(args.filter((a) => a === '--urlList')).toHaveLength(2);
+    expect(args).toEqual(expect.arrayContaining(['https://a.test/f', 'https://b.test/f']));
+  });
+});
