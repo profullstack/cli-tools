@@ -21,6 +21,7 @@ TypeScript, installed as executables on `PATH`.
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
+| [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 
@@ -44,6 +45,9 @@ One thing here is not a `PATH` command and does not need Node:
   best single stream and says so
 - **[`yt-dlp`](https://github.com/yt-dlp/yt-dlp)** — `dl` only
   (`moshcode install yt-dlp`, `pipx install yt-dlp`, `brew install yt-dlp`)
+- **[`create-torrent`](https://www.npmjs.com/package/create-torrent)** — `torrent`
+  only (`npm i -g create-torrent`); `torrent seed` additionally needs
+  [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
 - **Network on first use** — `favicon` only: the generation is
@@ -806,6 +810,56 @@ merge. `dl audio` is `-x`, which *is* ffmpeg, so there it is a hard requirement.
 
 A URL that fails does not stop the ones after it; the exit code still reports
 the failure.
+
+### `torrent`
+
+Turn a directory into a torrent, and get it seeded:
+
+```sh
+torrent create ./album              # writes album.torrent, prints the magnet
+torrent seed ./album                # …and hands the magnet to torlnk
+torrent magnet album.torrent        # the magnet for one you already have
+torrent info album.torrent          # name, info hash, magnet
+```
+
+`create-torrent` writes a .torrent and never prints a hash; torlnk takes a
+magnet rather than a file. So the two do not actually meet without something in
+between, and that is what this is. The info hash is computed here — a SHA-1 over
+the bencoded `info` dictionary, read out of the file verbatim — rather than by
+adding a bencode parser as a dependency for forty lines.
+
+**Trackers matter more than they look.** A browser can only ever be a WebRTC
+peer, so a torrent with no `wss://` tracker is invisible to every web player:
+it is on the DHT, desktop clients find it, and the browser sees a torrent with
+no peers — which reads as a dead torrent rather than as a missing tracker. The
+default list carries both kinds, and every entry was checked rather than copied.
+The announce list the WebTorrent tooling ships by default still names
+`tracker.leechers-paradise.org` (no DNS at all), `coppersurfer.tk` and
+`empire-js.us` (both time out on a UDP connect), and `tracker.btorrent.xyz`
+(a self-signed certificate, which a browser refuses outright). Override the lot
+with `--tracker`.
+
+`--private` exists and is opt-in, because a private torrent is excluded from the
+DHT by every client that honours the flag — the opposite of the reason to make
+one here.
+
+**From a URL rather than a seeding process.** `--webseed` embeds HTTP URLs that
+already serve the same bytes (BEP 19), so the torrent is downloadable the moment
+it exists — before any peer has it, and without anything staying running:
+
+```sh
+torrent create ./album --webseed https://files.example.com/album
+```
+
+The URL has to serve the *exact* bytes the torrent was made from. A redirect to
+a re-encoded or recompressed copy is a torrent that fails its hash check, which
+looks like corruption rather than like a misconfigured seed.
+
+`seed` hands the magnet to torlnk, which is the process that stays running:
+its serve API by default (`--api`, `$TORLINK_API`, `$TORLINK_API_TOKEN`), or a
+watch directory (`--watch`, `$TORLINK_WATCH`) as the offline handoff. How long
+it seeds for is a torlnk daemon setting (`--seed-time`), not a per-torrent one;
+left alone, it seeds indefinitely.
 
 ### `codeburn`
 
