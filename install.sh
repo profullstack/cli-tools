@@ -103,6 +103,26 @@ LINK_ARGS=""
 # shellcheck disable=SC2086
 CLI_TOOLS_PREFIX="$PREFIX" node "$HOME_DIR/scripts/install-links.mjs" $LINK_ARGS
 
+# ── Companions ───────────────────────────────────────────────────────────────
+#
+# Commands this set ships but does not implement: published npm packages that
+# bring their own binary. The list lives in src/companions.ts and is read from
+# there rather than repeated here, so adding one is a single-file change.
+#
+# Run through the checkout's own dispatcher rather than $PREFIX/cli-tools: the
+# link above is refused when another checkout already owns that name, and this
+# should still work on such a box.
+#
+# Warns rather than dying, like the Stripe block below. npm being absent or a
+# prefix being read-only should not fail an install that has otherwise
+# succeeded — and CLI_TOOLS_NO_COMPANIONS=1 skips it entirely for anyone who
+# would rather manage those packages themselves.
+if [ "${CLI_TOOLS_NO_COMPANIONS:-0}" != "1" ]; then
+	say "Installing npm companions (timer, billing)"
+	"$HOME_DIR/bin/cli-tools.ts" companions --install ||
+		printf 'cli-tools: companions skipped. Install them later with: cli-tools companions --install\n' >&2
+fi
+
 # ── Stripe CLI ───────────────────────────────────────────────────────────────
 #
 # Not one of this repo's commands: it is the official binary from

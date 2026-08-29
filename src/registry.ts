@@ -73,6 +73,18 @@ export function onPath(name: string, env: NodeJS.ProcessEnv = process.env): bool
   return firstOnPath(name, env) !== null;
 }
 
+/**
+ * Where this name resolves on PATH, or null.
+ *
+ * The same lookup as `onPath`, returning the path instead of a boolean, because
+ * a companion that is installed somewhere unexpected is worth naming — "npm
+ * says it installed it and it is not on your PATH" is a different problem from
+ * "it is not installed".
+ */
+export function whichOnPath(name: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  return firstOnPath(name, env);
+}
+
 /** The first executable of this name on PATH, or null. */
 function firstOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? '').split(':').filter(Boolean)) {
