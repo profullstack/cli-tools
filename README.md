@@ -70,21 +70,49 @@ downloads the release tarball and checks the published sha256, and if any of
 that fails it warns and moves on rather than failing an install that otherwise
 worked. Authenticate it once with `stripe login`.
 
+It also installs the **companions** — two commands this set ships but does not
+implement, because they are published on npm in their own right:
+
+| | |
+| --- | --- |
+| `timer` | [`@profullstack/timer`](https://github.com/profullstack/timer) — track time against projects, for people and for agents |
+| `billing` | [`@profullstack/billing`](https://github.com/profullstack/billing) — clients, rates and invoices from the hours the timer tracked |
+
+They are not `bin/*.ts` like everything else here for a reason: they run on
+Windows, which this install cannot (it is symlinks into a git checkout executed
+through an `npx tsx` shebang), and they are useful with no checkout at all —
+under any agentic CLI, from a Dockerfile, on a box that has never heard of this
+repository. Vendoring them to make one list tidier would cost them all of that.
+So `cli-tools` is their front door, not their implementation.
+
+`npm install -g` is idempotent, which is what lets install, re-install and
+update be the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and an npm
+failure warns rather than failing the install.
+
 With moshcode on the box, the same thing:
 
 ```sh
 moshcode install cli-tools     # then /cli-tools … in the pit
 ```
 
+That is now the one-liner that also gets you `/timer` and `/billing` in the
+pit: moshcode hands both straight to these CLIs once they are installed.
+
 Check what landed, and wire up the pit aliases:
 
 ```sh
 cli-tools list                 # * runs from here, ! is shadowed by another copy
+cli-tools companions           # the two from npm, and whether they are on PATH
+cli-tools companions --install # install the missing ones (--force updates all)
 cli-tools aliases --install    # /aff /blog /free /merge /prs /speak /web /whois
 cli-tools config               # API keys: what is set, and where it came from
-cli-tools update               # git pull, reinstall, relink
+cli-tools update               # git pull, reinstall, relink, update companions
 cli-tools autoupdate --install # …or have a timer do that daily
 ```
+
+`cli-tools unlink` deliberately leaves the companions installed: they are
+ordinary global npm packages that work without this checkout, so unlinking the
+repository is no reason to take them off the machine.
 
 ### Keeping it current
 

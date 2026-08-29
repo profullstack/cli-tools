@@ -49,14 +49,17 @@ import {
   PIT_ALIASES,
   repoRoot,
   resolveCommand,
+  whichOnPath,
 } from '../src/registry.ts';
+import { COMPANIONS, ensure as ensureCompanions, statuses as companionStatuses } from '../src/companions.ts';
 
-const USAGE = `Usage:
+export const USAGE = `Usage:
   cli-tools list
   cli-tools update [--auto]
   cli-tools autoupdate [--install [--hours N] | --remove]
   cli-tools link [--force]
   cli-tools unlink
+  cli-tools companions [--install [--force]]
   cli-tools aliases [--install]
   cli-tools config [pull | set <key> [value] | unset <key>]
   cli-tools <command> [args…]
@@ -67,8 +70,10 @@ Commands:
             "--auto" is the unattended form: at most once a day, and only on a
             clean checkout of the default branch with nothing unpushed
   autoupdate  A systemd user timer that runs "update --auto" for you
-  link      Symlink the commands into ~/.local/bin
-  unlink    Remove the symlinks we own
+  link      Symlink the commands into ~/.local/bin, and install the companions
+  unlink    Remove the symlinks we own (companions are left installed)
+  companions  The commands that come from npm rather than this checkout
+            "--install" installs the missing ones, "--force" updates them all
   aliases   Print the moshcode pit aliases, or write them with --install
   config    API keys: what is set, where it came from, and how to change it
             "config pull" imports them from the logicsrc team vault
@@ -98,9 +103,59 @@ const SPEC = {
   string: ['--hours'],
 } as const;
 
+/**
+ * The dispatcher's own verbs. Anything else is one of the commands.
+ *
+ * Exported so a test can hold it against USAGE. This list going stale is a real
+ * failure mode with a quiet symptom: a verb documented in the usage text but
+ * missing here falls through to the passthrough and answers "unknown command"
+ * while the help says it exists. That is exactly what happened to `help`, and
+ * then again to `companions`.
+ */
+export const KNOWN_VERBS = new Set([
+  'help', 'list', 'update', 'autoupdate', 'link', 'unlink', 'companions', 'aliases', 'config',
+  'where',
+]);
+
 function runLinks(root: string, args: readonly string[]): number {
   const script = join(root, 'scripts', 'install-links.mjs');
   return spawnSync(process.execPath, [script, ...args], { cwd: root, stdio: 'inherit' }).status ?? 1;
+}
+
+/**
+ * Install the npm-backed companions, and say what happened to each.
+ *
+ * Never fails the caller. `npm install -g` fails for ordinary reasons — no npm
+ * on the box, a read-only prefix, no network — and none of them are a reason
+ * for `cli-tools link` to report that the linking did not happen. The line is
+ * printed to stderr so it stays out of anything reading stdout.
+ */
+function installCompanions({ latest = false, quiet = false } = {}): ReturnType<typeof ensureCompanions> {
+  const results = ensureCompanions({
+    onPath: (name) => whichOnPath(name),
+    run: (args) => {
+      const out = spawnSync('npm', args, { encoding: 'utf8' });
+      if (out.error) return { status: 1, stderr: `npm is not available: ${out.error.message}` };
+      return { status: out.status, stderr: out.stderr };
+    },
+    latest,
+  });
+
+  if (quiet) return results;
+  for (const entry of results) {
+    if (entry.action === 'present') continue;
+    if (entry.action === 'installed') {
+      process.stderr.write(
+        `${entry.name}: ${entry.message ? `${entry.package} ${entry.message}` : `installed ${entry.package}`}\n`,
+      );
+      continue;
+    }
+    process.stderr.write(
+      `${entry.name}: could not install ${entry.package} — ${entry.message}\n` +
+        `         install it yourself with: npm install -g ${entry.package}\n`,
+    );
+  }
+  return results;
 }
 
 /** Pull and relink. Dependencies come first so a new one is present before use. */
@@ -125,7 +180,12 @@ function update(root: string): number {
     return pnpm.status ?? 1;
   }
 
-  return runLinks(root, []);
+  const linked = runLinks(root, []);
+  // After the links, so a failed npm never hides a failed relink. `--latest`
+  // here is what makes `update` mean update for the companions too: a bare
+  // `npm install -g <pkg>` leaves an already-satisfied version in place.
+  installCompanions({ latest: true });
+  return linked;
 }
 
 /** Where the last automatic check is remembered. */
@@ -549,9 +609,7 @@ export async function run(argv: readonly string[]): Promise<number> {
   // `help` is here because it is what people type. Without it the word fell
   // through to the passthrough below, which reported "unknown command: help"
   // and exited 1 — before printing the usage that answers the question.
-  const known = new Set([
-    'help', 'list', 'update', 'autoupdate', 'link', 'unlink', 'aliases', 'config', 'where',
-  ]);
+  const known = KNOWN_VERBS;
   if (!known.has(command)) {
     const match = commands(root).find((entry) => entry.name === command);
     if (!match) {
@@ -591,8 +649,10 @@ export async function run(argv: readonly string[]): Promise<number> {
         ...resolveCommand(entry.name, binDir),
       }));
 
+      const companions = companionStatuses((name) => whichOnPath(name));
+
       if (options.flags.has('--json')) {
-        process.stdout.write(`${JSON.stringify({ root, commands: all }, null, 2)}\n`);
+        process.stdout.write(`${JSON.stringify({ root, commands: all, companions }, null, 2)}\n`);
         return 0;
       }
 
@@ -608,10 +668,25 @@ export async function run(argv: readonly string[]): Promise<number> {
         }
       }
 
+      // A separate block, because they are a different kind of thing: these
+      // come from npm and run with no checkout, so the *-ours / !-shadowed
+      // marks above would be answering a question that does not apply.
+      process.stdout.write('\nFrom npm:\n');
+      for (const entry of companions) {
+        const mark = entry.state === 'installed' ? '*' : ' ';
+        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
+      }
+
       const other = all.filter((entry) => entry.status === 'other');
       const missing = all.filter((entry) => entry.status === 'missing');
+      const absent = companions.filter((entry) => entry.state === 'missing');
 
       process.stdout.write('\n');
+      if (absent.length > 0) {
+        process.stdout.write(
+          `${absent.length} companion${absent.length === 1 ? '' : 's'} not installed — run \`cli-tools companions --install\`.\n`,
+        );
+      }
       if (other.length === 0 && missing.length === 0) {
         process.stdout.write('All running from this checkout.\n');
         return 0;
@@ -649,11 +724,40 @@ export async function run(argv: readonly string[]): Promise<number> {
         integer(options.values, '--hours', 24, { min: 1, max: 24 * 30 }),
       );
 
-    case 'link':
-      return runLinks(root, options.flags.has('--force') ? ['--force'] : []);
+    case 'link': {
+      const linked = runLinks(root, options.flags.has('--force') ? ['--force'] : []);
+      installCompanions();
+      return linked;
+    }
 
     case 'unlink':
+      // Deliberately not uninstalling the companions. They are ordinary global
+      // npm packages that work with no checkout at all, so unlinking this
+      // repository is no reason to take them off the machine — and `npm rm -g`
+      // is not a decision to make on somebody's behalf.
       return runLinks(root, ['--remove']);
+
+    case 'companions': {
+      if (options.flags.has('--json')) {
+        const rows = options.flags.has('--install')
+          ? installCompanions({ latest: options.flags.has('--force'), quiet: true })
+          : companionStatuses((name) => whichOnPath(name));
+        process.stdout.write(`${JSON.stringify({ companions: rows }, null, 2)}\n`);
+        return 0;
+      }
+      if (options.flags.has('--install')) {
+        installCompanions({ latest: options.flags.has('--force') });
+        return 0;
+      }
+      process.stdout.write('Published separately, installed from npm:\n\n');
+      for (const entry of companionStatuses((name) => whichOnPath(name))) {
+        const mark = entry.state === 'installed' ? '*' : ' ';
+        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
+        process.stdout.write(`${' '.repeat(19)}${entry.package}\n`);
+      }
+      process.stdout.write('\nInstall or update them with `cli-tools companions --install`.\n');
+      return 0;
+    }
 
     case 'aliases': {
       if (options.flags.has('--install')) return writeAliases();
