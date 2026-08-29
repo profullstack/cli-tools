@@ -39,6 +39,7 @@ import {
   planRegistration,
   planUnpark,
   porkbunCaller,
+  previewRegistration,
   priceCents,
   registerDomain,
   setRecord,
@@ -365,8 +366,23 @@ if (isMain(import.meta.url)) {
           process.stderr.write('  note: promotional first year — the renewal price is higher\n');
         }
 
+        // Porkbun's own pre-flight, not a local one: funds, the monthly spend
+        // cap and account verification are account-level gates that no read
+        // endpoint reports, so this is the only way to see them before paying.
+        const preview = await previewRegistration(call, plan);
+        process.stderr.write(
+          `  balance: ${preview.balance ?? 'unknown'}` +
+            `${preview.sufficientFunds === false ? ' — will top up the card on file' : ''}\n`,
+        );
+        if (preview.withinMonthlySpendLimit === false) {
+          throw new PorkbunError(`${plan.domain} would exceed the account's monthly API spend cap`);
+        }
+        if (!preview.wouldSucceed) {
+          throw new PorkbunError(`Porkbun refused the pre-flight for ${plan.domain}`);
+        }
+
         if (parsed.flags.has('--dry-run')) {
-          process.stdout.write('--dry-run: nothing registered\n');
+          process.stdout.write('--dry-run: pre-flight passed, nothing registered\n');
           break;
         }
         if (!assumeYes && !(await confirm(`register ${plan.domain} for ${plan.price}?`))) {
