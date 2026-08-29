@@ -5,6 +5,7 @@ import {
   PorkbunError,
   type Caller,
   type DnsRecord,
+  type RegistrationPlan,
   type UrlForward,
   checkAvailability,
   createRecord,
@@ -21,6 +22,7 @@ import {
   planRegistration,
   planUnpark,
   porkbunCaller,
+  previewRegistration,
   priceCents,
   registerDomain,
   setRecord,
@@ -585,5 +587,167 @@ describe('registerDomain', () => {
         whoisPrivacy: true,
       }),
     ).rejects.toThrow(/Insufficient funds/);
+  });
+});
+
+/** The plan every registration test buys, so the numbers are one fact. */
+function samplePlan(): RegistrationPlan {
+  return {
+    domain: 'diskpush.com',
+    costCents: 1108,
+    price: '$11.08',
+    renewal: '$11.08',
+    premium: false,
+    firstYearPromo: false,
+    years: 1,
+    whoisPrivacy: true,
+  };
+}
+
+/** The message `unwrap` would throw, for asserting on its text. */
+function unwrapMessage(body: unknown): string {
+  try {
+    unwrap(body, '/x');
+    return '';
+  } catch (error) {
+    return (error as Error).message;
+  }
+}
+
+describe('unwrap, structured refusals', () => {
+  const refusal = {
+    status: 'ERROR',
+    message: 'Your account phone number and email address must be verified.',
+    code: 'VERIFICATION_REQUIRED',
+    next_action: {
+      type: 'verify_account',
+      hint: 'Verify your account email and phone number, then retry.',
+      retryable: false,
+      url: 'https://porkbun.com/account',
+    },
+  };
+
+  it('keeps the code and the retryable verdict on the error', () => {
+    try {
+      unwrap(refusal, '/domain/create/x.com');
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PorkbunError);
+      expect((error as PorkbunError).code).toBe('VERIFICATION_REQUIRED');
+      expect((error as PorkbunError).retryable).toBe(false);
+    }
+  });
+
+  // The whole point: a refusal that cannot be retried should not read like a
+  // transient, or it gets retried instead of acted on.
+  it('puts the fix, the URL and "retrying will not help" in the message', () => {
+    expect(() => unwrap(refusal, '/domain/create/x.com')).toThrow(/porkbun\.com\/account/);
+    expect(() => unwrap(refusal, '/domain/create/x.com')).toThrow(/retrying will not help/);
+  });
+
+  it('does not repeat the hint when it merely restates the message', () => {
+    const message = unwrapMessage({
+      status: 'ERROR',
+      message: 'Nope.',
+      next_action: { hint: 'Nope.' },
+    });
+    expect(message.match(/Nope\./g)).toHaveLength(1);
+  });
+
+  it('still handles a plain refusal with no code at all', () => {
+    try {
+      unwrap({ status: 'ERROR', message: 'Invalid domain.' }, '/dns/retrieve/x.com');
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as PorkbunError).code).toBeUndefined();
+      expect((error as PorkbunError).retryable).toBeUndefined();
+      expect((error as Error).message).toMatch(/Invalid domain/);
+    }
+  });
+});
+
+describe('idempotency', () => {
+  it('sends an Idempotency-Key on the call that spends money', async () => {
+    const seen: { headers: Record<string, string> }[] = [];
+    const fetcher = (async (_url: string, init: RequestInit) => {
+      seen.push({ headers: init.headers as Record<string, string> });
+      return new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const call = porkbunCaller({ apikey: 'pk1_x', secretapikey: 'sk1_y' }, 1000, fetcher);
+    await registerDomain(call, samplePlan(), 'fixed-key-123');
+
+    expect(seen[0]?.headers['Idempotency-Key']).toBe('fixed-key-123');
+  });
+
+  it('generates a key when none is given, rather than sending none', async () => {
+    const seen: { headers: Record<string, string> }[] = [];
+    const fetcher = (async (_url: string, init: RequestInit) => {
+      seen.push({ headers: init.headers as Record<string, string> });
+      return new Response(JSON.stringify({ status: 'SUCCESS' }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const call = porkbunCaller({ apikey: 'pk1_x', secretapikey: 'sk1_y' }, 1000, fetcher);
+    await registerDomain(call, samplePlan());
+
+    expect(seen[0]?.headers['Idempotency-Key']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('leaves the header off calls that do not spend', async () => {
+    const seen: { headers: Record<string, string> }[] = [];
+    const fetcher = (async (_url: string, init: RequestInit) => {
+      seen.push({ headers: init.headers as Record<string, string> });
+      return new Response(JSON.stringify({ status: 'SUCCESS', records: [] }), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const call = porkbunCaller({ apikey: 'pk1_x', secretapikey: 'sk1_y' }, 1000, fetcher);
+    await listRecords(call, 'example.com');
+
+    expect(seen[0]?.headers['Idempotency-Key']).toBeUndefined();
+  });
+});
+
+describe('previewRegistration', () => {
+  it('reads the account-level gates out of the dry run', async () => {
+    const { call, seen } = scripted({
+      '/domain/create/diskpush.com': {
+        status: 'SUCCESS',
+        wouldSucceed: true,
+        cost: 1108,
+        costDisplay: '$11.08',
+        balance: '$0.00',
+        sufficientFunds: false,
+        withinMonthlySpendLimit: true,
+      },
+    });
+
+    const preview = await previewRegistration(call, samplePlan());
+    expect(preview).toEqual({
+      wouldSucceed: true,
+      costDisplay: '$11.08',
+      balance: '$0.00',
+      sufficientFunds: false,
+      withinMonthlySpendLimit: true,
+    });
+    // The flag that makes it free to run.
+    expect(seen[0]?.body.dryRun).toBe(true);
+  });
+
+  it('sends the same cost and terms the real call would', async () => {
+    const { call, seen } = scripted({
+      '/domain/create/diskpush.com': { status: 'SUCCESS', wouldSucceed: true },
+    });
+    await previewRegistration(call, samplePlan());
+
+    expect(seen[0]?.body).toMatchObject({ cost: 1108, agreeToTerms: 'yes', whoisPrivacy: 'yes' });
+  });
+
+  it('reports a missing spend cap as null rather than false', async () => {
+    const { call } = scripted({
+      '/domain/create/diskpush.com': { status: 'SUCCESS', wouldSucceed: true },
+    });
+    const preview = await previewRegistration(call, samplePlan());
+    expect(preview.withinMonthlySpendLimit).toBeNull();
+    expect(preview.sufficientFunds).toBeNull();
   });
 });

@@ -20,6 +20,8 @@
  * body's own `status` as the verdict and surfaces `message` verbatim.
  */
 
+import { randomUUID } from 'node:crypto';
+
 export const API_BASE = 'https://api.porkbun.com/api/json/v3';
 
 /** Porkbun rejects anything lower, and silently on some endpoints. */
@@ -72,14 +74,35 @@ export interface UrlForward {
 }
 
 export class PorkbunError extends Error {
-  constructor(message: string) {
+  /** Porkbun's machine-readable code, when it sent one: `VERIFICATION_REQUIRED`. */
+  readonly code?: string;
+  /** Whether Porkbun says trying again could ever work. */
+  readonly retryable?: boolean;
+
+  constructor(message: string, details: { code?: string; retryable?: boolean } = {}) {
     super(message);
     this.name = 'PorkbunError';
+    if (details.code !== undefined) this.code = details.code;
+    if (details.retryable !== undefined) this.retryable = details.retryable;
   }
 }
 
+export interface CallOptions {
+  /**
+   * Replays the first result instead of acting twice, for 24 hours.
+   *
+   * Only meaningful on a write that costs money: without it, a retry after a
+   * timeout that actually succeeded buys the domain a second time.
+   */
+  idempotencyKey?: string;
+}
+
 /** Issue one API call and return its body. Injected so tests never go to the network. */
-export type Caller = (path: string, body?: Record<string, unknown>) => Promise<Record<string, unknown>>;
+export type Caller = (
+  path: string,
+  body?: Record<string, unknown>,
+  options?: CallOptions,
+) => Promise<Record<string, unknown>>;
 
 /**
  * Turn a response body into either its data or an error.
@@ -95,7 +118,27 @@ export function unwrap(body: unknown, path: string): Record<string, unknown> {
   if (record.status === 'SUCCESS') return record;
 
   const message = typeof record.message === 'string' ? record.message : JSON.stringify(record);
-  throw new PorkbunError(`${path}: ${message}`);
+
+  // Newer endpoints answer a refusal with a `code`, and a `next_action` saying
+  // what would clear it and whether retrying can ever help. Dropping that turns
+  // "verify the account at this URL, retrying will not work" into a bare
+  // sentence that reads like a transient — which is exactly the case where
+  // someone retries six times instead of opening the page.
+  const next = (record.next_action ?? {}) as Record<string, unknown>;
+  const code = typeof record.code === 'string' ? record.code : undefined;
+  const hint = typeof next.hint === 'string' ? next.hint : undefined;
+  const url = typeof next.url === 'string' ? next.url : undefined;
+  const retryable = typeof next.retryable === 'boolean' ? next.retryable : undefined;
+
+  const parts = [`${path}: ${message}`];
+  if (hint && hint !== message) parts.push(hint);
+  if (url) parts.push(url);
+  if (retryable === false) parts.push('retrying will not help');
+
+  throw new PorkbunError(parts.join('\n  '), {
+    ...(code === undefined ? {} : { code }),
+    ...(retryable === undefined ? {} : { retryable }),
+  });
 }
 
 export function porkbunCaller(
@@ -103,13 +146,16 @@ export function porkbunCaller(
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
   fetcher: typeof fetch = fetch,
 ): Caller {
-  return async (path, body = {}) => {
+  return async (path, body = {}, options = {}) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetcher(`${API_BASE}${path}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}),
+        },
         body: JSON.stringify({ ...credentials, ...body }),
         signal: controller.signal,
       });
@@ -623,6 +669,51 @@ export async function planRegistration(
   };
 }
 
+function createBody(plan: RegistrationPlan): Record<string, unknown> {
+  return {
+    cost: plan.costCents,
+    agreeToTerms: 'yes',
+    whoisPrivacy: plan.whoisPrivacy ? 'yes' : 'no',
+  };
+}
+
+export interface RegistrationPreview {
+  wouldSucceed: boolean;
+  /** Porkbun's own rendering of the charge, e.g. `$11.08`. */
+  costDisplay: string | null;
+  balance: string | null;
+  sufficientFunds: boolean | null;
+  /** Null when no monthly API spend cap is set on the account. */
+  withinMonthlySpendLimit: boolean | null;
+}
+
+/**
+ * Every pre-flight check Porkbun would run, without charging or creating.
+ *
+ * Worth preferring over checking things locally: this is the only way to see
+ * the account-level gates — funds, the monthly API spend cap, and whether the
+ * account is verified at all — none of which any read endpoint exposes. It
+ * does not consume the create rate-limit budget either.
+ *
+ * A refused pre-flight arrives as a {@link PorkbunError} carrying Porkbun's
+ * `code`, so `VERIFICATION_REQUIRED` is distinguishable from a price mismatch.
+ */
+export async function previewRegistration(
+  call: Caller,
+  plan: RegistrationPlan,
+): Promise<RegistrationPreview> {
+  const body = await call(`/domain/create/${plan.domain}`, { ...createBody(plan), dryRun: true });
+  const bool = (value: unknown): boolean | null => (typeof value === 'boolean' ? value : null);
+
+  return {
+    wouldSucceed: body.wouldSucceed === true,
+    costDisplay: typeof body.costDisplay === 'string' ? body.costDisplay : null,
+    balance: typeof body.balance === 'string' ? body.balance : null,
+    sufficientFunds: bool(body.sufficientFunds),
+    withinMonthlySpendLimit: bool(body.withinMonthlySpendLimit),
+  };
+}
+
 /**
  * Buy the domain the plan describes.
  *
@@ -630,11 +721,16 @@ export async function planRegistration(
  * between the prompt and the purchase can substitute a different number.
  * `cost` has to equal Porkbun's live quote or the call is refused, which is the
  * safety net: a stale plan fails instead of quietly overpaying.
+ *
+ * The idempotency key is not optional in practice. A create that times out has
+ * still very likely registered the domain, and the natural response — run it
+ * again — buys and bills a second year. Keyed, the retry replays the first
+ * result for 24 hours instead.
  */
-export async function registerDomain(call: Caller, plan: RegistrationPlan): Promise<void> {
-  await call(`/domain/create/${plan.domain}`, {
-    cost: plan.costCents,
-    agreeToTerms: 'yes',
-    whoisPrivacy: plan.whoisPrivacy ? 'yes' : 'no',
-  });
+export async function registerDomain(
+  call: Caller,
+  plan: RegistrationPlan,
+  idempotencyKey: string = randomUUID(),
+): Promise<void> {
+  await call(`/domain/create/${plan.domain}`, createBody(plan), { idempotencyKey });
 }

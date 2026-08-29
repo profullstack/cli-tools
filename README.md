@@ -543,6 +543,18 @@ unless you pass `--no-whois-privacy`, and a TLD that cannot do privacy is refuse
 rather than quietly publishing your address. It pays from the account balance,
 topping up the card on file if that is short.
 
+Before charging anything it runs Porkbun's **own** pre-flight (`dryRun`), which is
+the only way to see the account-level gates — funds, the monthly API spend cap and
+whether the account is verified at all. No read endpoint reports those, so a local
+check cannot substitute. `--dry-run` stops after it. The real purchase carries an
+`Idempotency-Key`, because a create that times out has probably still registered
+the domain and the natural retry would buy a second year.
+
+Refusals keep Porkbun's structured `code`, `hint` and `next_action.url`, so
+`VERIFICATION_REQUIRED` prints what would clear it, where, and that retrying will
+not help — rather than one sentence that reads like a transient and invites six
+more attempts.
+
 Two things about it. Availability is **rate limited to one check per ten seconds**,
 which is why the price is fetched once and carried rather than re-checked just
 before buying. And prices are quoted as dollar strings while `/domain/create`
