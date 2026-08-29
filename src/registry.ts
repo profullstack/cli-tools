@@ -36,6 +36,7 @@ const SUMMARIES: Record<string, string> = {
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
   favicon: 'Every icon a site links, rendered from one SVG',
+  'free-names': 'Name ideas nobody has registered yet, in one command',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',
@@ -177,6 +178,11 @@ export const PIT_ALIASES: Record<string, string> = {
   blog: 'blog-post',
   free: 'domainfree',
   merge: 'gh-prs-merge --apply',
+  // `names` rather than `free-names`, because an alias may not share a name
+  // with a command — and this is the one alias that exists because a pipe
+  // cannot be aliased at all: `/names "..."` would append the description
+  // after `| domainfree`, so `free-names` had to become a command first.
+  names: 'free-names',
   prs: 'gh-prs',
   speak: 'tts',
   web: 'ask-web',
