@@ -419,3 +419,222 @@ export async function setRecord(
   await editRecord(call, domain, current.id, input);
   return { action: 'updated', id: current.id };
 }
+
+/* ------------------------------------------------------------------------- *
+ * Registration
+ * ------------------------------------------------------------------------- */
+
+/**
+ * Money, as Porkbun means it.
+ *
+ * Prices are quoted as decimal *dollar* strings (`"11.08"`) and
+ * `/domain/create` wants an integer count of **cents** that matches the quote
+ * exactly. The obvious conversion is a trap: `parseFloat('11.08') * 100` is
+ * `1107.9999999999998`, which truncates to `1107` and buys nothing — the API
+ * refuses the mismatch. So the decimal is split as text and never becomes a
+ * float at all.
+ */
+export function priceCents(price: string | number): number {
+  const text = String(price ?? '').trim();
+  if (!/^\d+(\.\d+)?$/.test(text)) {
+    throw new PorkbunError(`unreadable price from Porkbun: ${JSON.stringify(price)}`);
+  }
+  const [whole, fraction = ''] = text.split('.');
+  const cents = Number(whole) * 100 + Number(`${fraction}00`.slice(0, 2));
+  // A third decimal is not a thing Porkbun quotes, but round it like money
+  // rather than silently dropping half a cent if it ever appears.
+  return Number(fraction[2] ?? 0) >= 5 ? cents + 1 : cents;
+}
+
+/** `$11.08`, from either form. Display only — never send this to the API. */
+export function formatPrice(price: string | number): string {
+  return `$${(priceCents(price) / 100).toFixed(2)}`;
+}
+
+/** Lowercase, trimmed, no trailing dot, and actually shaped like a domain. */
+export function normalizeDomain(domain: string): string {
+  const zone = String(domain ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\.$/, '');
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(zone)) {
+    throw new PorkbunError(`${JSON.stringify(domain)} is not a valid domain name`);
+  }
+  return zone;
+}
+
+/**
+ * The TLD, as `/domain/getRegistrationRequirements` spells it.
+ *
+ * Everything after the first label, so `diskpush.com` is `com` and
+ * `example.co.uk` is `co.uk` — which is what that endpoint keys on, rather than
+ * the last label alone.
+ */
+export function tldOf(domain: string): string {
+  const zone = normalizeDomain(domain);
+  return zone.slice(zone.indexOf('.') + 1);
+}
+
+export interface Availability {
+  domain: string;
+  available: boolean;
+  premium: boolean;
+  /** The quote, in whole cents — exactly what `/domain/create` must be sent. */
+  costCents: number;
+  /** The same number for people: `$11.08`. */
+  price: string;
+  renewal: string | null;
+  /** A cheap first year that renews dearer, which is worth saying out loud. */
+  firstYearPromo: boolean;
+  /** Years. `.com` is 1; some TLDs sell a 2-year minimum. */
+  minDuration: number;
+}
+
+/**
+ * Is it available, and at what price?
+ *
+ * **Rate limited to one call per ten seconds per account**, which shapes the
+ * caller: check once, keep the quote, and spend it. Checking again to
+ * "confirm" just before buying earns a rate-limit error instead of a second
+ * answer.
+ */
+export async function checkAvailability(call: Caller, domain: string): Promise<Availability> {
+  const zone = normalizeDomain(domain);
+  const body = await call(`/domain/checkDomain/${zone}`);
+  const response = (body.response ?? {}) as Record<string, unknown>;
+
+  const price = response.price;
+  if (price === undefined) {
+    throw new PorkbunError(`/domain/checkDomain/${zone}: no price in the response`);
+  }
+  const additional = (response.additional ?? {}) as Record<string, Record<string, unknown> | undefined>;
+  const renewal = additional.renewal?.price;
+
+  return {
+    domain: zone,
+    available: response.avail === 'yes',
+    premium: response.premium === 'yes',
+    costCents: priceCents(price as string),
+    price: formatPrice(price as string),
+    renewal: renewal === undefined ? null : formatPrice(renewal as string),
+    firstYearPromo: response.firstYearPromo === 'yes',
+    minDuration: Number(response.minDuration ?? 1) || 1,
+  };
+}
+
+export interface RegistrationRequirements {
+  tld: string;
+  /** Some TLDs are dashboard-only. Better to hear it here than after a charge. */
+  apiRegisterable: boolean;
+  whoisPrivacySupported: boolean;
+  years: number | null;
+  /** Registry eligibility fields (`.us` nexus, `.ca` legal type), or null. */
+  registryRequirements: unknown;
+}
+
+export async function registrationRequirements(
+  call: Caller,
+  tld: string,
+): Promise<RegistrationRequirements> {
+  const body = await call(`/domain/getRegistrationRequirements/${tld}`);
+  return {
+    tld,
+    apiRegisterable: body.apiRegisterable === true,
+    whoisPrivacySupported: body.whoisPrivacySupported === true,
+    years: typeof body.registrationDurationYears === 'number' ? body.registrationDurationYears : null,
+    registryRequirements: body.registryRequirements ?? null,
+  };
+}
+
+export interface RegistrationPlan {
+  domain: string;
+  costCents: number;
+  price: string;
+  renewal: string | null;
+  premium: boolean;
+  firstYearPromo: boolean;
+  years: number | null;
+  whoisPrivacy: boolean;
+}
+
+export interface RegistrationOptions {
+  whoisPrivacy?: boolean;
+  /** Refuse to spend more than this, in cents. A typo guard, and a premium guard. */
+  maxCents?: number;
+}
+
+/**
+ * Everything that has to be true before money moves, resolved once.
+ *
+ * A plan rather than a `register(domain)` that does the lot, for the same
+ * reason {@link planUnpark} is a plan: the number shown at the confirmation
+ * prompt and the number sent to the registrar are then the same number by
+ * construction and cannot drift between the two. It also means the
+ * availability check — one per ten seconds — happens exactly once.
+ */
+export async function planRegistration(
+  call: Caller,
+  domain: string,
+  options: RegistrationOptions = {},
+): Promise<RegistrationPlan> {
+  const zone = normalizeDomain(domain);
+  const requirements = await registrationRequirements(call, tldOf(zone));
+
+  if (!requirements.apiRegisterable) {
+    throw new PorkbunError(
+      `.${requirements.tld} cannot be registered through the API — buy it in the dashboard`,
+    );
+  }
+  if (requirements.registryRequirements) {
+    throw new PorkbunError(
+      `.${requirements.tld} needs registry eligibility details this command does not collect ` +
+        '— buy it in the dashboard',
+    );
+  }
+
+  const availability = await checkAvailability(call, zone);
+  if (!availability.available) {
+    throw new PorkbunError(`${zone} is already registered`);
+  }
+
+  const whoisPrivacy = options.whoisPrivacy ?? true;
+  if (whoisPrivacy && !requirements.whoisPrivacySupported) {
+    throw new PorkbunError(
+      `.${requirements.tld} does not support WHOIS privacy — pass --no-whois-privacy to ` +
+        'register with your contact details public',
+    );
+  }
+  if (options.maxCents !== undefined && availability.costCents > options.maxCents) {
+    throw new PorkbunError(
+      `${zone} costs ${availability.price}, over the --max-price limit` +
+        `${availability.premium ? ' — it is a premium name' : ''}`,
+    );
+  }
+
+  return {
+    domain: zone,
+    costCents: availability.costCents,
+    price: availability.price,
+    renewal: availability.renewal,
+    premium: availability.premium,
+    firstYearPromo: availability.firstYearPromo,
+    years: requirements.years,
+    whoisPrivacy,
+  };
+}
+
+/**
+ * Buy the domain the plan describes.
+ *
+ * Takes a {@link RegistrationPlan} rather than a domain and a price so nothing
+ * between the prompt and the purchase can substitute a different number.
+ * `cost` has to equal Porkbun's live quote or the call is refused, which is the
+ * safety net: a stale plan fails instead of quietly overpaying.
+ */
+export async function registerDomain(call: Caller, plan: RegistrationPlan): Promise<void> {
+  await call(`/domain/create/${plan.domain}`, {
+    cost: plan.costCents,
+    agreeToTerms: 'yes',
+    whoisPrivacy: plan.whoisPrivacy ? 'yes' : 'no',
+  });
+}

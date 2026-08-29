@@ -6,6 +6,7 @@ import {
   type Caller,
   type DnsRecord,
   type UrlForward,
+  checkAvailability,
   createRecord,
   credentialsFrom,
   formatForwards,
@@ -16,10 +17,15 @@ import {
   listDomains,
   listRecords,
   matchRecords,
+  normalizeDomain,
+  planRegistration,
   planUnpark,
   porkbunCaller,
+  priceCents,
+  registerDomain,
   setRecord,
   sortRecords,
+  tldOf,
   unwrap,
 } from '../src/porkbun.ts';
 
@@ -329,5 +335,255 @@ describe('porkbunCaller', () => {
     const fetcher = (async () => ({ status: 502, text: async () => '<html>bad gateway</html>' })) as unknown as typeof fetch;
     const call = porkbunCaller({ apikey: 'k', secretapikey: 's' }, 1000, fetcher);
     await expect(call('/ping')).rejects.toThrow(/HTTP 502.*not JSON/s);
+  });
+});
+
+describe('priceCents', () => {
+  // The reason this function exists rather than `parseFloat(p) * 100`: that
+  // expression is 1107.9999999999998 here, and a truncated 1107 buys nothing.
+  it('converts a dollar string without going through a float', () => {
+    expect(priceCents('11.08')).toBe(1108);
+    expect(priceCents('0.99')).toBe(99);
+    expect(priceCents('1234.56')).toBe(123_456);
+  });
+
+  it('handles whole dollars and a single decimal', () => {
+    expect(priceCents('22')).toBe(2200);
+    expect(priceCents('22.5')).toBe(2250);
+    expect(priceCents(35)).toBe(3500);
+  });
+
+  it('rounds a third decimal like money', () => {
+    expect(priceCents('1.005')).toBe(101);
+    expect(priceCents('1.004')).toBe(100);
+  });
+
+  it('refuses anything that is not a price', () => {
+    expect(() => priceCents('free')).toThrow(PorkbunError);
+    expect(() => priceCents('-5.00')).toThrow(/unreadable price/);
+    expect(() => priceCents('')).toThrow(/unreadable price/);
+  });
+});
+
+describe('normalizeDomain and tldOf', () => {
+  it('lowercases and drops a trailing dot', () => {
+    expect(normalizeDomain(' DiskPush.COM. ')).toBe('diskpush.com');
+  });
+
+  it('rejects a bare label, a URL and a path', () => {
+    expect(() => normalizeDomain('diskpush')).toThrow(/not a valid domain/);
+    expect(() => normalizeDomain('https://diskpush.com')).toThrow(/not a valid domain/);
+    expect(() => normalizeDomain('diskpush.com/a')).toThrow(/not a valid domain/);
+  });
+
+  // The requirements endpoint keys on the whole suffix, not the last label.
+  it('takes everything after the first label as the TLD', () => {
+    expect(tldOf('diskpush.com')).toBe('com');
+    expect(tldOf('example.co.uk')).toBe('co.uk');
+  });
+});
+
+describe('checkAvailability', () => {
+  const body = (overrides: Record<string, unknown> = {}) => ({
+    status: 'SUCCESS',
+    response: {
+      avail: 'yes',
+      type: 'registration',
+      price: '11.08',
+      firstYearPromo: 'no',
+      regularPrice: '11.08',
+      premium: 'no',
+      additional: { renewal: { type: 'renewal', price: '11.08' } },
+      minDuration: 1,
+      ...overrides,
+    },
+  });
+
+  it('reads the quote out of the nested response', async () => {
+    const { call, seen } = scripted({ '/domain/checkDomain/diskpush.com': body() });
+    const availability = await checkAvailability(call, 'DiskPush.com');
+
+    expect(availability).toMatchObject({
+      domain: 'diskpush.com',
+      available: true,
+      premium: false,
+      costCents: 1108,
+      price: '$11.08',
+      renewal: '$11.08',
+    });
+    expect(seen[0]?.path).toBe('/domain/checkDomain/diskpush.com');
+  });
+
+  it('reports a taken name rather than throwing', async () => {
+    const { call } = scripted({
+      '/domain/checkDomain/taken.com': body({ avail: 'no' }),
+    });
+    expect((await checkAvailability(call, 'taken.com')).available).toBe(false);
+  });
+
+  it('throws when there is no price to send back', async () => {
+    const { call } = scripted({
+      '/domain/checkDomain/x.com': { status: 'SUCCESS', response: { avail: 'yes' } },
+    });
+    await expect(checkAvailability(call, 'x.com')).rejects.toThrow(/no price/);
+  });
+});
+
+describe('planRegistration', () => {
+  const requirements = (overrides: Record<string, unknown> = {}) => ({
+    status: 'SUCCESS',
+    tld: 'com',
+    apiRegisterable: true,
+    registrationDurationYears: 1,
+    whoisPrivacySupported: true,
+    registryRequirements: null,
+    ...overrides,
+  });
+
+  const available = (overrides: Record<string, unknown> = {}) => ({
+    status: 'SUCCESS',
+    response: {
+      avail: 'yes',
+      price: '11.08',
+      premium: 'no',
+      firstYearPromo: 'no',
+      additional: { renewal: { price: '11.08' } },
+      minDuration: 1,
+      ...overrides,
+    },
+  });
+
+  const scriptFor = (
+    domain: string,
+    reqs: Record<string, unknown> = requirements(),
+    avail: Record<string, unknown> = available(),
+  ) =>
+    scripted({
+      '/domain/getRegistrationRequirements/com': reqs,
+      [`/domain/checkDomain/${domain}`]: avail,
+    });
+
+  it('carries the quote through as the cost to send', async () => {
+    const { call } = scriptFor('diskpush.com');
+    const plan = await planRegistration(call, 'diskpush.com');
+
+    expect(plan).toEqual({
+      domain: 'diskpush.com',
+      costCents: 1108,
+      price: '$11.08',
+      renewal: '$11.08',
+      premium: false,
+      firstYearPromo: false,
+      years: 1,
+      whoisPrivacy: true,
+    });
+  });
+
+  // One check per ten seconds, so a second one is an error and not an answer.
+  it('checks availability exactly once', async () => {
+    const { call, seen } = scriptFor('diskpush.com');
+    await planRegistration(call, 'diskpush.com');
+    expect(seen.filter((entry) => entry.path.startsWith('/domain/checkDomain'))).toHaveLength(1);
+  });
+
+  it('refuses a name that is already registered', async () => {
+    const { call } = scriptFor('diskpush.com', requirements(), available({ avail: 'no' }));
+    await expect(planRegistration(call, 'diskpush.com')).rejects.toThrow(/already registered/);
+  });
+
+  it('refuses a TLD the API cannot sell', async () => {
+    const { call } = scriptFor('diskpush.com', requirements({ apiRegisterable: false }));
+    await expect(planRegistration(call, 'diskpush.com')).rejects.toThrow(/cannot be registered/);
+  });
+
+  // .us nexus, .ca legal type: fields this command has no way to collect.
+  it('refuses a TLD with registry eligibility fields', async () => {
+    const { call } = scriptFor('diskpush.com', requirements({ registryRequirements: { nexus: {} } }));
+    await expect(planRegistration(call, 'diskpush.com')).rejects.toThrow(/eligibility/);
+  });
+
+  it('refuses to silently publish contacts when privacy is unsupported', async () => {
+    const { call } = scriptFor('diskpush.com', requirements({ whoisPrivacySupported: false }));
+    await expect(planRegistration(call, 'diskpush.com')).rejects.toThrow(/--no-whois-privacy/);
+  });
+
+  it('allows public contacts when asked for explicitly', async () => {
+    const { call } = scriptFor('diskpush.com', requirements({ whoisPrivacySupported: false }));
+    const plan = await planRegistration(call, 'diskpush.com', { whoisPrivacy: false });
+    expect(plan.whoisPrivacy).toBe(false);
+  });
+
+  it('stops a premium name from quietly costing hundreds', async () => {
+    const { call } = scriptFor(
+      'diskpush.com',
+      requirements(),
+      available({ price: '2999.00', premium: 'yes' }),
+    );
+    await expect(planRegistration(call, 'diskpush.com', { maxCents: 5000 })).rejects.toThrow(
+      /premium/,
+    );
+  });
+
+  it('allows a price at the limit', async () => {
+    const { call } = scriptFor('diskpush.com');
+    await expect(planRegistration(call, 'diskpush.com', { maxCents: 1108 })).resolves.toMatchObject({
+      costCents: 1108,
+    });
+  });
+});
+
+describe('registerDomain', () => {
+  it('sends the plan cost in cents, with the terms agreed', async () => {
+    const { call, seen } = scripted({ '/domain/create/diskpush.com': { status: 'SUCCESS' } });
+    await registerDomain(call, {
+      domain: 'diskpush.com',
+      costCents: 1108,
+      price: '$11.08',
+      renewal: '$11.08',
+      premium: false,
+      firstYearPromo: false,
+      years: 1,
+      whoisPrivacy: true,
+    });
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toEqual({
+      path: '/domain/create/diskpush.com',
+      body: { cost: 1108, agreeToTerms: 'yes', whoisPrivacy: 'yes' },
+    });
+  });
+
+  it('passes privacy off through as "no"', async () => {
+    const { call, seen } = scripted({ '/domain/create/x.com': { status: 'SUCCESS' } });
+    await registerDomain(call, {
+      domain: 'x.com',
+      costCents: 900,
+      price: '$9.00',
+      renewal: null,
+      premium: false,
+      firstYearPromo: false,
+      years: null,
+      whoisPrivacy: false,
+    });
+    expect(seen[0]?.body.whoisPrivacy).toBe('no');
+  });
+
+  // The 200-with-ERROR shape again, on the one call that spends money.
+  it('surfaces a refusal rather than reporting success', async () => {
+    const call: Caller = async () => {
+      throw new PorkbunError('/domain/create/x.com: Insufficient funds.');
+    };
+    await expect(
+      registerDomain(call, {
+        domain: 'x.com',
+        costCents: 900,
+        price: '$9.00',
+        renewal: null,
+        premium: false,
+        firstYearPromo: false,
+        years: null,
+        whoisPrivacy: true,
+      }),
+    ).rejects.toThrow(/Insufficient funds/);
   });
 });
