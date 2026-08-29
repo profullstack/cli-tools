@@ -12,6 +12,7 @@ TypeScript, installed as executables on `PATH`.
 | [`tcfeed`](#tcfeed) | Find repositories worth scanning, scan them, print a shortlist |
 | [`domainjson`](#domainjson) | whois-style, JSON-first name lookup |
 | [`domainfree`](#domainfree) | Which of these domains you can actually register |
+| [`free-names`](#free-names) | Name ideas nobody has registered yet, in one command |
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
 | [`tts`](#tts) | Read text aloud and keep the audio |
@@ -113,7 +114,7 @@ Check what landed, and wire up the pit aliases:
 cli-tools list                 # * runs from here, ! is shadowed by another copy
 cli-tools companions           # the two from npm, and whether they are on PATH
 cli-tools companions --install # install the missing ones (--force updates all)
-cli-tools aliases --install    # /aff /blog /free /merge /prs /speak /web /whois
+cli-tools aliases --install    # /aff /blog /free /merge /names /prs /speak /web /whois
 cli-tools config               # API keys: what is set, and where it came from
 cli-tools update               # git pull, reinstall, relink, update companions
 cli-tools autoupdate --install # …or have a timer do that daily
@@ -196,8 +197,8 @@ ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 
 ## API keys
 
-Four commands here call a paid API: `generate-names` (OpenAI or Anthropic),
-`ask-web` (Perplexity) and `tts` (ElevenLabs). Store the keys once, and nothing
+Five commands here call a paid API: `generate-names` and `free-names` (OpenAI
+or Anthropic), `ask-web` (Perplexity) and `tts` (ElevenLabs). Store the keys once, and nothing
 has to carry them in an environment again:
 
 ```sh
@@ -245,8 +246,8 @@ carries the same masked previews, not the values.
 
 | Key | Variable | Used by |
 | --- | --- | --- |
-| `openai` | `OPENAI_API_KEY` | `generate-names` |
-| `anthropic` | `ANTHROPIC_API_KEY` | `generate-names` |
+| `openai` | `OPENAI_API_KEY` | `generate-names`, `free-names` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `generate-names`, `free-names` |
 | `perplexity` | `PERPLEXITY_API_KEY` | `ask-web` |
 | `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
 | `porkbun` | `PORKBUN_API_KEY` | `porkbun` |
@@ -402,6 +403,34 @@ and are overridable with `--model`.
 | `--timeout MS` | API timeout, default 60000 |
 
 Names go to stdout and the summary to stderr, so the output pipes cleanly.
+
+### `free-names`
+
+`generate-names "..." | domainfree` as one command: describe the thing, get back
+only the names nobody has registered.
+
+```sh
+free-names "a desktop app that syncs over rsync, --partial and --archive"
+free-names "an open directory of independent blogs" -n 200 --words 1
+free-names "a registry that checks Lean proofs" --tld dev --all
+```
+
+It exists because a pipe cannot be aliased. A moshcode pit alias appends what
+you typed to the end of its expansion, so `/names "a desktop app"` against
+`generate-names -n 100 | domainfree` would put the description *after*
+`domainfree`. The only workarounds are a shell function stored in a config file,
+which is the thing this repository exists to avoid — so the composition became a
+command, and `/names` stays a thin alias pointing at it.
+
+The default count is **100**, not `generate-names`' 1000: every candidate here
+costs a registry lookup rather than a line of output, and a thousand RDAP
+lookups against rate-limited servers turns a ten-second command into a
+multi-minute one. Both halves behave exactly as they do separately — one small
+API call for vocabulary, availability read from RDAP — and an indeterminate
+lookup is never reported as available.
+
+It takes the flags of both, with `--timeout` kept for the registry (matching
+`domainfree`) and `--api-timeout` for the model.
 
 ### `domainfree`
 
@@ -1111,6 +1140,7 @@ without writing anything.
 | `/blog` | `blog-post` |
 | `/free` | `domainfree` |
 | `/merge` | `gh-prs-merge --apply` |
+| `/names` | `free-names` |
 | `/prs` | `gh-prs` |
 | `/speak` | `tts` |
 | `/web` | `ask-web` |
@@ -1122,6 +1152,14 @@ else on a normal box; because a pit alias beats `PATH`, binding them would
 shadow those programs *from inside the pit only*, which is about the most
 confusing failure available. `/tts` would be worse — it would shadow our own
 command. Hence `/web`, `/speak` and `/aff`.
+
+`/names` is the one alias that exists because a pipe cannot be aliased at all.
+An alias appends what you typed to the end of its expansion, so binding it to
+`generate-names -n 100 | domainfree` would put your description after
+`domainfree`. That is what [`free-names`](#free-names) is for: the composition
+became a command, so the alias could stay thin. It is `/names` and not
+`/free-names` because no alias may share a name with a command — a shell
+function beats `PATH`, and the two would drift apart.
 
 To manage them by hand:
 
