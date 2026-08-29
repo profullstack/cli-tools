@@ -465,7 +465,7 @@ parsed should not change shape when it fails.
 
 ### `porkbun`
 
-DNS at Porkbun, without the dashboard.
+Domains and DNS at Porkbun, without the dashboard.
 
 ```sh
 porkbun ls example.com                                   # the zone, apex first
@@ -475,6 +475,8 @@ porkbun set example.com @ ALIAS app.up.railway.app       # apex, via Porkbun's A
 porkbun rm example.com www --type CNAME --yes
 porkbun unpark example.com                               # stop the parking page winning
 porkbun domains                                          # everything on the account
+porkbun check example.com                                # available? at what price?
+porkbun register example.com --max-price 20              # buy it
 ```
 
 Write the host the way you would say it. `@`, an empty value and the bare domain
@@ -501,6 +503,22 @@ It is deliberately narrow about what counts as parking: only `ALIAS` and `CNAME`
 records pointing at `porkbun.com`. The `MX` records at `fwd1.porkbun.com` are
 Porkbun's *email forwarding* and the `NS` records are the zone's delegation —
 sweeping either up would break mail or take the domain off the internet.
+
+`register` spends real money, so it is built to make that hard to do by accident.
+It resolves one plan — the TLD's rules, then availability and price — prints it,
+and asks; the number in the prompt is the number sent to the registrar, because
+it is the same number. `--dry-run` prices it and stops, `--max-price` refuses
+anything dearer (a premium name can be hundreds), and a promotional first year is
+called out because it is not what you will pay next year. WHOIS privacy is on
+unless you pass `--no-whois-privacy`, and a TLD that cannot do privacy is refused
+rather than quietly publishing your address. It pays from the account balance,
+topping up the card on file if that is short.
+
+Two things about it. Availability is **rate limited to one check per ten seconds**,
+which is why the price is fetched once and carried rather than re-checked just
+before buying. And prices are quoted as dollar strings while `/domain/create`
+wants integer cents that match the quote exactly — `parseFloat('11.08') * 100` is
+`1107.9999999999998`, so the conversion is done as text and never becomes a float.
 
 Two Porkbun-specific traps the errors call out by name. Every call is a `POST`
 with the credentials in the body, and **`status` is a field rather than the HTTP

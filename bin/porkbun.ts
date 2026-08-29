@@ -22,6 +22,7 @@ import {
   MIN_TTL,
   PorkbunError,
   type RecordInput,
+  checkAvailability,
   createRecord,
   credentialsFrom,
   deleteForward,
@@ -35,8 +36,11 @@ import {
   listRecords,
   matchRecords,
   ping,
+  planRegistration,
   planUnpark,
   porkbunCaller,
+  priceCents,
+  registerDomain,
   setRecord,
   sortRecords,
 } from '../src/porkbun.ts';
@@ -50,6 +54,8 @@ const USAGE = `Usage:
   porkbun rm <domain> (<id> | <host> --type TYPE) [--yes]
   porkbun forwards <domain> [--json]
   porkbun unpark <domain> [--dry-run] [--yes]
+  porkbun check <domain> [--json]
+  porkbun register <domain> [--max-price N] [--no-whois-privacy] [--dry-run] [--yes]
 
 Commands:
   ping        check the credentials and show the IP Porkbun sees
@@ -60,6 +66,8 @@ Commands:
   rm          delete by record id, or by host + --type
   forwards    list URL forwarding rules
   unpark      remove URL forwarding and the parking records it owns
+  check       is a domain available, and what would it cost
+  register    buy a domain — spends real money, so it confirms first
 
 The host is written as you would say it: \`@\` or the bare domain for the apex,
 \`www\` or \`www.example.com\` for a subdomain. Both forms mean the same record.
@@ -71,6 +79,10 @@ Options:
   --prio N      priority, for MX and SRV
   --json        raw JSON instead of a table
   --dry-run     for unpark: print what would be deleted, delete nothing
+                for register: price it and stop, buy nothing
+  --max-price N for register: refuse to spend more than N dollars
+  --no-whois-privacy
+                for register: publish your contact details (privacy is on by default)
   --yes         skip the confirmation prompt
   -h, --help    show this help
 
@@ -78,6 +90,10 @@ Credentials come from PORKBUN_API_KEY and PORKBUN_SECRET_API_KEY, via
 \`cli-tools config pull\` or the environment. Porkbun also requires API access
 to be switched on per domain, in the domain's settings — a key that pings fine
 still gets "Invalid domain" until that is on.
+
+\`register\` pays from the Porkbun account balance, topping up the card on file
+if it is short. It registers for the TLD's minimum term with auto-renew on and
+WHOIS privacy on, using the account's default contacts.
 `;
 
 function fail(message: string, code = 2): never {
@@ -101,8 +117,8 @@ async function confirm(question: string): Promise<boolean> {
 if (isMain(import.meta.url)) {
   try {
     const parsed = parseArgs(process.argv.slice(2), {
-      boolean: ['--json', '--dry-run', '--yes', '-h', '--help'],
-      string: ['--type', '--name', '--ttl', '--prio'],
+      boolean: ['--json', '--dry-run', '--yes', '--no-whois-privacy', '-h', '--help'],
+      string: ['--type', '--name', '--ttl', '--prio', '--max-price'],
     });
 
     if (parsed.flags.has('-h') || parsed.flags.has('--help') || parsed.positional.length === 0) {
@@ -291,6 +307,82 @@ if (isMain(import.meta.url)) {
           process.stdout.write(`${removed} parking record(s) went with the forward\n`);
         }
         process.stdout.write(`${domain} un-parked\n`);
+        break;
+      }
+
+      case 'check': {
+        const domain = needDomain();
+        const availability = await checkAvailability(call, domain);
+
+        if (json) {
+          process.stdout.write(`${JSON.stringify(availability, null, 2)}\n`);
+          break;
+        }
+        if (!availability.available) {
+          process.stdout.write(`${domain} is taken\n`);
+          process.exit(1);
+        }
+        process.stdout.write(
+          `${domain} is available — ${availability.price}` +
+            `${availability.minDuration > 1 ? ` for ${availability.minDuration} years` : '/yr'}` +
+            `${availability.premium ? ' (premium)' : ''}\n` +
+            (availability.renewal && availability.renewal !== availability.price
+              ? `renews at ${availability.renewal}/yr\n`
+              : ''),
+        );
+        break;
+      }
+
+      case 'register': {
+        const domain = needDomain();
+
+        // Priced in dollars because that is how the prompt reads it back;
+        // `integer` would reject the cents, so the shared money parser does it.
+        let maxCents: number | undefined;
+        const maxPrice = parsed.values.get('--max-price');
+        if (maxPrice !== undefined) {
+          try {
+            maxCents = priceCents(maxPrice.replace(/^\$/, ''));
+          } catch {
+            throw new UsageError(`--max-price must be an amount in dollars, got ${JSON.stringify(maxPrice)}`);
+          }
+        }
+
+        const plan = await planRegistration(call, domain, {
+          whoisPrivacy: !parsed.flags.has('--no-whois-privacy'),
+          ...(maxCents === undefined ? {} : { maxCents }),
+        });
+
+        const term = plan.years && plan.years > 1 ? `${plan.years} years` : '1 year';
+        process.stderr.write(
+          `  ${plan.domain}  ${plan.price} for ${term}${plan.premium ? '  (premium)' : ''}\n` +
+            `  whois privacy: ${plan.whoisPrivacy ? 'on' : 'OFF — your contacts will be public'}\n` +
+            `  auto-renew: on${plan.renewal ? `, at ${plan.renewal}/yr` : ''}\n`,
+        );
+        // A first year that renews dearer is the one surprise worth shouting
+        // about: the price agreed to here is not the price paid next year.
+        if (plan.firstYearPromo) {
+          process.stderr.write('  note: promotional first year — the renewal price is higher\n');
+        }
+
+        if (parsed.flags.has('--dry-run')) {
+          process.stdout.write('--dry-run: nothing registered\n');
+          break;
+        }
+        if (!assumeYes && !(await confirm(`register ${plan.domain} for ${plan.price}?`))) {
+          process.stderr.write('cancelled\n');
+          process.exit(1);
+        }
+
+        await registerDomain(call, plan);
+        process.stdout.write(`registered ${plan.domain} for ${plan.price}\n`);
+        // API access is per-domain and off by default, so the very next thing
+        // anyone tries — pointing the new name somewhere — fails with "Invalid
+        // domain" until it is switched on. Say so before that happens.
+        process.stdout.write(
+          `turn on API access for it at https://porkbun.com/account/domainsSpeedy ` +
+            `before \`porkbun set ${plan.domain} ...\` will work\n`,
+        );
         break;
       }
 
