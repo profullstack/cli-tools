@@ -53,12 +53,14 @@ export const DEFAULT_TRACKERS = [...WSS_TRACKERS, ...UDP_TRACKERS];
 /** The argv for `create-torrent`. */
 export function createArgs(
   path: string,
-  { out, trackers = DEFAULT_TRACKERS, name, comment, isPrivate = false }: {
+  { out, trackers = DEFAULT_TRACKERS, name, comment, isPrivate = false, webSeeds = [] }: {
     out?: string;
     trackers?: readonly string[];
     name?: string;
     comment?: string;
     isPrivate?: boolean;
+    /** HTTP URLs that already serve this exact data (BEP 19 web seeds). */
+    webSeeds?: readonly string[];
   } = {},
 ): string[] {
   const args = [path];
@@ -69,6 +71,12 @@ export function createArgs(
   // flag, which is the opposite of the point here -- so it is opt-in and named.
   if (isPrivate) args.push('--private');
   for (const tracker of trackers) args.push('--announce', tracker);
+  // A web seed is a plain HTTP URL every peer can also pull bytes from, so a
+  // torrent with one is downloadable the moment it exists -- before any peer
+  // has it, and without a seeding process at all. The URL has to serve the
+  // exact bytes the torrent was made from; a redirect to a different encoding
+  // is a torrent that fails its hash check rather than one that is merely slow.
+  for (const url of webSeeds) args.push('--urlList', url);
   return args;
 }
 

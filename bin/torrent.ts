@@ -40,6 +40,7 @@ Options:
       --name NAME      torrent name, if not the directory's own
       --comment TEXT   a comment to embed
       --private        exclude it from the DHT (opt-in; the opposite of sharing)
+      --webseed URLS   comma-separated HTTP URLs already serving this data
       --api URL        torlnk's serve API (default: ${DEFAULT_TORLINK_API})
       --watch DIR      a torlnk watch directory, instead of its API
       --json           machine-readable output
@@ -69,7 +70,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['--help', '--private', '--json'],
-      string: ['-o', '--out', '--tracker', '--name', '--comment', '--api', '--watch'],
+      string: ['-o', '--out', '--tracker', '--name', '--comment', '--api', '--watch', '--webseed'],
     });
 
     if (flags.has('--help') || positional.length === 0) {
@@ -127,6 +128,7 @@ if (isMain(import.meta.url)) {
         ...(values.has('--name') ? { name: values.get('--name') as string } : {}),
         ...(values.has('--comment') ? { comment: values.get('--comment') as string } : {}),
         isPrivate: flags.has('--private'),
+        ...(values.has('--webseed') ? { webSeeds: csv(values, '--webseed') } : {}),
       }),
     );
     if (code !== 0) throw new Error(`create-torrent exited ${code}`);

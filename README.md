@@ -843,6 +843,18 @@ with `--tracker`.
 DHT by every client that honours the flag — the opposite of the reason to make
 one here.
 
+**From a URL rather than a seeding process.** `--webseed` embeds HTTP URLs that
+already serve the same bytes (BEP 19), so the torrent is downloadable the moment
+it exists — before any peer has it, and without anything staying running:
+
+```sh
+torrent create ./album --webseed https://files.example.com/album
+```
+
+The URL has to serve the *exact* bytes the torrent was made from. A redirect to
+a re-encoded or recompressed copy is a torrent that fails its hash check, which
+looks like corruption rather than like a misconfigured seed.
+
 `seed` hands the magnet to torlnk, which is the process that stays running:
 its serve API by default (`--api`, `$TORLINK_API`, `$TORLINK_API_TOKEN`), or a
 watch directory (`--watch`, `$TORLINK_WATCH`) as the offline handoff. How long
