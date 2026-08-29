@@ -32,6 +32,7 @@ const SUMMARIES: Record<string, string> = {
   'blog-post': 'Publish to a plain-HTML blog without breaking the feed',
   'cli-tools': 'This dispatcher: list, update and wire up the others',
   codeburn: 'See where your AI spend goes, by task, tool, model and project',
+  dl: 'Download a video, or just its audio, through yt-dlp',
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
   favicon: 'Every icon a site links, rendered from one SVG',

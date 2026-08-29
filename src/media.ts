@@ -40,15 +40,19 @@ const probed = new Map<string, string | null>();
  * `command -v` through a shell would be shorter and is exactly the thing
  * src/exec.ts exists to avoid; this runs the candidate with a harmless flag and
  * reads the exit code instead.
+ *
+ * The flag is a parameter because the harmless one is not the same everywhere.
+ * ImageMagick and ffmpeg both answer `-version` with 0; yt-dlp's parser reads
+ * that single dash as seven combined short options and exits non-zero, so
+ * probing it the same way would report an installed binary missing.
  */
-export async function findBinary(names: string[]): Promise<string | null> {
-  const key = names.join(',');
+export async function findBinary(names: string[], flag = '-version'): Promise<string | null> {
+  const key = `${flag} ${names.join(',')}`;
   if (probed.has(key)) return probed.get(key) ?? null;
 
   for (const name of names) {
-    const res = await run(name, ['-version'], { timeoutMs: 5000 }).catch(() => null);
-    // ImageMagick and ffmpeg both answer -version with 0. A missing binary
-    // rejects at spawn, which the catch turns into null.
+    const res = await run(name, [flag], { timeoutMs: 5000 }).catch(() => null);
+    // A missing binary rejects at spawn, which src/exec.ts reports as 127.
     if (res && res.code === 0) {
       probed.set(key, name);
       return name;
@@ -91,6 +95,10 @@ export async function loadSharp(): Promise<SharpFactory | null> {
 export const findMagick = () => findBinary(['magick', 'convert']);
 export const findFfmpeg = () => findBinary(['ffmpeg']);
 export const findFfprobe = () => findBinary(['ffprobe']);
+/* youtube-dl is accepted as a fallback name, but only as one: it still exists on
+ * plenty of boxes and still resolves a plain YouTube URL, and it is years
+ * behind on everything else. Preferring yt-dlp keeps that from being silent. */
+export const findYtDlp = () => findBinary(['yt-dlp', 'youtube-dl'], '--version');
 
 /**
  * Which image engine to use.
