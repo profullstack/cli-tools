@@ -34,8 +34,9 @@
 #   5. oh-my-zsh + plugins, oh-my-tmux, irssi configs
 #   6. mise      (curl https://mise.run | sh)
 #   7. moshcode  (curl https://moshcode.sh/install.sh | sh)
-#   8. motd from $MOTD_URL
-#   9. nginx per-user pages, per-user dev apps, TLS
+#   8. a per-user ssh-agent as a systemd user service
+#   9. motd from $MOTD_URL
+#  10. nginx per-user pages, per-user dev apps, TLS
 #
 # Usage, as root:
 #   ./root-ubuntu.sh                        # first run, or a refresh
@@ -2644,6 +2645,102 @@ update_moshcode_tools() {
 	return 0
 }
 
+# ------------------------------------------------------------- ssh agent ---
+
+# One ssh-agent per user, started by systemd, on a socket path that is the
+# same at every login: $XDG_RUNTIME_DIR/ssh-agent.socket.
+#
+# Why a unit and not a line in .zshrc. The shell-snippet version of this
+# ("start an agent if $SSH_AUTH_SOCK looks dead") starts a NEW agent per
+# shell, so every tmux pane and every reconnect gets its own, a key added in
+# one is invisible to the next, and the dead ones pile up until reboot.
+# systemd gives exactly one per user and restarts it if it dies.
+#
+# It goes in /etc/systemd/user enabled --global, rather than into each
+# ~/.config/systemd/user: one file to update, and accounts created later pick
+# it up without a re-run. Anyone who wants none of it can still turn it off
+# for themselves with `systemctl --user mask ssh-agent`, which outranks the
+# global enable -- so this is a default, not a policy.
+#
+# NOTHING here loads a key. Every key worth having is passphrased, and an
+# unattended root script is the last thing that should be asking for one.
+# Use `ssh-add` on first login, or AddKeysToAgent in your own ~/.ssh/config.
+install_ssh_agent() {
+	local agent unit=/etc/systemd/user/ssh-agent.service
+	local snippet=/etc/profile.d/ssh-agent.sh
+
+	agent="$(command -v ssh-agent)" || { warn "ssh-agent is not installed"; return 1; }
+	[[ -d /run/systemd/system ]] || { info "not running systemd -- skipping ssh-agent"; return 0; }
+
+	install -d -m 0755 /etc/systemd/user
+	write_if_changed "$unit" <<-EOF && note "ssh-agent user unit"
+		# managed by root-ubuntu.sh
+		[Unit]
+		Description=SSH authentication agent
+		Documentation=man:ssh-agent(1)
+
+		[Service]
+		Type=simple
+		Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+		# A socket left behind by a killed agent makes the next bind fail with
+		# "Address already in use", and then the unit never comes back.
+		ExecStartPre=-/bin/rm -f %t/ssh-agent.socket
+		ExecStart=$agent -D -a %t/ssh-agent.socket
+		Restart=on-failure
+		RestartSec=2
+
+		[Install]
+		WantedBy=default.target
+	EOF
+
+	# --global writes the wants symlink under /etc, so it covers accounts that
+	# do not exist yet. It starts nothing: the agent comes up with each user's
+	# manager at their next login, which is also when an edited unit is picked
+	# up -- there is no system-wide reload that reaches running user managers.
+	systemctl --global enable ssh-agent.service >/dev/null 2>&1 \
+		|| warn "could not enable ssh-agent.service globally"
+
+	# The unit sets SSH_AUTH_SOCK for services systemd starts, and a login
+	# shell is not one of those, so the shell has to be told where the socket
+	# is. Debian sources /etc/profile.d/*.sh from bash AND zsh login shells, so
+	# one file covers both -- zsh reads it under `emulate sh`, hence no bashisms.
+	# (write_if_changed installs a file, not a path, and a stripped-down image
+	# can be missing /etc/profile.d entirely.)
+	install -d -m 0755 /etc/profile.d
+	write_if_changed "$snippet" <<-'EOF' && note "ssh-agent profile snippet"
+		# managed by root-ubuntu.sh -- point this shell at the systemd ssh-agent.
+		#
+		# Only when there is not already a working agent. An inherited
+		# SSH_AUTH_SOCK is usually a forwarded one (ssh -A), and overwriting it
+		# would swap the keys you brought with you for the ones on this box.
+		# Set-but-dead is the reattached-tmux case, and that one is fair game.
+		if [ -z "${SSH_AUTH_SOCK:-}" ] || [ ! -S "${SSH_AUTH_SOCK:-}" ]; then
+		    _agent_sock="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/ssh-agent.socket"
+		    if [ -S "$_agent_sock" ]; then
+		        SSH_AUTH_SOCK="$_agent_sock"
+		        export SSH_AUTH_SOCK
+		    fi
+		    unset _agent_sock
+		fi
+	EOF
+	return 0
+}
+
+# Without lingering, the user manager stops when the last session ends and
+# takes the agent with it -- so a key added in one ssh session is gone by the
+# next, which is most of the point of running an agent at all. It is also what
+# keeps a detached tmux alive after logout.
+enable_ssh_agent_for() {
+	local login="$1"
+	[[ -d /run/systemd/system ]] || return 0
+	command -v loginctl >/dev/null || return 0
+	[[ "$(loginctl show-user "$login" -p Linger --value 2>/dev/null)" == yes ]] && return 0
+	loginctl enable-linger "$login" >/dev/null 2>&1 \
+		|| { warn "could not enable linger for $login"; return 1; }
+	note "$login: ssh-agent now persists between logins"
+	return 0
+}
+
 # ------------------------------------------------------------- tailscale ---
 
 # Joining a tailnet needs a credential. With TS_AUTHKEY it is unattended;
@@ -4270,10 +4367,16 @@ refresh_user() {
 	install_dotfiles "$home" "$login"
 	install_public_html "$home" "$login"
 	install_dev_apps_dir "$home" "$login"
+	enable_ssh_agent_for "$login"
 	# last word on permissions, after everything has written into the home
 	fix_home_permissions "$home" "$login" || warn "$login home permissions need attention"
 	return 0
 }
+
+# Before the accounts, so that the unit is already in place by the time
+# refresh_user turns on lingering for each of them.
+log "installing the ssh-agent user service"
+try "ssh-agent" install_ssh_agent
 
 if [[ ${#USERS[@]} -gt 0 ]]; then
 	log "creating users"
@@ -4295,6 +4398,8 @@ log "installing dotfiles for root"
 try "root dotfiles" install_dotfiles /root root
 # our .zshrc has a dedicated root prompt, so root runs zsh too
 try "root login shell -> zsh" ensure_zsh_shell root
+# root does not go through refresh_user, so it needs its own linger
+enable_ssh_agent_for root
 
 if [[ "$SKIP_TOOLS" == 1 ]]; then
 	log "skipping oh-my-zsh/mise/moshcode (--skip-tools)"
