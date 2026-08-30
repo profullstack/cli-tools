@@ -1979,14 +1979,33 @@ BASE_PACKAGES=(
 	# is amd64-only and comes from a .deb off the author's site, so there has
 	# to be something in apt that always works
 	lynx
-	# hardware sensors, for hqtui-demo and anything else that reads them.
-	# lm-sensors populates /sys/class/hwmon with temperatures, fan speeds and
-	# voltage rails; smartmontools reports drive temperature and health.
-	# On a VM these find nothing -- a KVM/Xen guest is not shown the host's
-	# thermal hardware, so there is no package that can make CPU temperature
-	# appear inside a Droplet or an EC2 instance. Installed anyway because the
-	# same script provisions bare metal, where they are exactly what is needed.
-	lm-sensors smartmontools
+	# Hardware sensors and inventory, for hqtui-demo and anything else that
+	# reads them. All of these only READ -- nothing here changes how the
+	# machine behaves, which is why thermald (a daemon that actively throttles)
+	# is deliberately not in the list.
+	#
+	#   lm-sensors   temperatures, fan speeds and voltage rails in /sys/class/hwmon
+	#   i2c-tools    the SMBus probing lm-sensors' detection relies on
+	#   smartmontools drive temperature and health over SMART
+	#   nvme-cli     the same for NVMe, which SMART does not cover
+	#   ipmitool     BMC sensors on server boards: fans, voltages, inlet temps
+	#   acpi         battery charge and ACPI thermal zones
+	#   powertop     measured power consumption per device
+	#   sysstat      iostat/mpstat/pidstat, for real I/O and per-CPU numbers
+	#   dmidecode    what the board says it is (DMI/SMBIOS)
+	#   lshw         a full hardware inventory in one command
+	#   pciutils     lspci
+	#   usbutils     lsusb
+	#
+	# On a VM most of these find nothing. A KVM/Xen guest is not shown the
+	# host's thermal hardware, so no package makes CPU temperature appear
+	# inside a Droplet or an EC2 instance -- sensors-detect there prints
+	# "Sorry, no sensors were detected." They go in anyway because the same
+	# script provisions bare metal, where they are exactly what is needed.
+	# hddtemp is not here on purpose: it was dropped from Debian and Ubuntu,
+	# and smartmontools/nvme-cli cover what it used to do.
+	lm-sensors i2c-tools smartmontools nvme-cli ipmitool acpi powertop
+	sysstat dmidecode lshw pciutils usbutils
 )
 
 # Load the kernel modules that expose temperatures, fans and voltages under
@@ -2018,6 +2037,11 @@ configure_sensors() {
 		info "hardware sensors already available under /sys/class/hwmon"
 		return 0
 	fi
+
+	# sensors-detect probes SMBus adapters through /dev/i2c-*, which only exist
+	# once i2c-dev is loaded. It offers to load the module itself, but --auto
+	# takes the default answer, and the default is no.
+	modprobe i2c-dev 2>/dev/null || true
 
 	# --auto answers every prompt with the safe default and loads what it finds.
 	if sensors-detect --auto >/dev/null 2>&1; then
