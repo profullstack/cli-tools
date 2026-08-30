@@ -30,13 +30,14 @@
 #      automatically and refreshed
 #   2. apt update/upgrade + unattended security updates
 #   3. ufw
-#   4. dotfiles (.zsh*, .bash*, .ssh*, ...) from $DOTFILES_REPO, if you have one
-#   5. oh-my-zsh + plugins, oh-my-tmux, irssi configs
-#   6. mise      (curl https://mise.run | sh)
-#   7. moshcode  (curl https://moshcode.sh/install.sh | sh)
-#   8. a per-user ssh-agent as a systemd user service
-#   9. motd from $MOTD_URL
-#  10. nginx per-user pages, per-user dev apps, TLS
+#   4. a 2G swapfile, if the box has no swap at all
+#   5. dotfiles (.zsh*, .bash*, .ssh*, ...) from $DOTFILES_REPO, if you have one
+#   6. oh-my-zsh + plugins, oh-my-tmux, irssi configs
+#   7. mise      (curl https://mise.run | sh)
+#   8. moshcode  (curl https://moshcode.sh/install.sh | sh)
+#   9. a per-user ssh-agent as a systemd user service
+#  10. motd from $MOTD_URL
+#  11. nginx per-user pages, per-user dev apps, TLS
 #
 # Usage, as root:
 #   ./root-ubuntu.sh                        # first run, or a refresh
@@ -94,6 +95,9 @@
 #
 # Env overrides:
 #   SSH_PORT=22    port to open in ufw
+#   SWAP_SIZE=2G   swapfile to create when the box has no swap (0 = never)
+#   SWAP_FILE=/swapfile   where that file goes
+#   SWAPPINESS=10  vm.swappiness once there is swap to speak of
 #   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
 #   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed
 #                  (default sudo,admin). An unattended run never prompts, so
@@ -2185,6 +2189,141 @@ else
 fi
 try "enable ufw at boot" systemctl enable ufw
 ufw status verbose || true
+
+# ------------------------------------------------------------------ swap ---
+#
+# A box with no swap has no slack. The kernel's only answer to a memory spike
+# is the OOM killer, and what it picks is whatever was biggest -- on these
+# boxes, the build, the language server, or the editor someone was working in.
+# 2G of swap does not make a small box a big one; it turns "the process died"
+# into "that got slow for a moment", which is the difference between losing an
+# afternoon and noticing nothing.
+#
+# Deliberately a swap FILE and not a partition: provider images arrive with the
+# whole disk given to /, so there is no partition to make, and a file can be
+# resized or removed on a live box.
+SWAP_SIZE="${SWAP_SIZE:-2G}"          # 0 disables; the box keeps whatever it has
+SWAP_FILE="${SWAP_FILE:-/swapfile}"
+# 60 (the default) treats swap as another tier of memory and pages out things
+# that are still being used. 10 keeps it as the safety net it is meant to be.
+SWAPPINESS="${SWAPPINESS:-10}"
+
+# 2G / 2048M / 2 (G assumed) -> megabytes
+_size_mb() {
+	local s="${1^^}"
+	[[ "$s" =~ ^([0-9]+)([GM]?)$ ]] || return 1
+	case "${BASH_REMATCH[2]}" in
+		M) printf '%s' "${BASH_REMATCH[1]}" ;;
+		*) printf '%s' "$(( BASH_REMATCH[1] * 1024 ))" ;;
+	esac
+}
+
+_swap_sysctl() {
+	write_if_changed /etc/sysctl.d/60-profullstack-swap.conf <<EOF || return 0
+# Managed by root-ubuntu.sh. Swap here is headroom for spikes, not a memory
+# tier -- page out late, and only under real pressure.
+vm.swappiness = $SWAPPINESS
+EOF
+	sysctl -q -p /etc/sysctl.d/60-profullstack-swap.conf 2>/dev/null || true
+	note "vm.swappiness=$SWAPPINESS"
+}
+
+configure_swap() {
+	local file="$SWAP_FILE" dir want_mb avail_mb fstype virt name type size _rest
+
+	if [[ -z "$SWAP_SIZE" || "$SWAP_SIZE" == 0 ]]; then
+		info "swap disabled (SWAP_SIZE=$SWAP_SIZE) -- leaving this box as it is"
+		return 0
+	fi
+
+	# Somebody else's swap counts. A swapfile stacked on top of a swap
+	# partition or a zram device is not extra safety, it is a file nobody
+	# remembers making.
+	if swapon --show=NAME --noheadings 2>/dev/null | grep -q .; then
+		while read -r name type size _rest; do
+			info "swap already active: $name ($type, $size)"
+		done < <(swapon --show=NAME,TYPE,SIZE --noheadings 2>/dev/null)
+		_swap_sysctl
+		return 0
+	fi
+
+	# Containers share the host kernel, and its swap is the host's business.
+	# swapon in here either fails outright or is refused by the cgroup after
+	# the file has already been written.
+	virt="$(systemd-detect-virt --container 2>/dev/null)"
+	if [[ -n "$virt" && "$virt" != none ]]; then
+		info "inside a $virt container -- swap belongs to the host"
+		return 0
+	fi
+
+	dir="$(dirname "$file")"
+	fstype="$(df --output=fstype "$dir" 2>/dev/null | tail -1)"
+	case "$fstype" in
+		btrfs)
+			warn "no swapfile: btrfs needs one built its own way (chattr +C, no compression, no snapshots)"
+			return 0 ;;
+		zfs)
+			warn "no swapfile: a swapfile on zfs can deadlock the box -- use a zvol"
+			return 0 ;;
+	esac
+
+	want_mb="$(_size_mb "$SWAP_SIZE")" || {
+		warn "swap: cannot read SWAP_SIZE=$SWAP_SIZE (want something like 2G or 2048M)"
+		return 1
+	}
+
+	# Filling the root disk to buy memory headroom is a bad trade: a full /
+	# breaks things a memory spike would not have touched.
+	avail_mb="$(df -BM --output=avail "$dir" 2>/dev/null | tail -1 | tr -dc '0-9')"
+	if [[ -n "$avail_mb" ]] && (( avail_mb < want_mb + 2048 )); then
+		warn "swap: ${avail_mb}M free on $dir, need ${want_mb}M plus headroom -- skipping"
+		return 0
+	fi
+
+	[[ -e "$file" && ! -f "$file" ]] && { warn "swap: $file exists and is not a file"; return 1; }
+
+	log "creating ${SWAP_SIZE} of swap at $file"
+	# fallocate is instant, but on some filesystems it leaves unwritten extents
+	# that mkswap then refuses. dd always works and is only slow the once, so
+	# it is both the fallback and the retry.
+	rm -f "$file"
+	fallocate -l "${want_mb}M" "$file" 2>/dev/null \
+		|| dd if=/dev/zero of="$file" bs=1M count="$want_mb" status=none \
+		|| { warn "swap: could not allocate $file"; rm -f "$file"; return 1; }
+	# World-readable swap is every secret the machine has ever paged out, so
+	# the mode goes on first and on its own -- chained behind a chown, one
+	# failure there would leave the file readable and mkswap would still be
+	# happy with it.
+	chmod 0600 "$file"
+	chown root:root "$file"
+	if ! mkswap "$file" >/dev/null 2>&1; then
+		# the unwritten-extents case: write the bytes for real, then try once more
+		dd if=/dev/zero of="$file" bs=1M count="$want_mb" status=none
+		chmod 0600 "$file"
+		if ! mkswap "$file" >/dev/null 2>&1; then
+			warn "swap: mkswap failed on $file"
+			rm -f "$file"
+			return 1
+		fi
+	fi
+	swapon "$file" || { warn "swap: swapon failed on $file"; rm -f "$file"; return 1; }
+	note "${SWAP_SIZE} swap at $file"
+
+	# ...and again after a reboot. Matched on the path, so an entry someone has
+	# since edited (different options, a different priority) is left alone.
+	if awk -v f="$file" '$1 == f && $3 == "swap" { found = 1 } END { exit !found }' /etc/fstab; then
+		info "fstab already brings $file up at boot"
+	else
+		printf '%-16s none            swap    sw              0       0\n' "$file" >>/etc/fstab \
+			&& note "fstab: $file"
+	fi
+
+	_swap_sysctl
+	return 0
+}
+
+log "configuring swap"
+try "swap" configure_swap
 
 # ------------------------------------------------------------------ motd ---
 
@@ -4549,6 +4688,8 @@ info "open: $(ufw status | awk '/ALLOW/{printf "%s ", $1}')"
 info "mosh: $(command -v mosh-server >/dev/null && echo "$(mosh-server --version 2>&1 | head -1)" || echo 'MISSING')"
 info "tail: $(tailscale ip -4 2>/dev/null | head -1 || echo 'not joined to a tailnet')"
 info "motd: $([[ -s $MOTD_CACHE ]] && echo "cached ($(wc -l <"$MOTD_CACHE") lines)" || echo 'empty')"
+info "ram:  $(free -h | awk '/^Mem:/{printf "%s total, %s available", $2, $7}')"
+info "swap: $(swapon --show=NAME,SIZE --noheadings 2>/dev/null | awk '{printf "%s (%s) ", $1, $2}' | grep . || echo 'NONE -- one memory spike from the OOM killer')"
 echo
 printf '    %-12s %-6s %-6s %-9s %-6s %-5s %s\n' USER OMZ MISE MOSHCODE TMUX APPS SHELL
 while read -r login; do
