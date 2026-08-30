@@ -43,6 +43,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-prs': 'Every open PR across the owners you name',
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
+  hqtui: 'Every vital of this box, in the terminal: sockets, HTTP, sessions, services',
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
   sysupdate: 'Update this box: apt lists, apt packages, snaps',

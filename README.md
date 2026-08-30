@@ -938,6 +938,59 @@ watch directory (`--watch`, `$TORLINK_WATCH`) as the offline handoff. How long
 it seeds for is a torlnk daemon setting (`--seed-time`), not a per-torrent one;
 left alone, it seeds indefinitely.
 
+### `hqtui`
+
+Every server's vitals, in the terminal —
+[HQTUI](https://hqtui.com)'s dashboard, wrapped so it is a command:
+
+```sh
+hqtui                        # this machine, live
+hqtui --sim                  # the deterministic simulation
+hqtui --screen traffic       # open on a screen
+hqtui --help                 # it is upstream's CLI: upstream's flags
+```
+
+Ten screens. Beyond the usual CPU, memory, disks and processes it reads things
+a system monitor normally leaves alone: live sockets grouped by protocol,
+TCP/UDP/ICMP counters with a retransmit rate, HTTP requests parsed out of
+nginx/apache access logs, sshd authentication events, who is logged in, login
+history from wtmp, systemd units, containers, kernel counters and filesystem
+inode usage.
+
+All of that unprivileged. `sudo` additionally exposes socket process names,
+failed logins from btmp, access logs and the full journal — and `sudo` drops
+your `PATH`, so:
+
+```sh
+sudo -E env "PATH=$PATH" hqtui
+```
+
+It does not add temperatures. On a virtual machine there are none to add: a
+KVM or Xen guest is never shown the host's thermal hardware, and the dashboard
+says which case it is rather than leaving the panel blank. On bare metal,
+`root-ubuntu.sh` installs lm-sensors and runs `sensors-detect` for exactly this
+reason.
+
+Two flags are ours, spelled `--self-*` because every plain word belongs to the
+dashboard:
+
+```sh
+hqtui --self-update          # reinstall the latest release
+hqtui --self-where           # which copy runs, and from where
+```
+
+**The first run installs it**, with `pnpm` and with `npm` when pnpm is absent
+or fails. It lands in `~/.local/share/cli-tools/vendor/hqtui`, not globally,
+and here that matters more than usual: two published packages carry a colliding
+executable. `@profullstack/hqtui-demo` installs `hqtui-demo`, and the library
+`@profullstack/hqtui` installs `hqtui` — the same name as this wrapper. A
+private prefix means each name exists exactly once. `HQTUI_BIN` points at a
+copy you would rather run, and `HQTUI_SPEC` pins the version installed.
+
+Installed rather than `npx`-ed each time for the reason a monitor exists: the
+box you are SSHing into because something is wrong is the worst possible moment
+to need the registry before you can look at it.
+
 ### `codeburn`
 
 Where your AI spend actually went — [codeburn](https://www.npmjs.com/package/codeburn),
