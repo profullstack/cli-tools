@@ -80,13 +80,14 @@ downloads the release tarball and checks the published sha256, and if any of
 that fails it warns and moves on rather than failing an install that otherwise
 worked. Authenticate it once with `stripe login`.
 
-It also installs the **companions** — two commands this set ships but does not
-implement, because they are published on npm in their own right:
+It also installs the **companions** — commands this set ships but does not
+implement, because they are distributed in their own right:
 
 | | |
 | --- | --- |
 | `timer` | [`@profullstack/timer`](https://github.com/profullstack/timer) — track time against projects, for people and for agents |
 | `billing` | [`@profullstack/billing`](https://github.com/profullstack/billing) — clients, rates and invoices from the hours the timer tracked |
+| `diskpush` | [diskpush.com](https://diskpush.com) — browse servers like FileZilla, transfer with rsync; incremental, resumable, server-to-server |
 
 They are not `bin/*.ts` like everything else here for a reason: they run on
 Windows, which this install cannot (it is symlinks into a git checkout executed
@@ -95,9 +96,15 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-`npm install -g` is idempotent, which is what lets install, re-install and
-update be the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and an npm
-failure warns rather than failing the install.
+The first two come from npm. `diskpush` comes from its own installer, which is
+not a lesser arrangement: one command places a desktop application and a CLI
+together and decides between them by what the machine can actually run. Here it
+is installed with `--cli-only`, because a command-line toolbelt asking for a
+server should not be answered with 100MB of Electron.
+
+Both kinds are idempotent, which is what lets install, re-install and update be
+the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and a failure warns
+rather than failing the install.
 
 With moshcode on the box, the same thing:
 

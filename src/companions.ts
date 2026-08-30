@@ -18,24 +18,52 @@
  * what lets install, re-install and update all be the same command.
  */
 
+/**
+ * How a companion gets onto the machine.
+ *
+ * `npm` covers anything published to the registry. `script` covers the ones
+ * distributed as an installer instead, which is not a lesser choice: an
+ * installer can place a desktop application and a command together, decide
+ * between them by what the machine can actually run, and needs no Node on the
+ * box at all. Both are idempotent, which is what lets install, re-install and
+ * update stay the same command.
+ */
+export type InstallMethod =
+  | { kind: 'npm'; package: string }
+  | { kind: 'script'; url: string; args?: readonly string[] };
+
 export interface Companion {
   /** The binary the package puts on PATH. */
   name: string;
-  /** What to hand `npm install -g`. */
-  package: string;
+  install: InstallMethod;
   summary: string;
+  /** Where to read about it, for the message printed when installing fails. */
+  home: string;
 }
 
 export const COMPANIONS: readonly Companion[] = [
   {
     name: 'timer',
-    package: '@profullstack/timer',
+    install: { kind: 'npm', package: '@profullstack/timer' },
     summary: 'Track time against projects, for people and for agents',
+    home: 'https://github.com/profullstack/timer',
   },
   {
     name: 'billing',
-    package: '@profullstack/billing',
+    install: { kind: 'npm', package: '@profullstack/billing' },
     summary: 'Clients, rates and invoices from the hours the timer tracked',
+    home: 'https://github.com/profullstack/billing',
+  },
+  {
+    name: 'diskpush',
+    // Not on npm, and not only a Node package: the installer places the
+    // desktop app too when the machine has a desktop to run it on, and the CLI
+    // it installs runs on the Node inside that app, so a desktop install needs
+    // no system Node. `--cli-only` is what makes it a companion here rather
+    // than a 100MB surprise on a server.
+    install: { kind: 'script', url: 'https://diskpush.com/install.sh', args: ['--cli-only'] },
+    summary: 'Browse servers like FileZilla, transfer with rsync — incremental, resumable, server-to-server',
+    home: 'https://diskpush.com',
   },
 ];
 
@@ -44,15 +72,37 @@ export function findCompanion(name: string): Companion | null {
   return COMPANIONS.find((entry) => entry.name === key) ?? null;
 }
 
+export interface InstallCommand {
+  command: string;
+  args: string[];
+  /** How a person would run it, for the message when it fails. */
+  display: string;
+}
+
 /**
- * What `npm install -g` should be handed.
+ * The command that installs a companion.
  *
- * `@latest` is explicit on an update because a bare `npm install -g <pkg>` will
- * happily leave an already-satisfied version in place; naming the tag is what
- * makes "update" mean it.
+ * For npm, `@latest` is explicit on an update because a bare
+ * `npm install -g <pkg>` will happily leave an already-satisfied version in
+ * place; naming the tag is what makes "update" mean it. A script installer is
+ * already idempotent and upgrades in place, so there is nothing to add.
  */
-export function installArgs(companion: Companion, { latest = false } = {}): string[] {
-  return ['install', '-g', latest ? `${companion.package}@latest` : companion.package];
+export function installCommand(companion: Companion, { latest = false } = {}): InstallCommand {
+  if (companion.install.kind === 'npm') {
+    const spec = latest ? `${companion.install.package}@latest` : companion.install.package;
+    return { command: 'npm', args: ['install', '-g', spec], display: `npm install -g ${spec}` };
+  }
+
+  const { url, args = [] } = companion.install;
+  // Piped into sh the same way the project documents it, so this and a manual
+  // install take the same path and cannot drift apart.
+  const line = args.length > 0 ? `curl -fsSL ${url} | sh -s -- ${args.join(' ')}` : `curl -fsSL ${url} | sh`;
+  return { command: 'sh', args: ['-c', line], display: line };
+}
+
+/** The package or url a companion comes from, for display. */
+export function source(companion: Companion): string {
+  return companion.install.kind === 'npm' ? companion.install.package : companion.install.url;
 }
 
 export type CompanionState = 'installed' | 'missing';
@@ -107,7 +157,7 @@ export function ensure(
     list = COMPANIONS,
   }: {
     onPath: (name: string) => string | null;
-    run: (args: string[]) => { status: number | null; stderr?: string };
+    run: (command: InstallCommand) => { status: number | null; stderr?: string };
     latest?: boolean;
     list?: readonly Companion[];
   },
@@ -119,7 +169,7 @@ export function ensure(
       results.push({ ...companion, state: 'installed', path: found, action: 'present' });
       continue;
     }
-    const outcome = run(installArgs(companion, { latest }));
+    const outcome = run(installCommand(companion, { latest }));
     if (outcome.status === 0) {
       const after = onPath(companion.name);
       results.push({
@@ -142,7 +192,9 @@ export function ensure(
       state: found ? 'installed' : 'missing',
       path: found,
       action: 'failed',
-      message: (outcome.stderr ?? '').trim().split('\n').at(-1) || `npm exited ${outcome.status}`,
+      message:
+        (outcome.stderr ?? '').trim().split('\n').at(-1) ||
+        `${installCommand(companion, { latest }).command} exited ${outcome.status}`,
     });
   }
   return results;

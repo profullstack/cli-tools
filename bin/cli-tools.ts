@@ -51,7 +51,13 @@ import {
   resolveCommand,
   whichOnPath,
 } from '../src/registry.ts';
-import { COMPANIONS, ensure as ensureCompanions, statuses as companionStatuses } from '../src/companions.ts';
+import {
+  COMPANIONS,
+  ensure as ensureCompanions,
+  installCommand,
+  source as companionSource,
+  statuses as companionStatuses,
+} from '../src/companions.ts';
 
 export const USAGE = `Usage:
   cli-tools list
@@ -133,9 +139,9 @@ function runLinks(root: string, args: readonly string[]): number {
 function installCompanions({ latest = false, quiet = false } = {}): ReturnType<typeof ensureCompanions> {
   const results = ensureCompanions({
     onPath: (name) => whichOnPath(name),
-    run: (args) => {
-      const out = spawnSync('npm', args, { encoding: 'utf8' });
-      if (out.error) return { status: 1, stderr: `npm is not available: ${out.error.message}` };
+    run: ({ command, args }) => {
+      const out = spawnSync(command, args, { encoding: 'utf8' });
+      if (out.error) return { status: 1, stderr: `${command} is not available: ${out.error.message}` };
       return { status: out.status, stderr: out.stderr };
     },
     latest,
@@ -144,15 +150,14 @@ function installCompanions({ latest = false, quiet = false } = {}): ReturnType<t
   if (quiet) return results;
   for (const entry of results) {
     if (entry.action === 'present') continue;
+    const from = companionSource(entry);
     if (entry.action === 'installed') {
-      process.stderr.write(
-        `${entry.name}: ${entry.message ? `${entry.package} ${entry.message}` : `installed ${entry.package}`}\n`,
-      );
+      process.stderr.write(`${entry.name}: ${entry.message ? `${from} ${entry.message}` : `installed ${from}`}\n`);
       continue;
     }
     process.stderr.write(
-      `${entry.name}: could not install ${entry.package} — ${entry.message}\n` +
-        `         install it yourself with: npm install -g ${entry.package}\n`,
+      `${entry.name}: could not install ${from} — ${entry.message}\n` +
+        `         install it yourself with: ${installCommand(entry, { latest }).display}\n`,
     );
   }
   return results;
@@ -753,7 +758,7 @@ export async function run(argv: readonly string[]): Promise<number> {
       for (const entry of companionStatuses((name) => whichOnPath(name))) {
         const mark = entry.state === 'installed' ? '*' : ' ';
         process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
-        process.stdout.write(`${' '.repeat(19)}${entry.package}\n`);
+        process.stdout.write(`${' '.repeat(19)}${companionSource(entry)}\n`);
       }
       process.stdout.write('\nInstall or update them with `cli-tools companions --install`.\n');
       return 0;

@@ -4,7 +4,8 @@ import {
   COMPANIONS,
   ensure,
   findCompanion,
-  installArgs,
+  installCommand,
+  source,
   statuses,
   type Companion,
 } from '../src/companions.ts';
@@ -14,47 +15,84 @@ const present = (...names: string[]) => (name: string) =>
 const nothing = () => null;
 
 describe('the companion list', () => {
-  it('names the timer and billing packages', () => {
-    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing']);
-    expect(COMPANIONS.map((c) => c.package)).toEqual([
-      '@profullstack/timer',
-      '@profullstack/billing',
-    ]);
+  it('names the commands that come from elsewhere', () => {
+    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'diskpush']);
   });
 
-  it('gives every companion a scoped package and a summary', () => {
+  it('gives every companion a summary and somewhere to read about it', () => {
     for (const companion of COMPANIONS) {
-      expect(companion.package.startsWith('@profullstack/'), companion.name).toBe(true);
       expect(companion.summary.length, companion.name).toBeGreaterThan(0);
+      expect(companion.home.startsWith('https://'), companion.name).toBe(true);
+    }
+  });
+
+  it('names an npm companion by a scoped package matching its binary', () => {
+    for (const companion of COMPANIONS) {
+      if (companion.install.kind !== 'npm') continue;
+      expect(companion.install.package.startsWith('@profullstack/'), companion.name).toBe(true);
       // The binary name is not derivable from the package name in general, so
-      // it is stated; this holds it to the one case we actually ship.
-      expect(companion.package.endsWith(`/${companion.name}`), companion.name).toBe(true);
+      // it is stated; this holds it to the cases we actually ship.
+      expect(companion.install.package.endsWith(`/${companion.name}`), companion.name).toBe(true);
+    }
+  });
+
+  it('gives a script companion an https installer', () => {
+    for (const companion of COMPANIONS) {
+      if (companion.install.kind !== 'script') continue;
+      expect(companion.install.url.startsWith('https://'), companion.name).toBe(true);
     }
   });
 
   it('resolves a companion by name, case-insensitively', () => {
-    expect(findCompanion('timer')?.package).toBe('@profullstack/timer');
-    expect(findCompanion('BILLING')?.package).toBe('@profullstack/billing');
+    expect(source(findCompanion('timer')!)).toBe('@profullstack/timer');
+    expect(source(findCompanion('BILLING')!)).toBe('@profullstack/billing');
+    expect(source(findCompanion('DiskPush')!)).toBe('https://diskpush.com/install.sh');
     expect(findCompanion('nonsense')).toBeNull();
     expect(findCompanion('')).toBeNull();
   });
 });
 
-describe('installArgs', () => {
-  const timer = COMPANIONS[0] as Companion;
+describe('installCommand', () => {
+  const timer = findCompanion('timer') as Companion;
+  const diskpush = findCompanion('diskpush') as Companion;
 
-  it('installs the package globally', () => {
-    expect(installArgs(timer)).toEqual(['install', '-g', '@profullstack/timer']);
+  it('installs an npm companion globally', () => {
+    expect(installCommand(timer)).toMatchObject({
+      command: 'npm',
+      args: ['install', '-g', '@profullstack/timer'],
+    });
   });
 
   it('names @latest on an update, because a bare install would be a no-op', () => {
     // `npm install -g <pkg>` leaves an already-satisfied version alone, so
     // without the tag `cli-tools update` would silently never move them.
-    expect(installArgs(timer, { latest: true })).toEqual([
+    expect(installCommand(timer, { latest: true }).args).toEqual([
       'install',
       '-g',
       '@profullstack/timer@latest',
     ]);
+  });
+
+  it('pipes a script companion into sh, the way its project documents it', () => {
+    const command = installCommand(diskpush);
+    expect(command.command).toBe('sh');
+    expect(command.args[0]).toBe('-c');
+    expect(command.args[1]).toBe('curl -fsSL https://diskpush.com/install.sh | sh -s -- --cli-only');
+  });
+
+  it('installs the CLI only, so a server does not get a desktop app', () => {
+    // The installer would otherwise place ~100MB of Electron wherever it finds
+    // a desktop session, which is not what a command-line toolbelt asked for.
+    expect(installCommand(diskpush).display).toContain('--cli-only');
+  });
+
+  it('adds nothing for a script companion on update: its installer upgrades in place', () => {
+    expect(installCommand(diskpush, { latest: true })).toEqual(installCommand(diskpush));
+  });
+
+  it('shows the command a person would run', () => {
+    expect(installCommand(timer).display).toBe('npm install -g @profullstack/timer');
+    expect(installCommand(diskpush).display.startsWith('curl -fsSL ')).toBe(true);
   });
 });
 
@@ -64,6 +102,7 @@ describe('statuses', () => {
     expect(rows.map((r) => [r.name, r.state])).toEqual([
       ['timer', 'installed'],
       ['billing', 'missing'],
+      ['diskpush', 'missing'],
     ]);
     expect(rows[0]?.path).toBe('/usr/local/bin/timer');
     expect(rows[1]?.path).toBeNull();
@@ -74,11 +113,11 @@ describe('ensure', () => {
   it('leaves an installed companion alone', () => {
     // It may be a newer version, a local build, or a fork somebody is testing.
     // Reinstalling over it is the surprise `link` refuses for symlinks.
-    const calls: string[][] = [];
+    const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing'),
-      run: (args) => {
-        calls.push(args);
+      onPath: present('timer', 'billing', 'diskpush'),
+      run: ({ display }) => {
+        calls.push(display);
         return { status: 0 };
       },
     });
@@ -87,47 +126,49 @@ describe('ensure', () => {
   });
 
   it('installs only what is missing', () => {
-    const calls: string[][] = [];
-    const installed = new Set<string>(['timer']);
+    const calls: string[] = [];
+    const installed = new Set<string>(['timer', 'diskpush']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
-      run: (args) => {
-        calls.push(args);
+      run: ({ display }) => {
+        calls.push(display);
         installed.add('billing');
         return { status: 0 };
       },
     });
-    expect(calls).toEqual([['install', '-g', '@profullstack/billing']]);
+    expect(calls).toEqual(['npm install -g @profullstack/billing']);
   });
 
   it('reinstalls everything at @latest when asked', () => {
-    const calls: string[][] = [];
+    const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing'),
-      run: (args) => {
-        calls.push(args);
+      onPath: present('timer', 'billing', 'diskpush'),
+      run: ({ display }) => {
+        calls.push(display);
         return { status: 0 };
       },
       latest: true,
     });
     expect(calls).toEqual([
-      ['install', '-g', '@profullstack/timer@latest'],
-      ['install', '-g', '@profullstack/billing@latest'],
+      'npm install -g @profullstack/timer@latest',
+      'npm install -g @profullstack/billing@latest',
+      // A script installer upgrades in place, so there is no @latest to add.
+      'curl -fsSL https://diskpush.com/install.sh | sh -s -- --cli-only',
     ]);
   });
 
   it('keeps going after a failure, and says which package and why', () => {
     // npm fails for ordinary reasons — no npm, a read-only prefix, no network —
     // and none of them are a reason for the rest of `cli-tools link` to stop.
-    const attempted: string[][] = [];
+    const attempted: string[] = [];
     const results = ensure({
       onPath: nothing,
-      run: (args) => {
-        attempted.push(args);
+      run: ({ display }) => {
+        attempted.push(display);
         return { status: 1, stderr: 'npm ERR! code EACCES\nnpm ERR! permission denied' };
       },
     });
-    expect(attempted).toHaveLength(2);
+    expect(attempted).toHaveLength(COMPANIONS.length);
     expect(results.every((r) => r.action === 'failed')).toBe(true);
     expect(results[0]?.message).toBe('npm ERR! permission denied');
     expect(results[0]?.state).toBe('missing');
