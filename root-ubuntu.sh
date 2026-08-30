@@ -1975,7 +1975,59 @@ BASE_PACKAGES=(
 	# is amd64-only and comes from a .deb off the author's site, so there has
 	# to be something in apt that always works
 	lynx
+	# hardware sensors, for hqtui-demo and anything else that reads them.
+	# lm-sensors populates /sys/class/hwmon with temperatures, fan speeds and
+	# voltage rails; smartmontools reports drive temperature and health.
+	# On a VM these find nothing -- a KVM/Xen guest is not shown the host's
+	# thermal hardware, so there is no package that can make CPU temperature
+	# appear inside a Droplet or an EC2 instance. Installed anyway because the
+	# same script provisions bare metal, where they are exactly what is needed.
+	lm-sensors smartmontools
 )
+
+# Load the kernel modules that expose temperatures, fans and voltages under
+# /sys/class/hwmon, which is where every monitoring tool reads them from.
+#
+# Only worth doing on bare metal. A virtual machine is not given the host's
+# thermal hardware, so sensors-detect probes a machine with no sensor chips on
+# it, finds nothing, and writes an empty /etc/modules config -- noise, and a
+# misleading one, because it looks like the detection failed rather than like
+# there was nothing to detect. `systemd-detect-virt` answers that in one call.
+configure_sensors() {
+	local virt=""
+
+	if ! command -v sensors-detect >/dev/null 2>&1; then
+		info "lm-sensors not installed -- skipping sensor detection"
+		return 0
+	fi
+
+	if command -v systemd-detect-virt >/dev/null 2>&1; then
+		virt="$(systemd-detect-virt 2>/dev/null || true)"
+	fi
+	if [[ -n "$virt" && "$virt" != none ]]; then
+		info "running under $virt -- no thermal hardware is exposed to guests, skipping sensors-detect"
+		return 0
+	fi
+
+	# Already detected: hwmon has entries with real inputs in them.
+	if compgen -G "/sys/class/hwmon/hwmon*/temp*_input" >/dev/null 2>&1; then
+		info "hardware sensors already available under /sys/class/hwmon"
+		return 0
+	fi
+
+	# --auto answers every prompt with the safe default and loads what it finds.
+	if sensors-detect --auto >/dev/null 2>&1; then
+		systemctl restart kmod 2>/dev/null || true
+		if compgen -G "/sys/class/hwmon/hwmon*/temp*_input" >/dev/null 2>&1; then
+			note "hardware sensors detected"
+		else
+			info "sensors-detect found no supported chips on this machine"
+		fi
+	else
+		warn "sensors-detect failed -- temperatures will be unavailable"
+	fi
+	return 0
+}
 
 # "You can download the latest release (v0.4.4)" on the homepage
 chawan_latest_version() {
@@ -2077,6 +2129,9 @@ apt_stage() {
 	# outside apt, so it gets its own step rather than a package name
 	log "installing chawan (TUI browser)"
 	try "chawan" install_chawan
+
+	log "detecting hardware sensors"
+	try "sensors" configure_sensors
 
 	log "enabling unattended security upgrades"
 	write_if_changed /etc/apt/apt.conf.d/20auto-upgrades <<'EOF' && note "20auto-upgrades"
