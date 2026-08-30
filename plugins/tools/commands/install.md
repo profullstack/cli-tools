@@ -48,6 +48,7 @@ The installer clones to `~/.local/share/cli-tools` (override with
 | `gh-prs-fix-all` | Repair the open scan PRs that are broken because of us |
 | `gh-prs-merge` | Squash-merge the PRs that are genuinely ready |
 | `img` | Resize, convert and inspect images, with sharp or ImageMagick |
+| `sysupdate` | Update this box: apt lists, apt packages, snaps |
 | `tcfeed` | Find repositories worth scanning, scan them, print a shortlist |
 | `tts` | Read text aloud and keep the audio |
 | `vid` | Inspect, thumbnail, clip and shrink video, through ffmpeg |
@@ -100,8 +101,10 @@ asked with `--fix`. Taking it over silently changes what a merge run does.
 | `/blog` | `blog-post` |
 | `/free` | `domainfree` |
 | `/merge` | `gh-prs-merge --apply` |
+| `/names` | `free-names` |
 | `/prs` | `gh-prs` |
 | `/speak` | `tts` |
+| `/update` | `sysupdate` |
 | `/web` | `ask-web` |
 | `/whois` | `domainjson` |
 
@@ -114,6 +117,13 @@ An alias you already bound is never overwritten — the collision is reported an
 yours is kept. The pit re-reads the file on every lookup, so an open pit picks
 them up with no restart. Arguments append rather than substitute, so
 `/merge --limit 5` works.
+
+`/update` runs `sysupdate`, which updates the *machine* — apt lists, apt
+packages, snaps. It is not `cli-tools update`, which moves this checkout to the
+current commit. That is why the command is called `sysupdate` rather than
+`update`: `update` is already a dispatcher verb, and a verb wins over the
+passthrough, so a command of that name would be unreachable through
+`cli-tools` and would fail the test that says so.
 
 None of these shares a name with a command, deliberately. A shell function beats
 `PATH`, so an alias named after the file it wraps silently shadows it and the

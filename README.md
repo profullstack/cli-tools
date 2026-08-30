@@ -25,6 +25,7 @@ TypeScript, installed as executables on `PATH`.
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
+| [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -46,6 +47,9 @@ One thing here is not a `PATH` command and does not need Node:
   best single stream and says so
 - **[`yt-dlp`](https://github.com/yt-dlp/yt-dlp)** — `dl` only
   (`moshcode install yt-dlp`, `pipx install yt-dlp`, `brew install yt-dlp`)
+- **`apt`, and `sudo` unless you are root** — `sysupdate` only, and the one
+  command here that is not portable: it updates Debian and Ubuntu boxes and
+  refuses anything else. `snap` is optional; without snapd that step is skipped
 - **[`create-torrent`](https://www.npmjs.com/package/create-torrent)** — `torrent`
   only (`npm i -g create-torrent`); `torrent seed` additionally needs
   [torlnk](https://www.npmjs.com/package/torlnk) running
@@ -121,7 +125,7 @@ Check what landed, and wire up the pit aliases:
 cli-tools list                 # * runs from here, ! is shadowed by another copy
 cli-tools companions           # the two from npm, and whether they are on PATH
 cli-tools companions --install # install the missing ones (--force updates all)
-cli-tools aliases --install    # /aff /blog /free /merge /names /prs /speak /web /whois
+cli-tools aliases --install    # /aff /blog /free /merge /names /prs /speak /update /web /whois
 cli-tools config               # API keys: what is set, and where it came from
 cli-tools update               # git pull, reinstall, relink, update companions
 cli-tools autoupdate --install # …or have a timer do that daily
@@ -1001,6 +1005,47 @@ the only thing on stdout, so it pipes.
 
 The same thing lives inside moshcode as `/shorten`; this is the copy that pipes.
 
+### `sysupdate`
+
+Bring this box up to date — package lists, packages, snaps:
+
+```sh
+sysupdate                # apt update, apt upgrade, snap refresh
+sysupdate --yes          # ...without stopping to ask
+sysupdate --no-snap      # apt only
+sysupdate --dry-run      # print the commands, run nothing
+```
+
+It runs the three steps in order and **stops at the first one that fails**,
+which is the `&&` the shell one-liner had: there is no point upgrading against
+package lists that failed to refresh, and a snap refresh afterwards only buries
+the real error further up the scrollback.
+
+Each step goes through `sudo` unless you are already root — a minimal image may
+have no `sudo` on it at all, and asking for it there fails for a reason that
+has nothing to do with updating anything. A box with no snapd skips the snap
+step and says so, rather than reporting a failure for something that was never
+going to run.
+
+**`apt`, not `apt-get`, and that is deliberate.** They are not the same
+command: `apt upgrade` installs a package that needs a new dependency, while
+`apt-get upgrade` holds it back. That difference is how kernels and security
+updates quietly never land on a box everybody believes is current — the same
+trap [`root-ubuntu.sh`](#root-ubuntush) works around with
+`apt-get --with-new-pkgs`.
+
+**Not `cli-tools update`.** That one moves *this checkout* to the current
+commit. One word cannot usefully mean both that and "upgrade the operating
+system", so the command is `sysupdate` and the pit alias is `/update` — which
+is safe precisely because nothing on `PATH` answers to that name.
+
+When the upgrade lands a kernel or a libc, it says a reboot is required and
+names the packages. That is the moment people stop thinking about it, and the
+one still running is not the one now on disk.
+
+Debian and Ubuntu only; it refuses a machine with no `apt` rather than running
+two thirds of a three-step plan on a box it was never meant for.
+
 ### `root-ubuntu.sh`
 
 Sets up a server the way we like them, and keeps it that way. It is the odd one
@@ -1187,6 +1232,7 @@ without writing anything.
 | `/names` | `free-names` |
 | `/prs` | `gh-prs` |
 | `/speak` | `tts` |
+| `/update` | `sysupdate` |
 | `/web` | `ask-web` |
 | `/whois` | `domainjson` |
 

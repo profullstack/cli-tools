@@ -45,6 +45,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
+  sysupdate: 'Update this box: apt lists, apt packages, snaps',
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
   torrent: 'Make a torrent out of a directory, and get it seeded',
   tts: 'Read text aloud and keep the audio',
@@ -185,6 +186,11 @@ export const PIT_ALIASES: Record<string, string> = {
   names: 'free-names',
   prs: 'gh-prs',
   speak: 'tts',
+  // The short word for `sysupdate`, and the reason that command is not itself
+  // called `update`: `cli-tools update` already means "move this checkout",
+  // and the same word cannot also mean "upgrade the operating system". Safe as
+  // an alias because nothing on PATH answers to `update`.
+  update: 'sysupdate',
   web: 'ask-web',
   whois: 'domainjson',
 };
