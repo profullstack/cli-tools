@@ -32,6 +32,17 @@
 # will happily lock you out of the box you are provisioning.
 #SSH_PORT=22
 
+# A box with no swap has no slack: the kernel's only answer to a memory spike
+# is the OOM killer, and what it picks is whatever was biggest. A swapfile is
+# created only when the box has no swap at all, so a machine that already has
+# a swap partition or zram is left exactly as it is. Set 0 to never make one.
+#SWAP_SIZE=2G
+#SWAP_FILE=/swapfile
+
+# 60, the kernel default, treats swap as another tier of memory and pages out
+# things that are still being used. 10 keeps it as the safety net it is for.
+#SWAPPINESS=10
+
 # ── accounts ─────────────────────────────────────────────────────────────────
 
 # Groups new accounts land in when nothing is passed on the command line.

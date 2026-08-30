@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -575,5 +576,220 @@ describe('the groups subcommand', () => {
   it('is offered by the top-level help', () => {
     const out = execFileSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
     expect(out).toContain('groups add alice docker');
+  });
+});
+
+describe('_size_mb', () => {
+  const mb = (s: string) => shell(['_size_mb'], `_size_mb ${s}`);
+
+  it('reads the sizes a person would actually write', () => {
+    expect(mb('2G')).toBe('2048');
+    expect(mb('2g')).toBe('2048');
+    expect(mb('512M')).toBe('512');
+  });
+
+  it('assumes gigabytes for a bare number, because nobody means 2MB of swap', () => {
+    expect(mb('4')).toBe('4096');
+  });
+
+  it('refuses anything it cannot read rather than guessing', () => {
+    // The value ends up in `dd count=`, so a silent misread is a swapfile of
+    // the wrong size -- or, with an empty count, no swapfile at all.
+    expect(status(['_size_mb'], '_size_mb abc')).toBe(1);
+    expect(status(['_size_mb'], '_size_mb "2 G"')).toBe(1);
+    expect(status(['_size_mb'], '_size_mb ""')).toBe(1);
+    expect(status(['_size_mb'], '_size_mb 2GB')).toBe(1);
+  });
+});
+
+describe('configure_swap', () => {
+  /**
+   * The function reaches for swapon, mkswap, df and systemd-detect-virt, and
+   * writes to /etc/fstab and /etc/sysctl.d. Those tools are stubbed and the
+   * two absolute paths are rewritten into a temp directory with `declare -f`,
+   * so what runs is the code in the file and the test still cannot touch the
+   * machine it runs on. The SWAP_* declarations are top-level rather than
+   * inside a function, so they are lifted out of the source the same way the
+   * DEFAULT_GROUPS tests above lift theirs.
+   */
+  const decls = [...SOURCE.matchAll(/^(?:SWAP_SIZE|SWAP_FILE|SWAPPINESS)=.*$/gm)]
+    .map((m) => m[0])
+    .join('\n');
+
+  const FNS = ['_size_mb', '_swap_sysctl', 'configure_swap', 'write_if_changed'];
+
+  function stubs(dir: string): string {
+    return `
+      CHANGED=(); log() { :; }; info() { echo "$*"; }; warn() { echo "$*"; }
+      note() { echo "changed: $*"; }
+      sysctl() { :; }
+      chown() { :; }
+      mkswap() { return \${MKSWAP_RC:-0}; }
+      swapon() {
+        case "\${1:-}" in
+          --show*) printf '%s' "\${FAKE_SWAPON_OUT:-}" ;;
+          *) return \${SWAPON_RC:-0} ;;
+        esac
+      }
+      systemd-detect-virt() { printf '%s' "\${FAKE_VIRT:-none}"; }
+      df() { if [[ -n "\${FAKE_DF:-}" ]]; then printf '%s\\n' "\$FAKE_DF"; else command df "\$@"; fi; }
+      eval "\$(declare -f configure_swap _swap_sysctl \\
+        | sed 's#/etc/fstab#${dir}/fstab#g; s#/etc/sysctl.d/[a-z0-9-]*\\.conf#${dir}/sysctl.conf#g')"
+      ${decls}
+    `;
+  }
+
+  /** A temp dir standing in for /etc, with an fstab that has no swap in it. */
+  function box(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-swap-'));
+    writeFileSync(join(dir, 'fstab'), '/dev/sda1 / ext4 defaults 0 1\n');
+    return dir;
+  }
+
+  const swap = (dir: string, env = '') =>
+    shell(FNS, `${stubs(dir)}\n${env} SWAP_FILE=${dir}/swapfile configure_swap`);
+
+  const fstabOf = (dir: string) => readFileSync(join(dir, 'fstab'), 'utf8');
+
+  it('makes a swapfile on a box that has none, and brings it back after a reboot', () => {
+    const dir = box();
+    const out = swap(dir, 'SWAP_SIZE=8M');
+    expect(out).toContain('changed: 8M swap at');
+    expect(fstabOf(dir)).toMatch(/swapfile\s+none\s+swap\s+sw/);
+    expect(statSync(join(dir, 'swapfile')).size).toBe(8 * 1024 * 1024);
+  });
+
+  it('makes it unreadable, since swap is everything the box ever paged out', () => {
+    const dir = box();
+    swap(dir, 'SWAP_SIZE=8M');
+    expect(statSync(join(dir, 'swapfile')).mode & 0o777).toBe(0o600);
+  });
+
+  it('leaves a box that already has swap completely alone', () => {
+    // A swapfile stacked on a swap partition or a zram device is not more
+    // safety, it is a file nobody remembers making.
+    const dir = box();
+    const out = swap(dir, "FAKE_SWAPON_OUT=$'/dev/sda2\\tpartition\\t4G\\n' SWAP_SIZE=8M");
+    expect(out).toContain('swap already active: /dev/sda2 (partition, 4G)');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('still sets swappiness when the swap was already there', () => {
+    // The tuning is the point even when the swap is not ours: 60 pages out
+    // things that are still being used.
+    const dir = box();
+    expect(swap(dir, "FAKE_SWAPON_OUT=$'/dev/sda2\\tpartition\\t4G\\n'")).toContain(
+      'changed: vm.swappiness=10',
+    );
+    expect(readFileSync(join(dir, 'sysctl.conf'), 'utf8')).toContain('vm.swappiness = 10');
+  });
+
+  it('does nothing at all when SWAP_SIZE is 0', () => {
+    const dir = box();
+    expect(swap(dir, 'SWAP_SIZE=0')).toContain('swap disabled');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('does not try to swap inside a container', () => {
+    // The kernel and its swap belong to the host. swapon in here either fails
+    // outright or is refused by the cgroup once the file already exists.
+    const dir = box();
+    const out = swap(dir, 'FAKE_VIRT=lxc SWAP_SIZE=8M');
+    expect(out).toContain('inside a lxc container');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('refuses btrfs and zfs, where a plain swapfile is wrong or dangerous', () => {
+    // btrfs needs chattr +C and no compression; a swapfile on zfs can deadlock
+    // the box under exactly the memory pressure it was added to survive.
+    const dir = box();
+    expect(swap(dir, "FAKE_DF=$'FSTYPE\\nbtrfs' SWAP_SIZE=8M")).toContain('btrfs');
+    expect(swap(dir, "FAKE_DF=$'FSTYPE\\nzfs' SWAP_SIZE=8M")).toContain('deadlock');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('will not fill the disk to buy memory headroom', () => {
+    // A full / breaks things a memory spike would never have touched.
+    const dir = box();
+    expect(swap(dir, "FAKE_DF=$'ext4\\n900M' SWAP_SIZE=2G")).toContain('plus headroom -- skipping');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('fails loudly on a size it cannot read', () => {
+    const dir = box();
+    expect(status(FNS, `${stubs(dir)}\nSWAP_SIZE=lots SWAP_FILE=${dir}/f configure_swap`)).toBe(1);
+  });
+
+  it('is safe to run twice: no second file, no second fstab line', () => {
+    // Everything else in this script converges on a re-run, and an appender
+    // that does not is how /etc/fstab grows a line a month.
+    const dir = box();
+    swap(dir, 'SWAP_SIZE=8M');
+    const out = swap(dir, 'SWAP_SIZE=8M');
+    expect(out).toContain('fstab already brings');
+    expect(fstabOf(dir).split('\n').filter((l) => l.includes('swapfile'))).toHaveLength(1);
+  });
+
+  it('cleans up the half-made file when mkswap fails', () => {
+    // A 2G file that is not swap is 2G of disk gone for nothing, and the next
+    // run would find it sitting there and take it for the real thing.
+    const dir = box();
+    const out = shell(
+      FNS,
+      `${stubs(dir)}
+       MKSWAP_RC=1 SWAP_SIZE=8M SWAP_FILE=${dir}/swapfile configure_swap
+       [[ -e ${dir}/swapfile ]] && echo LEFTOVER || echo "cleaned up"`,
+    );
+    expect(out).toContain('mkswap failed');
+    expect(out).toContain('cleaned up');
+  });
+
+  it('cleans up when swapon itself fails', () => {
+    const dir = box();
+    const out = shell(
+      FNS,
+      `${stubs(dir)}
+       SWAPON_RC=1 SWAP_SIZE=8M SWAP_FILE=${dir}/swapfile configure_swap
+       [[ -e ${dir}/swapfile ]] && echo LEFTOVER || echo "cleaned up"`,
+    );
+    expect(out).toContain('swapon failed');
+    expect(out).toContain('cleaned up');
+    expect(fstabOf(dir)).not.toContain('swapfile');
+  });
+
+  it('refuses a path that is not a file instead of deleting it', () => {
+    // SWAP_FILE is configurable, and `rm -f` on a typo that happens to name a
+    // directory would be a very bad afternoon.
+    const dir = box();
+    mkdirSync(join(dir, 'adirectory'));
+    const out = shell(
+      FNS,
+      `${stubs(dir)}
+       SWAP_SIZE=8M SWAP_FILE=${dir}/adirectory configure_swap
+       [[ -d ${dir}/adirectory ]] && echo "still a directory"`,
+    );
+    expect(out).toContain('exists and is not a file');
+    expect(out).toContain('still a directory');
+  });
+
+  it('never leaves the swapfile readable, whatever the chown does', () => {
+    // Chained behind a chown, one failure there would leave the mode wide
+    // open -- and mkswap would still be perfectly happy with the file.
+    const body = SOURCE.slice(SOURCE.indexOf('configure_swap() {'));
+    const chmod = body.indexOf('chmod 0600 "$file"');
+    const chown = body.indexOf('chown root:root "$file"');
+    expect(chmod).toBeGreaterThan(-1);
+    expect(chown).toBeGreaterThan(chmod);
+    expect(body.slice(chmod, chown)).not.toContain('&&');
+  });
+
+  it('matches the fstab entry on the path, so a hand-edited line survives', () => {
+    expect(SOURCE).toMatch(/awk -v f="\$file" '\$1 == f && \$3 == "swap"/);
+  });
+
+  it('is documented as a step and as an env override', () => {
+    const help = execFileSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
+    expect(help).toContain('swapfile');
+    expect(help).toContain('SWAP_SIZE=2G');
   });
 });
