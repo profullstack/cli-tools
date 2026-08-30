@@ -793,3 +793,92 @@ describe('configure_swap', () => {
     expect(help).toContain('SWAP_SIZE=2G');
   });
 });
+
+describe('configure_sensors', () => {
+  /**
+   * Everything this function does to the machine goes through six commands:
+   * `command -v`, systemd-detect-virt, compgen -G over /sys, modprobe,
+   * sensors-detect and systemctl. Shadowing those six runs the real body and
+   * leaves the assertions about which branch it took. HWMON stands in for
+   * "/sys/class/hwmon has a temp*_input in it", and the sensors-detect stub
+   * flips it -- which is what makes the re-check after detection meaningful
+   * rather than a restatement of the stub's own return code.
+   */
+  const stubs = `
+    info() { echo "info: $*"; }
+    note() { echo "note: $*"; }
+    warn() { echo "warn: $*"; }
+    command() {
+      case "\${2:-}" in
+        sensors-detect) return "\${NO_SENSORS_DETECT:-0}" ;;
+        systemd-detect-virt) return 0 ;;
+      esac
+      return 1
+    }
+    systemd-detect-virt() { printf '%s' "\${FAKE_VIRT:-none}"; }
+    compgen() { [[ "\${HWMON:-0}" == 1 ]]; }
+    modprobe() { MODPROBED="\$*"; }
+    systemctl() { SYSTEMCTLED="\$*"; }
+    sensors-detect() { DETECT_RAN="\$*"; HWMON="\${DETECT_FINDS:-0}"; return "\${DETECT_RC:-0}"; }
+  `;
+
+  const sensors = (env = '') =>
+    shell(
+      ['configure_sensors'],
+      `${stubs}\n${env} configure_sensors\n` +
+        'echo "ran=[${DETECT_RAN-}] modprobe=[${MODPROBED-}] systemctl=[${SYSTEMCTLED-}]"',
+    );
+
+  it('does nothing at all when lm-sensors is not installed', () => {
+    const out = sensors('NO_SENSORS_DETECT=1');
+    expect(out).toContain('lm-sensors not installed');
+    expect(out).toContain('ran=[]');
+  });
+
+  it('skips the probe in a VM, which is never shown the host thermal hardware', () => {
+    // Without this guard sensors-detect writes an empty config on every
+    // Droplet, which reads like a failed detection rather than like a machine
+    // with nothing to detect.
+    const out = sensors('FAKE_VIRT=kvm');
+    expect(out).toContain('running under kvm');
+    expect(out).toContain('ran=[]');
+  });
+
+  it('leaves a box alone when hwmon already has readings', () => {
+    const out = sensors('HWMON=1');
+    expect(out).toContain('already available');
+    expect(out).toContain('ran=[]');
+  });
+
+  it('loads i2c-dev before probing, because --auto answers no to that prompt', () => {
+    // sensors-detect finds SMBus chips through /dev/i2c-*, which do not exist
+    // until i2c-dev is loaded, and --auto takes the default answer -- no.
+    const out = sensors('DETECT_FINDS=1');
+    expect(out).toContain('modprobe=[i2c-dev]');
+    expect(out).toContain('ran=[--auto]');
+    expect(out).toContain('note: hardware sensors detected');
+    expect(out).toContain('systemctl=[restart kmod]');
+  });
+
+  it('re-checks hwmon afterwards rather than trusting a zero exit', () => {
+    // sensors-detect exits 0 on a machine with no supported chips, so the
+    // only honest evidence is a temp*_input appearing under /sys.
+    const out = sensors('DETECT_FINDS=0');
+    expect(out).toContain('ran=[--auto]');
+    expect(out).toContain('found no supported chips');
+    expect(out).not.toContain('hardware sensors detected');
+  });
+
+  it('warns when the probe errors, and still returns 0 so the run continues', () => {
+    const out = sensors('DETECT_RC=1');
+    expect(out).toContain('warn: sensors-detect failed');
+    expect(status(['configure_sensors'], `${stubs}\nDETECT_RC=1 configure_sensors`)).toBe(0);
+  });
+
+  it('installs the package it needs, and is wired into the apt step', () => {
+    // A detection step is dead code if the package never lands, and the
+    // package is dead weight if nothing ever probes for the chips.
+    expect(SOURCE).toMatch(/^\tlm-sensors i2c-tools/m);
+    expect(SOURCE).toContain('try "sensors" configure_sensors');
+  });
+});
