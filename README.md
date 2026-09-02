@@ -91,6 +91,7 @@ implement, because they are distributed in their own right:
 | --- | --- |
 | `timer` | [`@profullstack/timer`](https://github.com/profullstack/timer) — track time against projects, for people and for agents |
 | `billing` | [`@profullstack/billing`](https://github.com/profullstack/billing) — clients, rates and invoices from the hours the timer tracked |
+| `bw` | [`@bitwarden/cli`](https://bitwarden.com/help/cli/) — read and write a Bitwarden vault: logins, notes and exports |
 | `diskpush` | [diskpush.com](https://diskpush.com) — browse servers like FileZilla, transfer with rsync; incremental, resumable, server-to-server |
 
 They are not `bin/*.ts` like everything else here for a reason: they run on
@@ -100,7 +101,15 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-The first two come from npm. `diskpush` comes from its own installer, which is
+All but one come from npm. `bw` is the only companion that is nobody's but its
+vendor's; it earns the place on the same terms as the rest, and covers the
+secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
+team vault of shared API keys, which is a different thing from one person's
+passwords. Note that its binary is `bw` while its package is `@bitwarden/cli`:
+the two need not match, which is why the binary name is stated rather than
+parsed off the package.
+
+`diskpush` comes from its own installer, which is
 not a lesser arrangement: one command places a desktop application and a CLI
 together and decides between them by what the machine can actually run. Here it
 is installed with `--cli-only`, because a command-line toolbelt asking for a
@@ -123,7 +132,7 @@ Check what landed, and wire up the pit aliases:
 
 ```sh
 cli-tools list                 # * runs from here, ! is shadowed by another copy
-cli-tools companions           # the two from npm, and whether they are on PATH
+cli-tools companions           # every companion, and whether it is on PATH
 cli-tools companions --install # install the missing ones (--force updates all)
 cli-tools aliases --install    # /aff /blog /free /merge /names /prs /speak /update /web /whois
 cli-tools config               # API keys: what is set, and where it came from

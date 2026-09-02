@@ -16,7 +16,7 @@ const nothing = () => null;
 
 describe('the companion list', () => {
   it('names the commands that come from elsewhere', () => {
-    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'diskpush']);
+    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'bw', 'diskpush']);
   });
 
   it('gives every companion a summary and somewhere to read about it', () => {
@@ -26,14 +26,19 @@ describe('the companion list', () => {
     }
   });
 
-  it('names an npm companion by a scoped package matching its binary', () => {
+  it('names an npm companion by a scoped package', () => {
     for (const companion of COMPANIONS) {
       if (companion.install.kind !== 'npm') continue;
-      expect(companion.install.package.startsWith('@profullstack/'), companion.name).toBe(true);
-      // The binary name is not derivable from the package name in general, so
-      // it is stated; this holds it to the cases we actually ship.
-      expect(companion.install.package.endsWith(`/${companion.name}`), companion.name).toBe(true);
+      expect(companion.install.package.startsWith('@'), companion.name).toBe(true);
+      expect(companion.install.package.includes('/'), companion.name).toBe(true);
     }
+  });
+
+  it('states the binary name, because it is not derivable from the package', () => {
+    // `@bitwarden/cli` installs `bw`. That is why `name` is a field rather than
+    // something parsed off the end of the package -- an assumption that held
+    // only while every companion happened to be one of ours.
+    expect(findCompanion('bw')!.install).toMatchObject({ package: '@bitwarden/cli' });
   });
 
   it('gives a script companion an https installer', () => {
@@ -46,6 +51,7 @@ describe('the companion list', () => {
   it('resolves a companion by name, case-insensitively', () => {
     expect(source(findCompanion('timer')!)).toBe('@profullstack/timer');
     expect(source(findCompanion('BILLING')!)).toBe('@profullstack/billing');
+    expect(source(findCompanion('BW')!)).toBe('@bitwarden/cli');
     expect(source(findCompanion('DiskPush')!)).toBe('https://diskpush.com/install.sh');
     expect(findCompanion('nonsense')).toBeNull();
     expect(findCompanion('')).toBeNull();
@@ -102,6 +108,7 @@ describe('statuses', () => {
     expect(rows.map((r) => [r.name, r.state])).toEqual([
       ['timer', 'installed'],
       ['billing', 'missing'],
+      ['bw', 'missing'],
       ['diskpush', 'missing'],
     ]);
     expect(rows[0]?.path).toBe('/usr/local/bin/timer');
@@ -115,7 +122,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'diskpush'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -127,7 +134,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'diskpush']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -142,7 +149,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'diskpush'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -152,6 +159,7 @@ describe('ensure', () => {
     expect(calls).toEqual([
       'npm install -g @profullstack/timer@latest',
       'npm install -g @profullstack/billing@latest',
+      'npm install -g @bitwarden/cli@latest',
       // A script installer upgrades in place, so there is no @latest to add.
       'curl -fsSL https://diskpush.com/install.sh | sh -s -- --cli-only',
     ]);
