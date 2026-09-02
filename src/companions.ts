@@ -6,11 +6,11 @@
  * `cli-tools` installs, reports on and updates alongside its own commands so
  * that one install brings the whole set.
  *
- * Why they are not `bin/*.ts` like everything else. These two run on Windows,
- * and the install here cannot: it is symlinks into a git checkout executed
- * through an `npx --yes tsx` shebang. They are also useful with no checkout at
- * all — under any agentic CLI, from a Dockerfile, on a box that has never heard
- * of this repository — which is what being on npm buys. Vendoring them here to
+ * Why they are not `bin/*.ts` like everything else. They run on Windows, and
+ * the install here cannot: it is symlinks into a git checkout executed through
+ * an `npx --yes tsx` shebang. They are also useful with no checkout at all —
+ * under any agentic CLI, from a Dockerfile, on a box that has never heard of
+ * this repository — which is what being on npm buys. Vendoring them here to
  * make one list tidier would cost them all of that.
  *
  * So the relationship is the same one `cli-tools` has with the pit: this is the
@@ -53,6 +53,17 @@ export const COMPANIONS: readonly Companion[] = [
     install: { kind: 'npm', package: '@profullstack/billing' },
     summary: 'Clients, rates and invoices from the hours the timer tracked',
     home: 'https://github.com/profullstack/billing',
+  },
+  {
+    name: 'bw',
+    // The only companion here that is nobody's but Bitwarden's. It earns the
+    // place the same way the others do: published, self-installing, and useful
+    // on a box with no checkout. It covers the secrets `vault.ts` deliberately
+    // does not -- that reads a logicsrc team vault of shared API keys, which is
+    // a different thing from one person's passwords.
+    install: { kind: 'npm', package: '@bitwarden/cli' },
+    summary: 'Read and write a Bitwarden vault — logins, notes and exports',
+    home: 'https://bitwarden.com/help/cli/',
   },
   {
     name: 'diskpush',
