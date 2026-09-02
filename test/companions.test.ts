@@ -16,7 +16,7 @@ const nothing = () => null;
 
 describe('the companion list', () => {
   it('names the commands that come from elsewhere', () => {
-    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'bw', 'diskpush']);
+    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'bw', 'diskpush', 'myna']);
   });
 
   it('gives every companion a summary and somewhere to read about it', () => {
@@ -53,6 +53,7 @@ describe('the companion list', () => {
     expect(source(findCompanion('BILLING')!)).toBe('@profullstack/billing');
     expect(source(findCompanion('BW')!)).toBe('@bitwarden/cli');
     expect(source(findCompanion('DiskPush')!)).toBe('https://diskpush.com/install.sh');
+    expect(source(findCompanion('MYNA')!)).toBe('https://mynaposter.com/install.sh');
     expect(findCompanion('nonsense')).toBeNull();
     expect(findCompanion('')).toBeNull();
   });
@@ -110,6 +111,7 @@ describe('statuses', () => {
       ['billing', 'missing'],
       ['bw', 'missing'],
       ['diskpush', 'missing'],
+      ['myna', 'missing'],
     ]);
     expect(rows[0]?.path).toBe('/usr/local/bin/timer');
     expect(rows[1]?.path).toBeNull();
@@ -122,7 +124,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -134,7 +136,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'bw', 'diskpush']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -149,7 +151,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -162,6 +164,7 @@ describe('ensure', () => {
       'npm install -g @bitwarden/cli@latest',
       // A script installer upgrades in place, so there is no @latest to add.
       'curl -fsSL https://diskpush.com/install.sh | sh -s -- --cli-only',
+      'curl -fsSL https://mynaposter.com/install.sh | sh',
     ]);
   });
 

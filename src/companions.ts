@@ -76,6 +76,17 @@ export const COMPANIONS: readonly Companion[] = [
     summary: 'Browse servers like FileZilla, transfer with rsync — incremental, resumable, server-to-server',
     home: 'https://diskpush.com',
   },
+  {
+    name: 'myna',
+    // A compiled binary with its runtime inside, so the installer needs no
+    // Node on the box at all -- which is the whole reason it is a companion
+    // rather than a `bin/*.ts` here. It is also the one command in this set
+    // that posts publicly, so it stays a front door: `myna login` does the
+    // credential handling, and nothing about the account lives in this repo.
+    install: { kind: 'script', url: 'https://mynaposter.com/install.sh' },
+    summary: 'Post, schedule and read across 25 social networks from a TUI',
+    home: 'https://mynaposter.com',
+  },
 ];
 
 export function findCompanion(name: string): Companion | null {
