@@ -93,6 +93,7 @@ implement, because they are distributed in their own right:
 | `billing` | [`@profullstack/billing`](https://github.com/profullstack/billing) — clients, rates and invoices from the hours the timer tracked |
 | `bw` | [`@bitwarden/cli`](https://bitwarden.com/help/cli/) — read and write a Bitwarden vault: logins, notes and exports |
 | `diskpush` | [diskpush.com](https://diskpush.com) — browse servers like FileZilla, transfer with rsync; incremental, resumable, server-to-server |
+| `myna` | [mynaposter.com](https://mynaposter.com) — post, schedule and read across 25 social networks from a TUI |
 
 They are not `bin/*.ts` like everything else here for a reason: they run on
 Windows, which this install cannot (it is symlinks into a git checkout executed
@@ -101,7 +102,7 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-All but one come from npm. `bw` is the only companion that is nobody's but its
+Three come from npm. `bw` is the only companion that is nobody's but its
 vendor's; it earns the place on the same terms as the rest, and covers the
 secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
 team vault of shared API keys, which is a different thing from one person's
@@ -109,11 +110,15 @@ passwords. Note that its binary is `bw` while its package is `@bitwarden/cli`:
 the two need not match, which is why the binary name is stated rather than
 parsed off the package.
 
-`diskpush` comes from its own installer, which is
+`diskpush` and `myna` come from their own installers, which is
 not a lesser arrangement: one command places a desktop application and a CLI
-together and decides between them by what the machine can actually run. Here it
+together and decides between them by what the machine can actually run. diskpush
 is installed with `--cli-only`, because a command-line toolbelt asking for a
-server should not be answered with 100MB of Electron.
+server should not be answered with 100MB of Electron. myna's installer places a
+binary with its runtime compiled in, checked against a published checksum, so it
+needs no Node on the box at all — and it is the one command here that posts in
+public, which is why `cli-tools` installs it but never touches the accounts:
+`myna login` does the credential handling, into an encrypted vault of its own.
 
 Both kinds are idempotent, which is what lets install, re-install and update be
 the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and a failure warns
