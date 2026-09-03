@@ -108,6 +108,21 @@ export const COMPANIONS: readonly Companion[] = [
     summary: 'Spin up a throwaway local database for development or testing — needs Docker, Podman or OrbStack',
     home: 'https://github.com/terrablue/devdb',
   },
+  {
+    name: 'kali',
+    // A front door in the truest sense: the package installs the `kali` command
+    // and nothing else, and that command is itself an installer -- it puts the
+    // Kali-style web pentest toolbelt (nmap, nuclei, ffuf, sqlmap, zaproxy and
+    // the rest) onto a plain Debian/Ubuntu box, choosing apt, `go install`,
+    // gem, snap or a release binary per tool. It is a companion rather than a
+    // `bin/*.ts` for the usual reason: published and self-installing, it is
+    // useful under any agentic CLI or from a Dockerfile with no checkout of
+    // this repo. The tools it installs are dual-use -- it equips a box you are
+    // authorized to test, and nothing about a target lives here.
+    install: { kind: 'npm', package: '@profullstack/kali' },
+    summary: 'Install a Kali-style web pentesting toolbelt on Debian/Ubuntu',
+    home: 'https://github.com/profullstack/kali',
+  },
 ];
 
 export function findCompanion(name: string): Companion | null {
