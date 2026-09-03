@@ -100,6 +100,25 @@
         "provenance",
         "bufferoverride"
       ]
+    },
+    {
+      "name": "myna",
+      "description": "Post, schedule and read across 26 social networks from the terminal. Name the targets before anything goes out — the default is every account you have — queue for later, read back what landed and what failed, and draft copy the writer never publishes on its own. Accounts live in myna's own encrypted vault, not here.",
+      "source": "./plugins/myna",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://mynaposter.com",
+      "keywords": [
+        "social",
+        "posting",
+        "scheduling",
+        "mastodon",
+        "bluesky",
+        "myna"
+      ]
     }
   ]
 }
