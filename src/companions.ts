@@ -2,9 +2,9 @@
  * Commands this set ships but does not implement.
  *
  * Everything in `bin/` is a TypeScript file symlinked onto PATH. A companion is
- * the other kind: a published npm package that installs its own binary, which
- * `cli-tools` installs, reports on and updates alongside its own commands so
- * that one install brings the whole set.
+ * the other kind: a command published in its own right -- on npm, behind an
+ * installer, or as a Go module -- which `cli-tools` installs, reports on and
+ * updates alongside its own commands so that one install brings the whole set.
  *
  * Why they are not `bin/*.ts` like everything else. They run on Windows, and
  * the install here cannot: it is symlinks into a git checkout executed through
@@ -25,12 +25,17 @@
  * distributed as an installer instead, which is not a lesser choice: an
  * installer can place a desktop application and a command together, decide
  * between them by what the machine can actually run, and needs no Node on the
- * box at all. Both are idempotent, which is what lets install, re-install and
- * update stay the same command.
+ * box at all. `go` covers a Go program published as a module rather than to a
+ * registry: `go install` fetches, builds and places it in one step, which is
+ * how that ecosystem distributes a command.
+ *
+ * All three are idempotent, which is what lets install, re-install and update
+ * stay the same command.
  */
 export type InstallMethod =
   | { kind: 'npm'; package: string }
-  | { kind: 'script'; url: string; args?: readonly string[] };
+  | { kind: 'script'; url: string; args?: readonly string[] }
+  | { kind: 'go'; module: string };
 
 export interface Companion {
   /** The binary the package puts on PATH. */
@@ -87,6 +92,22 @@ export const COMPANIONS: readonly Companion[] = [
     summary: 'Post, schedule and read across 25 social networks from a TUI',
     home: 'https://mynaposter.com',
   },
+  {
+    name: 'devdb',
+    // A Go program, and the first companion here that is neither on npm nor
+    // behind an installer script. Its releases carry linux and darwin binaries
+    // only, so `go install` is the wider door, not the narrower one: it builds
+    // for whatever the box is, Windows included, which is where the published
+    // assets stop and where the rest of this set cannot follow.
+    //
+    // It needs a container runtime at run time -- Docker, Podman or OrbStack --
+    // which no other companion does. That is devdb's precondition to state, not
+    // ours to install: a toolbelt that quietly put a container daemon on a box
+    // would be the surprise `link` refuses everywhere else.
+    install: { kind: 'go', module: 'github.com/terrablue/devdb' },
+    summary: 'Spin up a throwaway local database for development or testing — needs Docker, Podman or OrbStack',
+    home: 'https://github.com/terrablue/devdb',
+  },
 ];
 
 export function findCompanion(name: string): Companion | null {
@@ -115,6 +136,15 @@ export function installCommand(companion: Companion, { latest = false } = {}): I
     return { command: 'npm', args: ['install', '-g', spec], display: `npm install -g ${spec}` };
   }
 
+  if (companion.install.kind === 'go') {
+    // `go install` in module-aware mode requires a version, so the tag is not
+    // an update-only flourish the way npm's is -- it is the only spelling there
+    // is. It refetches, rebuilds and replaces the binary every time, so an
+    // update needs nothing added and an install is already idempotent.
+    const spec = `${companion.install.module}@latest`;
+    return { command: 'go', args: ['install', spec], display: `go install ${spec}` };
+  }
+
   const { url, args = [] } = companion.install;
   // Piped into sh the same way the project documents it, so this and a manual
   // install take the same path and cannot drift apart.
@@ -122,9 +152,16 @@ export function installCommand(companion: Companion, { latest = false } = {}): I
   return { command: 'sh', args: ['-c', line], display: line };
 }
 
-/** The package or url a companion comes from, for display. */
+/** The package, module or url a companion comes from, for display. */
 export function source(companion: Companion): string {
-  return companion.install.kind === 'npm' ? companion.install.package : companion.install.url;
+  switch (companion.install.kind) {
+    case 'npm':
+      return companion.install.package;
+    case 'go':
+      return companion.install.module;
+    default:
+      return companion.install.url;
+  }
 }
 
 export type CompanionState = 'installed' | 'missing';

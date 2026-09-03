@@ -94,6 +94,7 @@ implement, because they are distributed in their own right:
 | `bw` | [`@bitwarden/cli`](https://bitwarden.com/help/cli/) — read and write a Bitwarden vault: logins, notes and exports |
 | `diskpush` | [diskpush.com](https://diskpush.com) — browse servers like FileZilla, transfer with rsync; incremental, resumable, server-to-server |
 | `myna` | [mynaposter.com](https://mynaposter.com) — post, schedule and read across 25 social networks from a TUI |
+| `devdb` | [terrablue/devdb](https://github.com/terrablue/devdb) — spin up a throwaway local database for development or testing |
 
 They are not `bin/*.ts` like everything else here for a reason: they run on
 Windows, which this install cannot (it is symlinks into a git checkout executed
@@ -120,7 +121,19 @@ needs no Node on the box at all — and it is the one command here that posts in
 public, which is why `cli-tools` installs it but never touches the accounts:
 `myna login` does the credential handling, into an encrypted vault of its own.
 
-Both kinds are idempotent, which is what lets install, re-install and update be
+`devdb` is a Go program, and comes by `go install` because it is published as a
+module rather than to a registry — that is simply how that ecosystem ships a
+command. It is also the wider door here rather than the narrower one: its
+releases carry linux and darwin binaries only, while `go install` builds for
+whatever the box is, Windows included, which is exactly the reach a companion
+is for. It is the one command in this set with a run-time precondition — a
+container runtime, Docker or Podman or OrbStack — and that stays devdb's to
+state rather than ours to install: quietly putting a container daemon on
+somebody's box would be the surprise `link` refuses everywhere else. It needs a
+Go toolchain to install and none to run, and `go install` refetches and rebuilds
+every time, so install and update are the same command as with the rest.
+
+All three kinds are idempotent, which is what lets install, re-install and update be
 the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and a failure warns
 rather than failing the install.
 

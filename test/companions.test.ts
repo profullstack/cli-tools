@@ -16,7 +16,14 @@ const nothing = () => null;
 
 describe('the companion list', () => {
   it('names the commands that come from elsewhere', () => {
-    expect(COMPANIONS.map((c) => c.name)).toEqual(['timer', 'billing', 'bw', 'diskpush', 'myna']);
+    expect(COMPANIONS.map((c) => c.name)).toEqual([
+      'timer',
+      'billing',
+      'bw',
+      'diskpush',
+      'myna',
+      'devdb',
+    ]);
   });
 
   it('gives every companion a summary and somewhere to read about it', () => {
@@ -48,12 +55,23 @@ describe('the companion list', () => {
     }
   });
 
+  it('names a go companion by its module path, not a url', () => {
+    // `go install` takes a module path. A https:// url is the thing that looks
+    // right and does not work, so the shape is asserted rather than assumed.
+    for (const companion of COMPANIONS) {
+      if (companion.install.kind !== 'go') continue;
+      expect(companion.install.module.startsWith('https://'), companion.name).toBe(false);
+      expect(companion.install.module.includes('/'), companion.name).toBe(true);
+    }
+  });
+
   it('resolves a companion by name, case-insensitively', () => {
     expect(source(findCompanion('timer')!)).toBe('@profullstack/timer');
     expect(source(findCompanion('BILLING')!)).toBe('@profullstack/billing');
     expect(source(findCompanion('BW')!)).toBe('@bitwarden/cli');
     expect(source(findCompanion('DiskPush')!)).toBe('https://diskpush.com/install.sh');
     expect(source(findCompanion('MYNA')!)).toBe('https://mynaposter.com/install.sh');
+    expect(source(findCompanion('DevDB')!)).toBe('github.com/terrablue/devdb');
     expect(findCompanion('nonsense')).toBeNull();
     expect(findCompanion('')).toBeNull();
   });
@@ -62,6 +80,7 @@ describe('the companion list', () => {
 describe('installCommand', () => {
   const timer = findCompanion('timer') as Companion;
   const diskpush = findCompanion('diskpush') as Companion;
+  const devdb = findCompanion('devdb') as Companion;
 
   it('installs an npm companion globally', () => {
     expect(installCommand(timer)).toMatchObject({
@@ -97,6 +116,21 @@ describe('installCommand', () => {
     expect(installCommand(diskpush, { latest: true })).toEqual(installCommand(diskpush));
   });
 
+  it('installs a go companion by module path at @latest', () => {
+    expect(installCommand(devdb)).toMatchObject({
+      command: 'go',
+      args: ['install', 'github.com/terrablue/devdb@latest'],
+    });
+  });
+
+  it('carries @latest on a go install always, because it is the only spelling', () => {
+    // Unlike npm, where the tag is what makes an update mean update, module-aware
+    // `go install` refuses a bare module path outright. So install and update are
+    // the same command here, and a bare one would be an error rather than a no-op.
+    expect(installCommand(devdb, { latest: true })).toEqual(installCommand(devdb));
+    expect(installCommand(devdb).display).toBe('go install github.com/terrablue/devdb@latest');
+  });
+
   it('shows the command a person would run', () => {
     expect(installCommand(timer).display).toBe('npm install -g @profullstack/timer');
     expect(installCommand(diskpush).display.startsWith('curl -fsSL ')).toBe(true);
@@ -112,6 +146,7 @@ describe('statuses', () => {
       ['bw', 'missing'],
       ['diskpush', 'missing'],
       ['myna', 'missing'],
+      ['devdb', 'missing'],
     ]);
     expect(rows[0]?.path).toBe('/usr/local/bin/timer');
     expect(rows[1]?.path).toBeNull();
@@ -124,7 +159,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -136,7 +171,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -151,7 +186,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -165,6 +200,8 @@ describe('ensure', () => {
       // A script installer upgrades in place, so there is no @latest to add.
       'curl -fsSL https://diskpush.com/install.sh | sh -s -- --cli-only',
       'curl -fsSL https://mynaposter.com/install.sh | sh',
+      // Same reason, one step further: `go install` has no bare form to add to.
+      'go install github.com/terrablue/devdb@latest',
     ]);
   });
 
