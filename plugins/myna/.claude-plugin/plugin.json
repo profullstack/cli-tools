@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "myna",
+  "description": "Post, schedule and read across 26 social networks from the terminal: name the targets before anything goes out, queue for later, read back what landed and what failed, and draft copy the writer never publishes on its own.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://mynaposter.com",
+  "license": "MIT",
+  "keywords": ["social", "posting", "scheduling", "mastodon", "bluesky", "myna"]
+}

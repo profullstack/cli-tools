@@ -1261,13 +1261,20 @@ moshcode plugin marketplace add profullstack/cli-tools
 moshcode plugin install tools@cli-tools     # /tools:install, /tools:list
 moshcode plugin install blog@cli-tools      # /blog:post, :check, :list, :feed
 moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
+moshcode plugin install ai@cli-tools        # /ai:ask, /ai:tts
 moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
+moshcode plugin install myna@cli-tools      # /myna:post, :schedule, :queue, :feed
 ```
 
 See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),
-[plugins/domain](plugins/domain/README.md) and [plugins/bo](plugins/bo/README.md).
+[plugins/domain](plugins/domain/README.md), [plugins/ai](plugins/ai/README.md),
+[plugins/bo](plugins/bo/README.md) and [plugins/myna](plugins/myna/README.md).
 
-`bo` is the one that fronts a command this repo does **not** install.
+Two of them front a command this repo does not implement, for opposite reasons.
+`myna` fronts one it *installs* — the companion above — so the plugin is purely
+judgement: what to check before a post goes out, why `login` is not an agent's
+to run, and which reads are free. `bo` fronts one this repo does **not** install
+at all.
 [BufferOverride](https://bufferoverride.com/docs/cli) ships its own npm package
 (`npm i -g @profullstack/bufferoverride`, or `moshcode install bo`) and updates
 on its own release cycle, so shipping a second executable of that name from here
