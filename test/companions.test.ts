@@ -23,6 +23,7 @@ describe('the companion list', () => {
       'diskpush',
       'myna',
       'devdb',
+      'kali',
     ]);
   });
 
@@ -147,6 +148,7 @@ describe('statuses', () => {
       ['diskpush', 'missing'],
       ['myna', 'missing'],
       ['devdb', 'missing'],
+      ['kali', 'missing'],
     ]);
     expect(rows[0]?.path).toBe('/usr/local/bin/timer');
     expect(rows[1]?.path).toBeNull();
@@ -159,7 +161,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -171,7 +173,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb', 'kali']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -186,7 +188,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -202,6 +204,7 @@ describe('ensure', () => {
       'curl -fsSL https://mynaposter.com/install.sh | sh',
       // Same reason, one step further: `go install` has no bare form to add to.
       'go install github.com/terrablue/devdb@latest',
+      'npm install -g @profullstack/kali@latest',
     ]);
   });
 

@@ -95,6 +95,7 @@ implement, because they are distributed in their own right:
 | `diskpush` | [diskpush.com](https://diskpush.com) — browse servers like FileZilla, transfer with rsync; incremental, resumable, server-to-server |
 | `myna` | [mynaposter.com](https://mynaposter.com) — post, schedule and read across 25 social networks from a TUI |
 | `devdb` | [terrablue/devdb](https://github.com/terrablue/devdb) — spin up a throwaway local database for development or testing |
+| `kali` | [`@profullstack/kali`](https://github.com/profullstack/kali) — install a Kali-style web pentesting toolbelt on Debian/Ubuntu |
 
 They are not `bin/*.ts` like everything else here for a reason: they run on
 Windows, which this install cannot (it is symlinks into a git checkout executed
@@ -103,7 +104,7 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-Three come from npm. `bw` is the only companion that is nobody's but its
+Four come from npm. `bw` is the only companion that is nobody's but its
 vendor's; it earns the place on the same terms as the rest, and covers the
 secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
 team vault of shared API keys, which is a different thing from one person's
@@ -132,6 +133,14 @@ state rather than ours to install: quietly putting a container daemon on
 somebody's box would be the surprise `link` refuses everywhere else. It needs a
 Go toolchain to install and none to run, and `go install` refetches and rebuilds
 every time, so install and update are the same command as with the rest.
+
+`kali` is a front door in the truest sense: the package installs one command,
+and that command is itself an installer — it puts a Kali-style web pentesting
+toolbelt (nmap, nuclei, ffuf, sqlmap, zaproxy and the rest) onto a plain
+Debian/Ubuntu box, choosing apt, `go install`, gem, snap or a release binary per
+tool, so there is no need to run Kali itself. The tools are dual-use, which is
+the point of keeping it a front door: it equips a box you are authorized to
+test, and nothing about a target lives in this repository.
 
 All three kinds are idempotent, which is what lets install, re-install and update be
 the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and a failure warns
