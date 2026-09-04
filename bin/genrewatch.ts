@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * genrewatch — what is coming out, and whether it exists at all.
  *

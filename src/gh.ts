@@ -15,12 +15,15 @@ import { run, sleep, type RunResult } from './exec.ts';
  */
 
 export class GhError extends Error {
-  constructor(
-    message: string,
-    readonly result?: RunResult,
-  ) {
+  // An explicit field rather than a constructor parameter property: Node's
+  // type stripping accepts only syntax it can erase, and this is the one
+  // construct in the repo it refuses.
+  readonly result?: RunResult;
+
+  constructor(message: string, result?: RunResult) {
     super(message);
     this.name = 'GhError';
+    if (result !== undefined) this.result = result;
   }
 }
 

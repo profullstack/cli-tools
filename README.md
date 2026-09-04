@@ -35,7 +35,9 @@ One thing here is not a `PATH` command and does not need Node:
 
 ## Requirements
 
-- **Node 20+**
+- **Node 22.18+**, which runs the `.ts` entry points directly (type stripping
+  is on by default from 22.18 and 23.6); nothing is fetched or compiled to start
+  a command
 - **[`gh`](https://cli.github.com/)**, authenticated (`gh auth status`) — every
   `gh-prs*` command shells out to it
 - **`dig`** at `/usr/bin/dig` — `domainjson` only

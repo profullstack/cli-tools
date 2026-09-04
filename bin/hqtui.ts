@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * hqtui — the HQTUI system dashboard, on this box.
  *

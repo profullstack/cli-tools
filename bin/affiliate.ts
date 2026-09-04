@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * affiliate — work through a list of programs you mean to sign up for.
  *

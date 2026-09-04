@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * generate-names — turn a sentence into a long list of candidate names.
  *
