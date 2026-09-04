@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * ask-web — answer a question from the live web, with the sources attached.
  *

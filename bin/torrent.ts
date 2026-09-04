@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * torrent -- turn a directory into a torrent, and get it seeded.
  *

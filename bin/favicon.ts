@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * favicon — every icon a site links, from one SVG.
  *

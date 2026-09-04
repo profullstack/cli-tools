@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * vid — what is in this file, and get a smaller or shorter one out.
  *

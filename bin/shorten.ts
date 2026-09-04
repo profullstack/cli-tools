@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * shorten — mint a short link on the Moshpit registry and print it.
  *

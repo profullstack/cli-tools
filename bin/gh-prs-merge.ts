@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * gh-prs-merge — sweep open pull requests and squash-merge the ones that are
  * genuinely ready.

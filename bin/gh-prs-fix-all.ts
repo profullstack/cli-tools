@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * gh-prs-fix-all — look at every open threatcrush-scan pull request, and fix
  * the ones that are broken because of us.

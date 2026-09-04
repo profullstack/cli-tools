@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * porkbun — read and change DNS at Porkbun without the dashboard.
  *

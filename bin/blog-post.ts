@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * blog-post — write to the plain-HTML blog without getting a convention wrong.
  *

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * codeburn — see where your AI spend goes, by task, tool, model and project.
  *

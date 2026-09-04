@@ -76,10 +76,9 @@ export interface IconRequest {
 /**
  * Which build of the generator to run.
  *
- * Unpinned by default, which is the same bet every tool here already makes in
- * its `npx --yes tsx` shebang: this is a toolbelt on somebody's box, so the
- * newest published generator is the one they want, and a version frozen into
- * this file would quietly outlive its own fixes. `FAVICON_SPEC` is the way out
+ * Unpinned by default: this is a toolbelt on somebody's box, so the newest
+ * published generator is the one they want, and a version frozen into this
+ * file would quietly outlive its own fixes. `FAVICON_SPEC` is the way out
  * in both directions — pin it (`@profullstack/favicon-generator@1.2.1`) when a
  * release breaks you, or point it at a checkout while you work on the
  * generator itself.

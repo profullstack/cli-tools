@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * tts — read text aloud with ElevenLabs and keep the audio.
  *

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * tcfeed — read the newest posts on a subreddit, find the repositories they
  * link, scan each one, and print a shortlist worth reading.

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * img — resize, convert and inspect images, with whichever engine is present.
  *

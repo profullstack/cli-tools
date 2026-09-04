@@ -1,4 +1,4 @@
-#!/usr/bin/env -S npx --yes tsx
+#!/usr/bin/env node
 /**
  * sysupdate — bring this Debian/Ubuntu box up to date.
  *
