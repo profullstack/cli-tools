@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "cli-tools",
-  "description": "Profullstack's command-line tools as installable plugins \u2014 publish to the plain-HTML blog without getting a convention wrong.",
+  "description": "Profullstack's command-line tools as installable plugins — publish to the plain-HTML blog without getting a convention wrong.",
   "owner": {
     "name": "profullstack",
     "url": "https://profullstack.com"
@@ -118,6 +118,25 @@
         "mastodon",
         "bluesky",
         "myna"
+      ]
+    },
+    {
+      "name": "mail",
+      "description": "The inbox from the terminal, for more than one account: list and search over IMAP, read, reply in the thread, send over SMTP with Resend as the fallback, and mark, file or delete without a browser tab.",
+      "source": "./plugins/mail",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#mail",
+      "keywords": [
+        "mail",
+        "email",
+        "imap",
+        "smtp",
+        "resend",
+        "inbox"
       ]
     }
   ]

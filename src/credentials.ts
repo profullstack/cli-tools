@@ -34,6 +34,8 @@ export const KNOWN_KEYS: Record<string, string> = {
   elevenlabs: 'ELEVENLABS_API_KEY',
   porkbun: 'PORKBUN_API_KEY',
   porkbun_secret: 'PORKBUN_SECRET_API_KEY',
+  // Read by `mail`, as the fallback sender for a domain verified at Resend.
+  resend: 'RESEND_API_KEY',
   // Read by `shorten`. Usually not needed: on a machine where the pit works,
   // `moshcode login` has already written the same token to
   // ~/.moshcode/credentials.json and that is what gets picked up. This is for a
