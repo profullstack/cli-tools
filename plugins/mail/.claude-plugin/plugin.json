@@ -2,7 +2,7 @@
   "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
   "name": "mail",
   "description": "The inbox from the terminal, for more than one account: sign in to Gmail, Yahoo, iCloud, Fastmail, Zoho, Proton, Forward Email or any IMAP host with the right kind of password, then list and search over IMAP, read a message, reply in its thread, send a new one over SMTP with Resend as the fallback, and mark, file or delete without a browser tab.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "profullstack",
     "url": "https://profullstack.com"
