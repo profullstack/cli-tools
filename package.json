@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/cli-tools",
-  "version": "0.23.0",
+  "version": "0.24.0",
   "private": true,
   "description": "Local command-line tools, in TypeScript, exposed on PATH.",
   "type": "module",
@@ -21,12 +21,19 @@
     "unlink:bin": "node scripts/install-links.mjs --remove"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.4.6",
     "@types/node": "^22.10.2",
+    "@types/nodemailer": "^8.0.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.10"
   },
   "optionalDependencies": {
     "sharp": "^0.35.3"
+  },
+  "dependencies": {
+    "imapflow": "^1.7.8",
+    "mailparser": "^3.9.20",
+    "nodemailer": "^10.0.0"
   }
 }

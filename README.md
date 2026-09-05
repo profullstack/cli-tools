@@ -302,6 +302,7 @@ carries the same masked previews, not the values.
 | `porkbun` | `PORKBUN_API_KEY` | `porkbun` |
 | `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
 | `moshcode` | `MOSHCODE_API_KEY` | `shorten` |
+| `resend` | `RESEND_API_KEY` | `mail`, as the fallback sender |
 
 A key earns a row here by being read by a command in this repository, not by
 being a key the team owns. The vault holds more than twice as many; the rest
@@ -623,6 +624,54 @@ code**: a bad key, an unknown domain and a malformed record all return `200 OK`
 with `{"status":"ERROR"}`, so checking the response code reports success for all
 three. And API access is **off per domain** until you switch it on in that
 domain's settings — a key that pings fine still gets `Invalid domain` until you do.
+
+### `mail`
+
+The inbox from the terminal, for more than one account: list and search over
+IMAP, read, reply in the thread, send over SMTP with Resend as the fallback,
+and mark, file or delete without a browser tab.
+
+```sh
+mail accounts pull                            # accounts from the cli-tools-mail vault
+mail accounts add work you@example.com        # or by hand; prompts for the password
+mail accounts add home you@gmail.com          # gmail is inferred; wants an App Password
+
+mail ls                                       # newest 25, default account
+mail ls -a all --unread                       # unread across every account
+mail search from:substack is:unread
+mail search -a all "pottery" since:2026-09-01
+mail read 4213                                # headers, then text; marks it read
+mail reply 4213 --body "Thanks."              # quoted, threaded, to the Reply-To
+mail reply 4213 --all --file answer.md --draft
+mail send --to a@x --subject Hi --body B --attach deck.pdf
+mail mark 4213 --flag
+mail archive 4213
+mail rm 4213                                  # to Trash; --purge --yes to expunge
+```
+
+Accounts are configuration, not code — this repository is public and names
+nobody. They live in `~/.config/cli-tools/mail.json` (0600), and
+`mail accounts pull` imports them from the `cli-tools-mail` team vault as
+`MAIL_<NAME>_EMAIL`, `_PROVIDER` (`forwardemail`, `gmail`, `custom`),
+`_PASSWORD`, optional `_NAME`, `_USER`, `_IMAP_HOST`, `_SMTP_HOST`, `_SMTP_PORT`,
+and `MAIL_DEFAULT`. An exported `MAIL_<NAME>_PASSWORD` wins over the stored one;
+`mail accounts` says which source is in effect and never prints a password.
+
+Two providers are built in. Forward Email wants the alias password generated in
+its dashboard; Gmail wants an App Password (2-step verification on), and refuses
+the account password over IMAP. `custom` takes explicit hosts.
+
+Sending is SMTP with the account's password. If the *pipe* fails — refused
+login, dead host — Resend carries the message when `RESEND_API_KEY` is stored
+(`cli-tools config pull`) and the domain is verified there, and a copy is filed
+to Sent over IMAP because Resend never files one. A refused *message* is never
+retried on the other path. A webmail address (gmail.com and friends) cannot be
+verified at Resend, so a Gmail account sends over SMTP only. `--via smtp|resend`
+pins one and refuses rather than swapping; `--draft` files to Drafts instead.
+
+Search takes `from:`, `to:`, `cc:`, `subject:`, `body:`, `since:`/`before:`/`on:`
+(`YYYY-MM-DD`), `is:unread|read|flagged|answered`, and bare words for the text;
+`--gmail` hands the whole query to Gmail's own search language instead.
 
 ### `blog-post`
 
@@ -1288,11 +1337,13 @@ moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
 moshcode plugin install ai@cli-tools        # /ai:ask, /ai:tts
 moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
 moshcode plugin install myna@cli-tools      # /myna:post, :schedule, :queue, :feed
+moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send
 ```
 
 See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),
 [plugins/domain](plugins/domain/README.md), [plugins/ai](plugins/ai/README.md),
-[plugins/bo](plugins/bo/README.md) and [plugins/myna](plugins/myna/README.md).
+[plugins/bo](plugins/bo/README.md), [plugins/myna](plugins/myna/README.md)
+and [plugins/mail](plugins/mail/README.md).
 
 Two of them front a command this repo does not implement, for opposite reasons.
 `myna` fronts one it *installs* — the companion above — so the plugin is purely

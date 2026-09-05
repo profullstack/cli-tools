@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "mail",
+  "description": "The inbox from the terminal, for more than one account: list and search over IMAP, read a message, reply in its thread, send a new one over SMTP with Resend as the fallback, and mark, file or delete without a browser tab.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://github.com/profullstack/cli-tools#mail",
+  "license": "MIT",
+  "keywords": [
+    "mail",
+    "email",
+    "imap",
+    "smtp",
+    "resend",
+    "inbox"
+  ]
+}

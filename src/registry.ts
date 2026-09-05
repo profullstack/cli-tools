@@ -40,6 +40,7 @@ const SUMMARIES: Record<string, string> = {
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',
+  mail: 'The inbox from the terminal: read, search, reply, send, file, delete',
   'gh-prs': 'Every open PR across the owners you name',
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
