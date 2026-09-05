@@ -657,7 +657,7 @@ nobody. They live in `~/.config/cli-tools/mail.json` (0600), and
 `mail accounts pull` imports them from the `cli-tools-mail` team vault as
 `MAIL_<NAME>_EMAIL`, `_PROVIDER` (a provider name below, or `custom`),
 `_PASSWORD`, optional `_NAME`, `_USER`, `_IMAP_HOST`, `_IMAP_PORT`, `_IMAP_SECURE`,
-`_SMTP_HOST`, `_SMTP_PORT`, `_SMTP_SECURE`, `_INSECURE_TLS`, and `MAIL_DEFAULT`. An
+`_SMTP_HOST`, `_SMTP_PORT`, `_SMTP_SECURE`, `_TLS_CA`, and `MAIL_DEFAULT`. An
 exported `MAIL_<NAME>_PASSWORD` wins over the stored one; `mail accounts` says
 which source is in effect and never prints a password.
 
@@ -673,8 +673,11 @@ The provider is read off a webmail address, or off a custom domain's MX records
 (a domain hosted at Google, Zoho, Fastmail, Proton, iCloud or Forward Email
 needs no `--provider`). Outlook.com and Microsoft 365 are listed as unreachable:
 Microsoft takes only OAuth2 now, and app passwords no longer count; Tuta and HEY
-have no IMAP at all. `custom` takes explicit hosts, with `--starttls`,
-`--imap-starttls` and `--insecure-tls` for the odd server.
+have no IMAP at all. `custom` takes explicit hosts, with `--starttls` and
+`--imap-starttls` for the odd server. Certificate verification is never switched
+off: a host that signs for itself, such as Proton Mail Bridge on localhost, is
+handled by pinning its certificate (`--tls-ca cert.pem`, or the copy Bridge keeps
+at its usual path, found automatically).
 
 Sending is SMTP with the account's password. If the *pipe* fails — refused
 login, dead host — Resend carries the message when `RESEND_API_KEY` is stored

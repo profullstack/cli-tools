@@ -49,6 +49,7 @@ import {
   splitAddresses,
   stripHtml,
   summaryFrom,
+  trustedCa,
   unsupportedProvider,
   verifyAccount,
 } from '../src/mail.ts';
@@ -66,7 +67,7 @@ function account(partial: Partial<Account> = {}): Account {
     provider: 'forwardemail',
     imap: { host: 'imap.example.com', port: 993, secure: true },
     smtp: { host: 'smtp.example.com', port: 465, secure: true },
-    insecureTls: false,
+    tlsCa: null,
     ...partial,
   };
 }
@@ -119,7 +120,7 @@ describe('resolveAccount', () => {
   it('fills hosts from the provider preset', () => {
     const resolved = resolveAccount('home', { email: 'a@gmail.com', provider: 'gmail', password: 'p' }, env());
     expect(resolved.imap).toEqual({ host: 'imap.gmail.com', port: 993, secure: true });
-    expect(resolved.insecureTls).toBe(false);
+    expect(resolved.tlsCa).toBeNull();
     expect(resolved.smtp).toEqual({ host: 'smtp.gmail.com', port: 465, secure: true });
     expect(resolved.user).toBe('a@gmail.com');
     expect(resolved.passwordSource).toBe('file');
@@ -703,8 +704,8 @@ describe('provider table', () => {
     expect(isProviderName('pigeon')).toBe(false);
     expect(isProviderName(undefined)).toBe(false);
     expect(providerFor('custom')).toBeNull();
-    expect(providerFor('proton')?.insecureTls).toBe(true);
-    expect(providerFor('gmail')?.insecureTls).toBeUndefined();
+    expect(providerFor('proton')?.caPaths?.length).toBeGreaterThan(0);
+    expect(providerFor('gmail')?.caPaths).toBeUndefined();
   });
 
   it('knows the hosts a password cannot reach, by name and by address', () => {
@@ -737,25 +738,35 @@ describe('provider table', () => {
 });
 
 describe('resolveAccount across the table', () => {
-  it('turns Proton into a localhost STARTTLS bridge that trusts its own certificate', () => {
-    const resolved = resolveAccount('p', { email: 'a@proton.me', provider: 'proton', password: 'x' }, env());
+  it('turns Proton into a localhost STARTTLS bridge, pinning its certificate when told where', () => {
+    const resolved = resolveAccount('p', { email: 'a@proton.me', provider: 'proton', password: 'x', tlsCa: '/x/cert.pem' }, env());
     expect(resolved.imap).toEqual({ host: '127.0.0.1', port: 1143, secure: false });
     expect(resolved.smtp).toEqual({ host: '127.0.0.1', port: 1025, secure: false });
-    expect(resolved.insecureTls).toBe(true);
+    expect(resolved.tlsCa).toBe('/x/cert.pem');
   });
 
   it('gives iCloud implicit TLS for IMAP and STARTTLS for SMTP', () => {
     const resolved = resolveAccount('i', { email: 'a@icloud.com', provider: 'icloud', password: 'x' }, env());
     expect(resolved.imap.secure).toBe(true);
     expect(resolved.smtp).toEqual({ host: 'smtp.mail.me.com', port: 587, secure: false });
-    expect(resolved.insecureTls).toBe(false);
+    expect(resolved.tlsCa).toBeNull();
   });
 
   it('treats a non-993 custom IMAP port as STARTTLS unless told otherwise', () => {
     const base = { email: 'a@x.org', provider: 'custom' as const, imapHost: 'imap.x.org', smtpHost: 'smtp.x.org' };
     expect(resolveAccount('c', { ...base, imapPort: 143 }, env()).imap.secure).toBe(false);
     expect(resolveAccount('c', { ...base, imapPort: 143, imapSecure: true }, env()).imap.secure).toBe(true);
-    expect(resolveAccount('c', { ...base, insecureTls: true }, env()).insecureTls).toBe(true);
+    expect(resolveAccount('c', { ...base, tlsCa: '/x/ca.pem' }, env()).tlsCa).toBe('/x/ca.pem');
+  });
+
+  it('reads a pinned certificate for the TLS options and refuses a path it cannot read', () => {
+    expect(trustedCa(account())).toBeNull();
+    const dir = mkdtempSync(join(tmpdir(), 'mail-ca-'));
+    const pem = join(dir, 'cert.pem');
+    writeFileSync(pem, '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+    expect(trustedCa(account({ tlsCa: pem }))?.ca.toString()).toContain('BEGIN CERTIFICATE');
+    expect(() => trustedCa(account({ tlsCa: join(dir, 'missing.pem') }))).toThrow(/cannot be read/);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -836,12 +847,16 @@ describe('the wider table in configuration', () => {
       MAIL_P_EMAIL: 'a@proton.me',
       MAIL_P_PROVIDER: 'proton',
       MAIL_P_IMAP_SECURE: 'false',
-      MAIL_P_INSECURE_TLS: 'yes',
+      MAIL_P_TLS_CA: '/home/me/.config/protonmail/bridge-v3/cert.pem',
       MAIL_Z_EMAIL: 'a@zoho.eu',
       MAIL_Z_PROVIDER: 'Zoho',
     });
     expect(config.accounts.y?.provider).toBe('yahoo');
-    expect(config.accounts.p).toMatchObject({ provider: 'proton', imapSecure: false, insecureTls: true });
+    expect(config.accounts.p).toMatchObject({
+      provider: 'proton',
+      imapSecure: false,
+      tlsCa: '/home/me/.config/protonmail/bridge-v3/cert.pem',
+    });
     expect(config.accounts.z?.provider).toBe('zoho');
   });
 
@@ -849,12 +864,12 @@ describe('the wider table in configuration', () => {
     const config = normalizeConfig({
       accounts: {
         i: { email: 'a@icloud.com' },
-        c: { email: 'a@x.org', provider: 'custom', imapHost: 'imap.x.org', smtpHost: 'smtp.x.org', imapSecure: false, insecureTls: true },
+        c: { email: 'a@x.org', provider: 'custom', imapHost: 'imap.x.org', smtpHost: 'smtp.x.org', imapSecure: false, tlsCa: '/x/ca.pem' },
         bad: { email: 'a@x.org', provider: 'outlook' },
       },
     });
     expect(config.accounts.i?.provider).toBe('icloud');
-    expect(config.accounts.c).toMatchObject({ imapSecure: false, insecureTls: true });
+    expect(config.accounts.c).toMatchObject({ imapSecure: false, tlsCa: '/x/ca.pem' });
     expect(config.accounts.bad?.provider).toBe('custom');
   });
 });

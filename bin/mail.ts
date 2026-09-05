@@ -128,7 +128,7 @@ Account options for \`accounts add\`:
   --imap-host H --imap-port N --smtp-host H --smtp-port N
   --starttls              SMTP upgrades with STARTTLS (587) instead of TLS on connect (465)
   --imap-starttls         IMAP upgrades with STARTTLS (143) instead of TLS on connect (993)
-  --insecure-tls          accept a certificate no CA signed (a bridge on localhost, never a real host)
+  --tls-ca P              trust this PEM certificate in place of the system roots (a bridge's own, on localhost)
   --password              prompt for it now (the default when on a terminal)
   --no-password           do not prompt; export ${'MAIL_<NAME>_PASSWORD'} or pull it later
   --default               make this the default account
@@ -245,7 +245,8 @@ function applyHostOptions(account: AccountConfig, parsed: ReturnType<typeof pars
   if (parsed.values.has('--smtp-port')) account.smtpPort = integer(parsed.values, '--smtp-port', 465, { min: 1, max: 65_535 });
   if (parsed.flags.has('--starttls')) account.smtpSecure = false;
   if (parsed.flags.has('--imap-starttls')) account.imapSecure = false;
-  if (parsed.flags.has('--insecure-tls')) account.insecureTls = true;
+  const ca = parsed.values.get('--tls-ca');
+  if (ca !== undefined) account.tlsCa = ca;
 }
 
 /**
@@ -363,7 +364,7 @@ async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnTy
           provider: entry.provider,
           imap: { host: entry.imapHost ?? '?', port: entry.imapPort ?? 993, secure: true },
           smtp: { host: entry.smtpHost ?? '?', port: entry.smtpPort ?? 465, secure: true },
-          insecureTls: false,
+          tlsCa: null,
         };
       }
     });
@@ -524,12 +525,12 @@ async function main(argv: string[]): Promise<number> {
     boolean: [
       '--json', '--unread', '--gmail', '--keep-unread', '--raw', '--all', '--no-quote', '--draft',
       '--purge', '--yes', '--read', '--flag', '--unflag', '--password', '--no-password', '--default',
-      '--starttls', '--imap-starttls', '--insecure-tls', '--no-verify', '-h', '--help',
+      '--starttls', '--imap-starttls', '--no-verify', '-h', '--help',
     ],
     string: [
       '-a', '--account', '--folder', '--limit', '--to', '--cc', '--bcc', '--subject', '--body',
       '--file', '--attach', '--via', '--provider', '--name', '--user', '--imap-host', '--imap-port',
-      '--smtp-host', '--smtp-port', '--as',
+      '--smtp-host', '--smtp-port', '--as', '--tls-ca',
     ],
   });
 

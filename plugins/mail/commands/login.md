@@ -15,7 +15,7 @@ mail login gmail you@gmail.com                   # says "app password", checks I
 mail login you@yahoo.com                         # provider read off the address
 mail login you@yourdomain.com                    # provider read off the domain's MX records
 mail login forwardemail you@yourdomain.com --as work --default
-mail login proton you@proton.me                  # through Proton Mail Bridge on localhost
+mail login proton you@proton.me                  # through Proton Mail Bridge on localhost; its certificate is pinned, never ignored
 mail login custom you@example.org --imap-host imap.example.org --smtp-host smtp.example.org --starttls
 ```
 

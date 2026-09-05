@@ -27,7 +27,7 @@
  */
 
 import { resolveMx } from 'node:dns/promises';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -68,8 +68,12 @@ export interface Provider {
   smtpPort: number;
   /** Implicit TLS on connect (465), as opposed to STARTTLS (587). */
   smtpSecure: boolean;
-  /** Accept a certificate no CA signed. Only for a bridge on localhost. */
-  insecureTls?: boolean;
+  /**
+   * Where the host keeps its own certificate, for a bridge on localhost that
+   * signs for itself. The first path that exists is trusted in place of the
+   * system roots; verification is never switched off. `~` is the home.
+   */
+  caPaths?: string[];
   passwordKind: PasswordKind;
   /** Where the password comes from, for the setup message. */
   passwordHint: string;
@@ -226,7 +230,11 @@ export const PROVIDERS: Record<BuiltInProvider, Provider> = {
     smtpHost: '127.0.0.1',
     smtpPort: 1025,
     smtpSecure: false,
-    insecureTls: true,
+    caPaths: [
+      '~/.config/protonmail/bridge-v3/cert.pem',
+      '~/Library/Application Support/protonmail/bridge-v3/cert.pem',
+      '~/AppData/Roaming/protonmail/bridge-v3/cert.pem',
+    ],
     passwordKind: 'bridge',
     passwordHint:
       'the password Proton Mail Bridge shows for the account (Bridge → the account → Mailbox ' +
@@ -235,7 +243,9 @@ export const PROVIDERS: Record<BuiltInProvider, Provider> = {
     domains: ['proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me'],
     note:
       'Proton has no IMAP of its own: the Bridge app must be installed, signed in and running on this ' +
-      'machine, and it needs a paid Proton plan. It serves STARTTLS on localhost with a self-signed certificate.',
+      'machine, and it needs a paid Proton plan. It serves STARTTLS on localhost with a certificate of its ' +
+      'own; the copy Bridge keeps at its usual path is trusted automatically, or pass --tls-ca with the file ' +
+      'from Bridge → Settings → Advanced settings → Export TLS certificates.',
   },
   gmx: {
     label: 'GMX',
@@ -513,8 +523,8 @@ export interface AccountConfig {
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
-  /** Accept a certificate no CA signed — a local bridge, never a real host. */
-  insecureTls?: boolean;
+  /** A PEM file to trust in place of the system roots — a local bridge's own certificate. */
+  tlsCa?: string;
 }
 
 export interface MailConfig {
@@ -535,7 +545,8 @@ export interface Account {
   provider: ProviderName;
   imap: { host: string; port: number; secure: boolean };
   smtp: { host: string; port: number; secure: boolean };
-  insecureTls: boolean;
+  /** Path of the certificate to trust instead of the system roots, when there is one. */
+  tlsCa: string | null;
 }
 
 function xdgConfigHome(env: NodeJS.ProcessEnv): string {
@@ -586,7 +597,7 @@ export function normalizeConfig(parsed: unknown): MailConfig {
       email: entry.email.trim().toLowerCase(),
       provider: isProviderName(provider) ? provider : (guessProvider(entry.email) ?? 'custom'),
     };
-    for (const key of ['name', 'user', 'password', 'imapHost', 'smtpHost'] as const) {
+    for (const key of ['name', 'user', 'password', 'imapHost', 'smtpHost', 'tlsCa'] as const) {
       const value = entry[key];
       if (typeof value === 'string' && value.trim()) account[key] = value.trim();
     }
@@ -594,7 +605,7 @@ export function normalizeConfig(parsed: unknown): MailConfig {
       const value = entry[key];
       if (typeof value === 'number' && Number.isInteger(value) && value > 0) account[key] = value;
     }
-    for (const key of ['imapSecure', 'smtpSecure', 'insecureTls'] as const) {
+    for (const key of ['imapSecure', 'smtpSecure'] as const) {
       const value = entry[key];
       if (typeof value === 'boolean') account[key] = value;
     }
@@ -610,6 +621,30 @@ export function saveConfig(config: MailConfig, env: NodeJS.ProcessEnv = process.
   // The mode only applies on create; an existing file keeps a hand-set one.
   chmodSync(path, 0o600);
   return path;
+}
+
+function expandHome(path: string): string {
+  return path.startsWith('~/') ? join(homedir(), path.slice(2)) : path;
+}
+
+/**
+ * The certificate an account pins, read for the TLS options.
+ *
+ * Trusting one file in place of the system roots keeps verification on:
+ * the bridge's certificate must still match, and a stranger's will not. A
+ * path that cannot be read is an error at connect time, not a silent
+ * downgrade.
+ */
+export function trustedCa(account: Account): { ca: Buffer } | null {
+  if (!account.tlsCa) return null;
+  try {
+    return { ca: readFileSync(account.tlsCa) };
+  } catch (error) {
+    throw new MailError(
+      `account "${account.name}" pins the certificate at ${account.tlsCa}, which cannot be read: ` +
+        `${(error as Error).message}`,
+    );
+  }
 }
 
 /** Fill hosts from the provider and resolve the password, environment first. */
@@ -654,7 +689,7 @@ export function resolveAccount(
       // 465 is implicit TLS everywhere; anything else is STARTTLS unless told.
       secure: config.smtpSecure ?? (preset ? preset.smtpSecure : smtpPort === 465),
     },
-    insecureTls: config.insecureTls ?? preset?.insecureTls ?? false,
+    tlsCa: config.tlsCa ?? preset?.caPaths?.map(expandHome).find((path) => existsSync(path)) ?? null,
   };
 }
 
@@ -742,7 +777,7 @@ export const MAIL_VAULT_PROJECT = 'cli-tools-mail';
 export function accountsFromVault(vault: Record<string, string>): MailConfig {
   const config: MailConfig = { accounts: {} };
   const pattern =
-    /^MAIL_([A-Z0-9_]+?)_(EMAIL|PROVIDER|PASSWORD|NAME|USER|IMAP_HOST|IMAP_PORT|IMAP_SECURE|SMTP_HOST|SMTP_PORT|SMTP_SECURE|INSECURE_TLS)$/;
+    /^MAIL_([A-Z0-9_]+?)_(EMAIL|PROVIDER|PASSWORD|NAME|USER|IMAP_HOST|IMAP_PORT|IMAP_SECURE|SMTP_HOST|SMTP_PORT|SMTP_SECURE|TLS_CA)$/;
   const partial: Record<string, Record<string, string>> = {};
 
   for (const [key, value] of Object.entries(vault)) {
@@ -775,7 +810,7 @@ export function accountsFromVault(vault: Record<string, string>): MailConfig {
     if (fields.SMTP_PORT && /^\d+$/.test(fields.SMTP_PORT)) account.smtpPort = Number(fields.SMTP_PORT);
     if (fields.IMAP_SECURE) account.imapSecure = /^(true|1|yes)$/i.test(fields.IMAP_SECURE);
     if (fields.SMTP_SECURE) account.smtpSecure = /^(true|1|yes)$/i.test(fields.SMTP_SECURE);
-    if (fields.INSECURE_TLS) account.insecureTls = /^(true|1|yes)$/i.test(fields.INSECURE_TLS);
+    if (fields.TLS_CA) account.tlsCa = fields.TLS_CA;
     config.accounts[name] = account;
   }
 
@@ -1065,7 +1100,7 @@ export function imapClient(account: Account, options: { logger?: boolean } = {})
     port: account.imap.port,
     secure: account.imap.secure,
     auth: { user: account.user, pass: account.password ?? '' },
-    ...(account.insecureTls ? { tls: { rejectUnauthorized: false } } : {}),
+    ...(account.tlsCa ? { tls: trustedCa(account) ?? {} } : {}),
     // imapflow logs every command at info by default; only on request.
     ...(options.logger ? {} : { logger: false as const }),
     // Fail on a black-holed port rather than hanging the shell.
@@ -1469,7 +1504,7 @@ export function smtpTransport(account: Account) {
     port: account.smtp.port,
     secure: account.smtp.secure,
     auth: { user: account.user, pass: account.password ?? '' },
-    ...(account.insecureTls ? { tls: { rejectUnauthorized: false } } : {}),
+    ...(account.tlsCa ? { tls: trustedCa(account) ?? {} } : {}),
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
   });
