@@ -26,6 +26,7 @@
  * {@link Mailbox} interface so tests never open a socket.
  */
 
+import { resolveMx } from 'node:dns/promises';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,63 +47,332 @@ export class MailError extends Error {
 // Providers
 // ---------------------------------------------------------------------------
 
-export type ProviderName = 'forwardemail' | 'gmail' | 'custom';
+/**
+ * What a provider accepts as the password over IMAP and SMTP.
+ *
+ * `account`: the same password as the website. `app`: a separate, generated
+ * app password, because the account password is refused on purpose. `alias`:
+ * a password generated per address in the provider's dashboard. `bridge`: a
+ * local bridge process speaks IMAP/SMTP on localhost and mints its own.
+ */
+export type PasswordKind = 'account' | 'app' | 'alias' | 'bridge';
 
 export interface Provider {
+  /** The name people use for it. */
+  label: string;
   imapHost: string;
   imapPort: number;
+  /** Implicit TLS on connect (993), as opposed to STARTTLS (143). */
+  imapSecure: boolean;
   smtpHost: string;
   smtpPort: number;
   /** Implicit TLS on connect (465), as opposed to STARTTLS (587). */
   smtpSecure: boolean;
+  /** Accept a certificate no CA signed. Only for a bridge on localhost. */
+  insecureTls?: boolean;
+  passwordKind: PasswordKind;
   /** Where the password comes from, for the setup message. */
   passwordHint: string;
+  /** Where to generate it, when there is a page for that. */
+  passwordUrl?: string;
+  /** Address domains that imply this provider. */
+  domains: string[];
+  /** Something to know before the first login. */
+  note?: string;
 }
 
+export type BuiltInProvider =
+  | 'forwardemail'
+  | 'gmail'
+  | 'yahoo'
+  | 'aol'
+  | 'icloud'
+  | 'fastmail'
+  | 'zoho'
+  | 'proton'
+  | 'gmx'
+  | 'yandex'
+  | 'mailcom'
+  | 'posteo'
+  | 'mailbox'
+  | 'migadu'
+  | 'purelymail';
+
+export type ProviderName = BuiltInProvider | 'custom';
+
 /**
- * Hosts for the providers these mailboxes actually use.
+ * Every host that still takes a password over IMAP and SMTP, with the ports
+ * and the kind of password it wants. A provider whose only way in is OAuth or
+ * its own app is in UNSUPPORTED_PROVIDERS instead, with the reason, so
+ * `mail login outlook` explains itself rather than failing a login.
  *
- * Forward Email is where the business domain's mail lives; Gmail is the
- * personal one. `custom` exists so a third account is a matter of naming its
- * hosts rather than editing this file.
+ * `custom` exists so any other host is a matter of naming its hosts rather
+ * than editing this file.
  */
-export const PROVIDERS: Record<Exclude<ProviderName, 'custom'>, Provider> = {
+export const PROVIDERS: Record<BuiltInProvider, Provider> = {
   forwardemail: {
+    label: 'Forward Email',
     imapHost: 'imap.forwardemail.net',
     imapPort: 993,
+    imapSecure: true,
     smtpHost: 'smtp.forwardemail.net',
     smtpPort: 465,
     smtpSecure: true,
+    passwordKind: 'alias',
     passwordHint:
       'the alias password generated in the Forward Email dashboard (Aliases → the address → ' +
       'Generate Password); it is shown once',
+    passwordUrl: 'https://forwardemail.net/my-account/domains',
+    domains: ['forwardemail.net'],
+    note: 'The address must have IMAP/SMTP storage enabled on its alias; forwarding-only aliases have no mailbox.',
   },
   gmail: {
+    label: 'Gmail / Google Workspace',
     imapHost: 'imap.gmail.com',
     imapPort: 993,
+    imapSecure: true,
     smtpHost: 'smtp.gmail.com',
     smtpPort: 465,
     smtpSecure: true,
+    passwordKind: 'app',
     passwordHint:
       'an App Password from https://myaccount.google.com/apppasswords (needs 2-step ' +
       'verification on the account); the normal account password is refused',
+    passwordUrl: 'https://myaccount.google.com/apppasswords',
+    domains: ['gmail.com', 'googlemail.com'],
+    note: 'A Workspace domain works the same way once its admin has left IMAP on.',
+  },
+  yahoo: {
+    label: 'Yahoo Mail',
+    imapHost: 'imap.mail.yahoo.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.mail.yahoo.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'app',
+    passwordHint:
+      'an app password from Account Security → Generate app password; the account password is refused',
+    passwordUrl: 'https://login.yahoo.com/account/security',
+    domains: ['yahoo.com', 'yahoo.co.uk', 'yahoo.ca', 'yahoo.com.au', 'yahoo.fr', 'yahoo.de', 'ymail.com', 'rocketmail.com'],
+  },
+  aol: {
+    label: 'AOL Mail',
+    imapHost: 'imap.aol.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.aol.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'app',
+    passwordHint: 'an app password from Account Security → Generate app password',
+    passwordUrl: 'https://login.aol.com/account/security',
+    domains: ['aol.com', 'aim.com'],
+  },
+  icloud: {
+    label: 'iCloud Mail',
+    imapHost: 'imap.mail.me.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.mail.me.com',
+    smtpPort: 587,
+    smtpSecure: false,
+    passwordKind: 'app',
+    passwordHint:
+      'an app-specific password from the Apple Account page (Sign-In and Security → App-Specific ' +
+      'Passwords); needs two-factor authentication on the Apple Account',
+    passwordUrl: 'https://account.apple.com/account/manage',
+    domains: ['icloud.com', 'me.com', 'mac.com'],
+    note: 'Log in with the full address, including a custom iCloud domain.',
+  },
+  fastmail: {
+    label: 'Fastmail',
+    imapHost: 'imap.fastmail.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.fastmail.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'app',
+    passwordHint:
+      'an app password from Settings → Privacy & Security → Integrations → New app password; ' +
+      'the account password is refused by third-party clients',
+    passwordUrl: 'https://app.fastmail.com/settings/security/devices',
+    domains: ['fastmail.com', 'fastmail.fm', 'fastmail.us', 'sent.com'],
+  },
+  zoho: {
+    label: 'Zoho Mail',
+    imapHost: 'imap.zoho.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.zoho.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'app',
+    passwordHint:
+      'the account password, or an application-specific password when two-factor authentication ' +
+      'is on (Zoho Accounts → Security → App Passwords)',
+    passwordUrl: 'https://accounts.zoho.com/home#security/security_password',
+    domains: ['zoho.com', 'zohomail.com', 'zoho.eu', 'zoho.in'],
+    note:
+      'IMAP has to be switched on first (Zoho Mail → Settings → Mail Accounts → IMAP Access). ' +
+      'An EU or IN data centre uses imap.zoho.eu / smtp.zoho.eu or .in — pass --imap-host and --smtp-host.',
+  },
+  proton: {
+    label: 'Proton Mail (through Proton Mail Bridge)',
+    imapHost: '127.0.0.1',
+    imapPort: 1143,
+    imapSecure: false,
+    smtpHost: '127.0.0.1',
+    smtpPort: 1025,
+    smtpSecure: false,
+    insecureTls: true,
+    passwordKind: 'bridge',
+    passwordHint:
+      'the password Proton Mail Bridge shows for the account (Bridge → the account → Mailbox ' +
+      'configuration), not the Proton password',
+    passwordUrl: 'https://proton.me/mail/bridge',
+    domains: ['proton.me', 'protonmail.com', 'protonmail.ch', 'pm.me'],
+    note:
+      'Proton has no IMAP of its own: the Bridge app must be installed, signed in and running on this ' +
+      'machine, and it needs a paid Proton plan. It serves STARTTLS on localhost with a self-signed certificate.',
+  },
+  gmx: {
+    label: 'GMX',
+    imapHost: 'imap.gmx.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'mail.gmx.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the account password, once IMAP is enabled (Settings → POP3/IMAP)',
+    domains: ['gmx.com', 'gmx.us', 'gmx.net', 'gmx.de', 'gmx.at', 'gmx.ch'],
+    note: 'A gmx.net / .de / .at / .ch address may prefer imap.gmx.net and mail.gmx.net — pass --imap-host and --smtp-host.',
+  },
+  yandex: {
+    label: 'Yandex Mail',
+    imapHost: 'imap.yandex.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.yandex.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'app',
+    passwordHint: 'an app password from Yandex ID → Security → App passwords',
+    passwordUrl: 'https://id.yandex.com/security/app-passwords',
+    domains: ['yandex.com', 'yandex.ru', 'ya.ru'],
+  },
+  mailcom: {
+    label: 'mail.com',
+    imapHost: 'imap.mail.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.mail.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the account password, once IMAP is enabled (Settings → POP3/IMAP)',
+    domains: ['mail.com', 'email.com', 'usa.com', 'consultant.com', 'engineer.com', 'post.com'],
+  },
+  posteo: {
+    label: 'Posteo',
+    imapHost: 'posteo.de',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'posteo.de',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the account password',
+    domains: ['posteo.de', 'posteo.net', 'posteo.eu', 'posteo.org'],
+  },
+  mailbox: {
+    label: 'mailbox.org',
+    imapHost: 'imap.mailbox.org',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.mailbox.org',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the account password, or an app password when two-factor authentication is on',
+    domains: ['mailbox.org'],
+  },
+  migadu: {
+    label: 'Migadu',
+    imapHost: 'imap.migadu.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'smtp.migadu.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the mailbox password set in the Migadu admin',
+    domains: [],
+  },
+  purelymail: {
+    label: 'Purelymail',
+    imapHost: 'mailserver.purelymail.com',
+    imapPort: 993,
+    imapSecure: true,
+    smtpHost: 'mailserver.purelymail.com',
+    smtpPort: 465,
+    smtpSecure: true,
+    passwordKind: 'account',
+    passwordHint: 'the account password',
+    domains: ['purelymail.com'],
+  },
+};
+
+export const PROVIDER_NAMES = Object.keys(PROVIDERS) as BuiltInProvider[];
+
+export function isProviderName(value: unknown): value is ProviderName {
+  return value === 'custom' || (typeof value === 'string' && Object.hasOwn(PROVIDERS, value));
+}
+
+/** The preset for a provider, or null for `custom`. */
+export function providerFor(name: ProviderName): Provider | null {
+  return name === 'custom' ? null : PROVIDERS[name];
+}
+
+export interface UnsupportedProvider {
+  label: string;
+  domains: string[];
+  reason: string;
+}
+
+/**
+ * Hosts a password cannot reach. Named so `mail login <name>` and an address
+ * on one of their domains get the reason instead of a login failure.
+ */
+export const UNSUPPORTED_PROVIDERS: Record<string, UnsupportedProvider> = {
+  outlook: {
+    label: 'Outlook.com / Hotmail / Live',
+    domains: ['outlook.com', 'hotmail.com', 'live.com', 'msn.com'],
+    reason:
+      'Microsoft removed password (basic) authentication — for Microsoft 365 IMAP in October 2022 and for ' +
+      'personal accounts on 2024-09-16: IMAP and SMTP now take only OAuth2 tokens, and app passwords no ' +
+      'longer count. Use Outlook or a client with Microsoft sign-in.',
+  },
+  tuta: {
+    label: 'Tuta (Tutanota)',
+    domains: ['tuta.com', 'tuta.io', 'tutanota.com', 'tutanota.de', 'tutamail.com', 'keemail.me'],
+    reason: "no IMAP or SMTP at all; the mailbox is only reachable through Tuta's own apps",
+  },
+  hey: {
+    label: 'HEY',
+    domains: ['hey.com'],
+    reason: 'no IMAP or SMTP; HEY only offers its own apps',
   },
 };
 
 /** Domains no one can verify at a sending service: the mail belongs to the webmail host. */
 const WEBMAIL_DOMAINS = new Set([
-  'gmail.com',
-  'googlemail.com',
-  'outlook.com',
-  'hotmail.com',
-  'live.com',
-  'yahoo.com',
-  'icloud.com',
-  'me.com',
-  'proton.me',
-  'protonmail.com',
-  'aol.com',
+  ...Object.values(PROVIDERS).flatMap((provider) => provider.domains),
+  ...Object.values(UNSUPPORTED_PROVIDERS).flatMap((provider) => provider.domains),
 ]);
+WEBMAIL_DOMAINS.delete('forwardemail.net');
 
 export function domainOf(email: string): string {
   const at = email.lastIndexOf('@');
@@ -110,10 +380,119 @@ export function domainOf(email: string): string {
 }
 
 /** The provider an address implies, when it implies one. */
-export function guessProvider(email: string): ProviderName | null {
+export function guessProvider(email: string): BuiltInProvider | null {
   const domain = domainOf(email);
-  if (domain === 'gmail.com' || domain === 'googlemail.com') return 'gmail';
+  for (const name of PROVIDER_NAMES) {
+    if (PROVIDERS[name].domains.includes(domain)) return name;
+  }
   return null;
+}
+
+/** The unsupported host an address or a name points at, when it does. */
+export function unsupportedProvider(nameOrEmail: string): (UnsupportedProvider & { name: string }) | null {
+  const key = nameOrEmail.toLowerCase();
+  const domain = domainOf(key);
+  for (const [name, provider] of Object.entries(UNSUPPORTED_PROVIDERS)) {
+    if (name === key || (domain && provider.domains.includes(domain))) return { name, ...provider };
+  }
+  return null;
+}
+
+/** MX host suffixes that give away the provider behind a custom domain. */
+const MX_SIGNATURES: [suffix: string, provider: BuiltInProvider][] = [
+  ['forwardemail.net', 'forwardemail'],
+  ['google.com', 'gmail'],
+  ['googlemail.com', 'gmail'],
+  ['zoho.com', 'zoho'],
+  ['zoho.eu', 'zoho'],
+  ['zoho.in', 'zoho'],
+  ['messagingengine.com', 'fastmail'],
+  ['protonmail.ch', 'proton'],
+  ['icloud.com', 'icloud'],
+  ['migadu.com', 'migadu'],
+  ['purelymail.com', 'purelymail'],
+  ['mailbox.org', 'mailbox'],
+  ['posteo.de', 'posteo'],
+  ['yandex.net', 'yandex'],
+];
+
+/** MX suffixes of hosts a password cannot reach; the value names UNSUPPORTED_PROVIDERS. */
+const MX_UNSUPPORTED: [suffix: string, name: string][] = [['protection.outlook.com', 'outlook'], ['outlook.com', 'outlook']];
+
+export type MxResolver = (domain: string) => Promise<{ exchange: string; priority: number }[]>;
+
+export type MxGuess = { provider: BuiltInProvider } | { unsupported: UnsupportedProvider & { name: string } };
+
+/**
+ * The provider a custom domain's MX records point at, when they point at one
+ * we know. A domain hosted at Google, Zoho, Fastmail, Proton, iCloud,
+ * Forward Email and the like has its own name on the address and the host's
+ * name in DNS; this reads the second so `mail login you@yourdomain.com`
+ * needs no provider spelled out. A lookup that fails is simply no answer.
+ */
+export async function providerFromMx(email: string, resolve: MxResolver = resolveMx): Promise<MxGuess | null> {
+  const domain = domainOf(email);
+  if (!domain) return null;
+  let records: { exchange: string; priority: number }[];
+  try {
+    records = await resolve(domain);
+  } catch {
+    return null;
+  }
+  const hosts = [...records]
+    .sort((a, b) => a.priority - b.priority)
+    .map((record) => record.exchange.toLowerCase().replace(/\.$/, ''));
+  const matches = (host: string, suffix: string) => host === suffix || host.endsWith(`.${suffix}`);
+  for (const host of hosts) {
+    for (const [suffix, provider] of MX_SIGNATURES) if (matches(host, suffix)) return { provider };
+    for (const [suffix, name] of MX_UNSUPPORTED) {
+      if (matches(host, suffix)) return { unsupported: { name, ...UNSUPPORTED_PROVIDERS[name]! } };
+    }
+  }
+  return null;
+}
+
+/** The lines to show before asking for a provider's password. */
+export function loginHint(provider: Provider): string {
+  const kind: Record<PasswordKind, string> = {
+    account: `${provider.label} takes the account password.`,
+    app: `${provider.label} takes an app password, not the account password.`,
+    alias: `${provider.label} takes a password generated per address.`,
+    bridge: `${provider.label} takes the password its local bridge generates.`,
+  };
+  const lines = [kind[provider.passwordKind], `  ${provider.passwordHint}`];
+  if (provider.passwordUrl) lines.push(`  ${provider.passwordUrl}`);
+  if (provider.note) lines.push(`  ${provider.note}`);
+  return lines.join('\n');
+}
+
+/** The providers table for `mail providers`. */
+export function formatProviders(): string {
+  const kinds: Record<PasswordKind, string> = {
+    account: 'account password',
+    app: 'app password',
+    alias: 'per-address password',
+    bridge: 'bridge password',
+  };
+  const width = Math.max(...PROVIDER_NAMES.map((name) => name.length), 'custom'.length);
+  const rows = PROVIDER_NAMES.map((name) => {
+    const provider = PROVIDERS[name];
+    const imap = `${provider.imapHost}:${provider.imapPort}${provider.imapSecure ? '' : ' (STARTTLS)'}`;
+    const smtp = `${provider.smtpHost}:${provider.smtpPort}${provider.smtpSecure ? '' : ' (STARTTLS)'}`;
+    return (
+      `  ${name.padEnd(width)}  ${provider.label}\n` +
+      `${' '.repeat(width + 4)}${kinds[provider.passwordKind]}; imap ${imap}; smtp ${smtp}`
+    );
+  });
+  rows.push(
+    `  ${'custom'.padEnd(width)}  any other host: --imap-host H --smtp-host H [--imap-port N --smtp-port N --starttls --imap-starttls]`,
+  );
+  const unsupported = Object.entries(UNSUPPORTED_PROVIDERS).map(
+    ([name, provider]) => `  ${name.padEnd(width)}  ${provider.label}: ${provider.reason}`,
+  );
+  return ['Providers (`mail login <name> <address>`):', ...rows, '', 'Not reachable with a password:', ...unsupported].join(
+    '\n',
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -130,9 +509,12 @@ export interface AccountConfig {
   password?: string;
   imapHost?: string;
   imapPort?: number;
+  imapSecure?: boolean;
   smtpHost?: string;
   smtpPort?: number;
   smtpSecure?: boolean;
+  /** Accept a certificate no CA signed — a local bridge, never a real host. */
+  insecureTls?: boolean;
 }
 
 export interface MailConfig {
@@ -151,8 +533,9 @@ export interface Account {
   password: string | null;
   passwordSource: PasswordSource;
   provider: ProviderName;
-  imap: { host: string; port: number };
+  imap: { host: string; port: number; secure: boolean };
   smtp: { host: string; port: number; secure: boolean };
+  insecureTls: boolean;
 }
 
 function xdgConfigHome(env: NodeJS.ProcessEnv): string {
@@ -201,10 +584,7 @@ export function normalizeConfig(parsed: unknown): MailConfig {
     const provider = entry.provider;
     const account: AccountConfig = {
       email: entry.email.trim().toLowerCase(),
-      provider:
-        provider === 'forwardemail' || provider === 'gmail' || provider === 'custom'
-          ? provider
-          : (guessProvider(entry.email) ?? 'custom'),
+      provider: isProviderName(provider) ? provider : (guessProvider(entry.email) ?? 'custom'),
     };
     for (const key of ['name', 'user', 'password', 'imapHost', 'smtpHost'] as const) {
       const value = entry[key];
@@ -214,7 +594,10 @@ export function normalizeConfig(parsed: unknown): MailConfig {
       const value = entry[key];
       if (typeof value === 'number' && Number.isInteger(value) && value > 0) account[key] = value;
     }
-    if (typeof entry.smtpSecure === 'boolean') account.smtpSecure = entry.smtpSecure;
+    for (const key of ['imapSecure', 'smtpSecure', 'insecureTls'] as const) {
+      const value = entry[key];
+      if (typeof value === 'boolean') account[key] = value;
+    }
     config.accounts[name] = account;
   }
   return config;
@@ -235,13 +618,13 @@ export function resolveAccount(
   config: AccountConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): Account {
-  const preset = config.provider === 'custom' ? null : PROVIDERS[config.provider];
+  const preset = providerFor(config.provider);
   const imapHost = config.imapHost ?? preset?.imapHost;
   const smtpHost = config.smtpHost ?? preset?.smtpHost;
   if (!imapHost || !smtpHost) {
     throw new MailError(
       `account "${name}" is provider "custom" and needs imapHost and smtpHost — ` +
-        `set them with \`mail accounts add ${name} ${config.email} --imap-host … --smtp-host …\``,
+        `set them with \`mail login custom ${config.email} --imap-host … --smtp-host …\``,
     );
   }
 
@@ -249,6 +632,7 @@ export function resolveAccount(
   const password = fromEnv || config.password || null;
   const passwordSource: PasswordSource = fromEnv ? 'env' : config.password ? 'file' : 'unset';
 
+  const imapPort = config.imapPort ?? preset?.imapPort ?? 993;
   const smtpPort = config.smtpPort ?? preset?.smtpPort ?? 465;
   return {
     name,
@@ -258,13 +642,19 @@ export function resolveAccount(
     password,
     passwordSource,
     provider: config.provider,
-    imap: { host: imapHost, port: config.imapPort ?? preset?.imapPort ?? 993 },
+    imap: {
+      host: imapHost,
+      port: imapPort,
+      // 993 is implicit TLS everywhere; anything else is STARTTLS unless told.
+      secure: config.imapSecure ?? (preset ? preset.imapSecure : imapPort === 993),
+    },
     smtp: {
       host: smtpHost,
       port: smtpPort,
       // 465 is implicit TLS everywhere; anything else is STARTTLS unless told.
       secure: config.smtpSecure ?? (preset ? preset.smtpSecure : smtpPort === 465),
     },
+    insecureTls: config.insecureTls ?? preset?.insecureTls ?? false,
   };
 }
 
@@ -351,7 +741,8 @@ export const MAIL_VAULT_PROJECT = 'cli-tools-mail';
  */
 export function accountsFromVault(vault: Record<string, string>): MailConfig {
   const config: MailConfig = { accounts: {} };
-  const pattern = /^MAIL_([A-Z0-9_]+?)_(EMAIL|PROVIDER|PASSWORD|NAME|USER|IMAP_HOST|IMAP_PORT|SMTP_HOST|SMTP_PORT|SMTP_SECURE)$/;
+  const pattern =
+    /^MAIL_([A-Z0-9_]+?)_(EMAIL|PROVIDER|PASSWORD|NAME|USER|IMAP_HOST|IMAP_PORT|IMAP_SECURE|SMTP_HOST|SMTP_PORT|SMTP_SECURE|INSECURE_TLS)$/;
   const partial: Record<string, Record<string, string>> = {};
 
   for (const [key, value] of Object.entries(vault)) {
@@ -371,10 +762,9 @@ export function accountsFromVault(vault: Record<string, string>): MailConfig {
     const provider = fields.PROVIDER?.toLowerCase();
     const account: AccountConfig = {
       email: email.toLowerCase(),
-      provider:
-        provider === 'forwardemail' || provider === 'gmail' || provider === 'custom'
-          ? provider
-          : (guessProvider(email) ?? (fields.IMAP_HOST ? 'custom' : 'forwardemail')),
+      provider: isProviderName(provider)
+        ? provider
+        : (guessProvider(email) ?? (fields.IMAP_HOST ? 'custom' : 'forwardemail')),
     };
     if (fields.PASSWORD) account.password = fields.PASSWORD;
     if (fields.NAME) account.name = fields.NAME;
@@ -383,7 +773,9 @@ export function accountsFromVault(vault: Record<string, string>): MailConfig {
     if (fields.SMTP_HOST) account.smtpHost = fields.SMTP_HOST;
     if (fields.IMAP_PORT && /^\d+$/.test(fields.IMAP_PORT)) account.imapPort = Number(fields.IMAP_PORT);
     if (fields.SMTP_PORT && /^\d+$/.test(fields.SMTP_PORT)) account.smtpPort = Number(fields.SMTP_PORT);
+    if (fields.IMAP_SECURE) account.imapSecure = /^(true|1|yes)$/i.test(fields.IMAP_SECURE);
     if (fields.SMTP_SECURE) account.smtpSecure = /^(true|1|yes)$/i.test(fields.SMTP_SECURE);
+    if (fields.INSECURE_TLS) account.insecureTls = /^(true|1|yes)$/i.test(fields.INSECURE_TLS);
     config.accounts[name] = account;
   }
 
@@ -666,24 +1058,14 @@ export function parseQuery(input: string): SearchObject {
 const SUMMARY_FIELDS = { uid: true, flags: true, envelope: true, size: true, internalDate: true } as const;
 
 /** Open the account's mailbox over IMAP. */
-export async function openMailbox(
-  account: Account,
-  options: { logger?: boolean } = {},
-): Promise<Mailbox> {
-  if (!account.password) {
-    const hint = account.provider === 'custom' ? '' : ` — ${PROVIDERS[account.provider].passwordHint}`;
-    throw new MailError(
-      `account "${account.name}" has no password${hint}.\n` +
-        `Store it with \`mail accounts password ${account.name}\`, export ${passwordVariable(account.name)}, ` +
-        'or put it in the vault and run `mail accounts pull`.',
-    );
-  }
-
-  const client = new ImapFlow({
+/** An IMAP client for an account, not yet connected. */
+export function imapClient(account: Account, options: { logger?: boolean } = {}): ImapFlow {
+  return new ImapFlow({
     host: account.imap.host,
     port: account.imap.port,
-    secure: true,
-    auth: { user: account.user, pass: account.password },
+    secure: account.imap.secure,
+    auth: { user: account.user, pass: account.password ?? '' },
+    ...(account.insecureTls ? { tls: { rejectUnauthorized: false } } : {}),
     // imapflow logs every command at info by default; only on request.
     ...(options.logger ? {} : { logger: false as const }),
     // Fail on a black-holed port rather than hanging the shell.
@@ -691,16 +1073,85 @@ export async function openMailbox(
     greetingTimeout: 20_000,
     socketTimeout: 120_000,
   });
+}
+
+/**
+ * A login failure, with the one thing the provider is known to refuse.
+ *
+ * Every app-password provider rejects the account password with a message
+ * that reads like a typo; naming the real fix saves the second attempt.
+ */
+export function loginFailure(account: Account, protocol: 'IMAP' | 'SMTP', reason: string): string {
+  const host = protocol === 'IMAP' ? account.imap.host : account.smtp.host;
+  const preset = providerFor(account.provider);
+  let advice = '';
+  if (preset?.passwordKind === 'app') {
+    advice = `\n${preset.label} refuses the account password over ${protocol}; use an app password` +
+      (preset.passwordUrl ? ` (${preset.passwordUrl})` : '') + '.';
+  } else if (preset?.passwordKind === 'bridge') {
+    advice = `\n${preset.label}: is the bridge running on this machine, and is this the password it generated?`;
+  } else if (preset?.passwordKind === 'alias') {
+    advice = `\n${preset.label}: ${preset.passwordHint}.`;
+  }
+  return `${protocol} login to ${host} as ${account.user} failed: ${reason}${advice}`;
+}
+
+export interface VerifyResult {
+  /** null when the login worked, otherwise why it did not. */
+  imap: string | null;
+  smtp: string | null;
+}
+
+export interface LoginProbes {
+  imap: (account: Account) => Promise<void>;
+  smtp: (account: Account) => Promise<void>;
+}
+
+export const defaultProbes: LoginProbes = {
+  async imap(account) {
+    const client = imapClient(account);
+    await client.connect();
+    await client.logout();
+  },
+  async smtp(account) {
+    await smtpTransport(account).verify();
+  },
+};
+
+/** Try both logins and say which worked. Never throws for a refusal. */
+export async function verifyAccount(account: Account, probes: LoginProbes = defaultProbes): Promise<VerifyResult> {
+  const attempt = async (protocol: 'IMAP' | 'SMTP', probe: (account: Account) => Promise<void>) => {
+    try {
+      await probe(account);
+      return null;
+    } catch (error) {
+      return loginFailure(account, protocol, (error as Error).message);
+    }
+  };
+  const [imap, smtp] = await Promise.all([attempt('IMAP', probes.imap), attempt('SMTP', probes.smtp)]);
+  return { imap, smtp };
+}
+
+export async function openMailbox(
+  account: Account,
+  options: { logger?: boolean } = {},
+): Promise<Mailbox> {
+  if (!account.password) {
+    const preset = providerFor(account.provider);
+    const hint = preset ? ` — ${preset.passwordHint}` : '';
+    throw new MailError(
+      `account "${account.name}" has no password${hint}.\n` +
+        `Store it with \`mail accounts password ${account.name}\`, export ${passwordVariable(account.name)}, ` +
+        'or put it in the vault and run `mail accounts pull`.',
+    );
+  }
+
+  const client = imapClient(account, options);
 
   try {
     await client.connect();
   } catch (error) {
-    throw new MailError(
-      `IMAP login to ${account.imap.host} as ${account.user} failed: ${(error as Error).message}` +
-        (account.provider === 'gmail'
-          ? '\nGmail refuses the account password over IMAP; use an App Password.'
-          : ''),
-    );
+    throw new MailError(loginFailure(account, 'IMAP', (error as Error).message));
   }
 
   async function withFolder<T>(folder: string, work: () => Promise<T>): Promise<T> {
@@ -1011,15 +1462,21 @@ export interface SendResult {
 export type SmtpSender = (account: Account, outgoing: Outgoing) => Promise<string | null>;
 export type ResendSender = (key: string, outgoing: Outgoing) => Promise<string | null>;
 
-export const sendViaSmtp: SmtpSender = async (account, outgoing) => {
-  const transporter = nodemailer.createTransport({
+/** The SMTP transport for an account, TLS settings included. */
+export function smtpTransport(account: Account) {
+  return nodemailer.createTransport({
     host: account.smtp.host,
     port: account.smtp.port,
     secure: account.smtp.secure,
     auth: { user: account.user, pass: account.password ?? '' },
+    ...(account.insecureTls ? { tls: { rejectUnauthorized: false } } : {}),
     connectionTimeout: 20_000,
     greetingTimeout: 20_000,
   });
+}
+
+export const sendViaSmtp: SmtpSender = async (account, outgoing) => {
+  const transporter = smtpTransport(account);
   const info = await transporter.sendMail({
     from: outgoing.from,
     to: outgoing.to,

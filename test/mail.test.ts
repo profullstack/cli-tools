@@ -10,6 +10,8 @@ import {
   type MessageSummary,
   type Outgoing,
   MailError,
+  PROVIDERS,
+  PROVIDER_NAMES,
   accountsFromVault,
   bareAddress,
   buildReply,
@@ -20,15 +22,20 @@ import {
   formatAddresses,
   formatList,
   formatMessage,
+  formatProviders,
   fromHeader,
   guessProvider,
+  isProviderName,
   isTransportFailure,
   loadConfig,
+  loginHint,
   mailConfigPath,
   mergeVaultAccounts,
   normalizeConfig,
   parseQuery,
   passwordVariable,
+  providerFor,
+  providerFromMx,
   quote,
   replySubject,
   resendPayload,
@@ -42,6 +49,8 @@ import {
   splitAddresses,
   stripHtml,
   summaryFrom,
+  unsupportedProvider,
+  verifyAccount,
 } from '../src/mail.ts';
 
 const env = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({ ...extra });
@@ -55,8 +64,9 @@ function account(partial: Partial<Account> = {}): Account {
     password: 'secret',
     passwordSource: 'file',
     provider: 'forwardemail',
-    imap: { host: 'imap.example.com', port: 993 },
+    imap: { host: 'imap.example.com', port: 993, secure: true },
     smtp: { host: 'smtp.example.com', port: 465, secure: true },
+    insecureTls: false,
     ...partial,
   };
 }
@@ -108,7 +118,8 @@ describe('providers', () => {
 describe('resolveAccount', () => {
   it('fills hosts from the provider preset', () => {
     const resolved = resolveAccount('home', { email: 'a@gmail.com', provider: 'gmail', password: 'p' }, env());
-    expect(resolved.imap).toEqual({ host: 'imap.gmail.com', port: 993 });
+    expect(resolved.imap).toEqual({ host: 'imap.gmail.com', port: 993, secure: true });
+    expect(resolved.insecureTls).toBe(false);
     expect(resolved.smtp).toEqual({ host: 'smtp.gmail.com', port: 465, secure: true });
     expect(resolved.user).toBe('a@gmail.com');
     expect(resolved.passwordSource).toBe('file');
@@ -649,5 +660,201 @@ describe('output', () => {
 
   it('reduces HTML-only mail to readable text', () => {
     expect(stripHtml('<p>Hi&nbsp;there</p><style>x{}</style><div>Bye<br>now</div>')).toBe('Hi there\nBye\nnow');
+  });
+});
+
+describe('provider table', () => {
+  it('names every built-in provider with hosts, ports and a password rule', () => {
+    expect(PROVIDER_NAMES).toHaveLength(15);
+    for (const name of PROVIDER_NAMES) {
+      const provider = PROVIDERS[name];
+      expect(provider.imapHost, name).toBeTruthy();
+      expect(provider.smtpHost, name).toBeTruthy();
+      expect([993, 143, 1143], name).toContain(provider.imapPort);
+      expect([465, 587, 1025], name).toContain(provider.smtpPort);
+      expect(provider.passwordHint.length, name).toBeGreaterThan(10);
+      // 465/993 are implicit TLS; anything else upgrades. The table must agree with itself.
+      expect(provider.smtpSecure, name).toBe(provider.smtpPort === 465);
+      expect(provider.imapSecure, name).toBe(provider.imapPort === 993);
+    }
+  });
+
+  it('infers the provider from every webmail domain it knows', () => {
+    expect(guessProvider('a@yahoo.co.uk')).toBe('yahoo');
+    expect(guessProvider('a@ME.com')).toBe('icloud');
+    expect(guessProvider('a@pm.me')).toBe('proton');
+    expect(guessProvider('a@fastmail.fm')).toBe('fastmail');
+    expect(guessProvider('a@zohomail.com')).toBe('zoho');
+    expect(guessProvider('a@gmx.de')).toBe('gmx');
+    expect(guessProvider('a@ya.ru')).toBe('yandex');
+    expect(guessProvider('a@aim.com')).toBe('aol');
+    expect(guessProvider('a@mailbox.org')).toBe('mailbox');
+    expect(guessProvider('a@posteo.net')).toBe('posteo');
+    expect(guessProvider('a@purelymail.com')).toBe('purelymail');
+    expect(guessProvider('a@forwardemail.net')).toBe('forwardemail');
+    expect(guessProvider('a@outlook.com')).toBeNull();
+    expect(guessProvider('a@example.com')).toBeNull();
+  });
+
+  it('accepts every provider name and custom, nothing else', () => {
+    for (const name of PROVIDER_NAMES) expect(isProviderName(name)).toBe(true);
+    expect(isProviderName('custom')).toBe(true);
+    expect(isProviderName('outlook')).toBe(false);
+    expect(isProviderName('pigeon')).toBe(false);
+    expect(isProviderName(undefined)).toBe(false);
+    expect(providerFor('custom')).toBeNull();
+    expect(providerFor('proton')?.insecureTls).toBe(true);
+    expect(providerFor('gmail')?.insecureTls).toBeUndefined();
+  });
+
+  it('knows the hosts a password cannot reach, by name and by address', () => {
+    expect(unsupportedProvider('outlook')?.name).toBe('outlook');
+    expect(unsupportedProvider('a@Hotmail.com')?.label).toContain('Outlook');
+    expect(unsupportedProvider('a@tuta.com')?.name).toBe('tuta');
+    expect(unsupportedProvider('a@hey.com')?.reason).toContain('no IMAP');
+    expect(unsupportedProvider('a@gmail.com')).toBeNull();
+    expect(unsupportedProvider('gmail')).toBeNull();
+  });
+
+  it('says which kind of password before asking for it', () => {
+    expect(loginHint(PROVIDERS.gmail)).toContain('app password, not the account password');
+    expect(loginHint(PROVIDERS.gmail)).toContain('https://myaccount.google.com/apppasswords');
+    expect(loginHint(PROVIDERS.forwardemail)).toContain('generated per address');
+    expect(loginHint(PROVIDERS.proton)).toContain('bridge');
+    expect(loginHint(PROVIDERS.proton)).toContain('paid Proton plan');
+    expect(loginHint(PROVIDERS.posteo)).toContain('takes the account password');
+  });
+
+  it('lists every provider and the unreachable ones', () => {
+    const text = formatProviders();
+    for (const name of PROVIDER_NAMES) expect(text).toContain(`  ${name}`);
+    expect(text).toContain('custom');
+    expect(text).toContain('(STARTTLS)');
+    expect(text).toContain('Not reachable with a password');
+    expect(text).toContain('OAuth2');
+    expect(text).toContain('HEY');
+  });
+});
+
+describe('resolveAccount across the table', () => {
+  it('turns Proton into a localhost STARTTLS bridge that trusts its own certificate', () => {
+    const resolved = resolveAccount('p', { email: 'a@proton.me', provider: 'proton', password: 'x' }, env());
+    expect(resolved.imap).toEqual({ host: '127.0.0.1', port: 1143, secure: false });
+    expect(resolved.smtp).toEqual({ host: '127.0.0.1', port: 1025, secure: false });
+    expect(resolved.insecureTls).toBe(true);
+  });
+
+  it('gives iCloud implicit TLS for IMAP and STARTTLS for SMTP', () => {
+    const resolved = resolveAccount('i', { email: 'a@icloud.com', provider: 'icloud', password: 'x' }, env());
+    expect(resolved.imap.secure).toBe(true);
+    expect(resolved.smtp).toEqual({ host: 'smtp.mail.me.com', port: 587, secure: false });
+    expect(resolved.insecureTls).toBe(false);
+  });
+
+  it('treats a non-993 custom IMAP port as STARTTLS unless told otherwise', () => {
+    const base = { email: 'a@x.org', provider: 'custom' as const, imapHost: 'imap.x.org', smtpHost: 'smtp.x.org' };
+    expect(resolveAccount('c', { ...base, imapPort: 143 }, env()).imap.secure).toBe(false);
+    expect(resolveAccount('c', { ...base, imapPort: 143, imapSecure: true }, env()).imap.secure).toBe(true);
+    expect(resolveAccount('c', { ...base, insecureTls: true }, env()).insecureTls).toBe(true);
+  });
+});
+
+describe('providerFromMx', () => {
+  const mx = (hosts: string[]) => async () => hosts.map((exchange, index) => ({ exchange, priority: index * 10 }));
+
+  it('reads the provider off the MX host, trailing dot and case included', async () => {
+    expect(await providerFromMx('a@x.com', mx(['ASPMX.L.GOOGLE.COM.', 'alt1.aspmx.l.google.com']))).toEqual({ provider: 'gmail' });
+    expect(await providerFromMx('a@x.com', mx(['mx1.forwardemail.net', 'mx2.forwardemail.net']))).toEqual({ provider: 'forwardemail' });
+    expect(await providerFromMx('a@x.com', mx(['in1-smtp.messagingengine.com']))).toEqual({ provider: 'fastmail' });
+    expect(await providerFromMx('a@x.com', mx(['mail.protonmail.ch', 'mailsec.protonmail.ch']))).toEqual({ provider: 'proton' });
+    expect(await providerFromMx('a@x.com', mx(['mx.zoho.eu']))).toEqual({ provider: 'zoho' });
+    expect(await providerFromMx('a@x.com', mx(['mx01.mail.icloud.com']))).toEqual({ provider: 'icloud' });
+  });
+
+  it('reports a Microsoft-hosted domain as unreachable, with the reason', async () => {
+    const guess = await providerFromMx('a@x.com', mx(['x-com.mail.protection.outlook.com']));
+    expect(guess && 'unsupported' in guess ? guess.unsupported.name : null).toBe('outlook');
+    expect(guess && 'unsupported' in guess ? guess.unsupported.reason : '').toContain('OAuth2');
+  });
+
+  it('prefers the lowest priority record', async () => {
+    const resolve = async () => [
+      { exchange: 'mx.zoho.com', priority: 20 },
+      { exchange: 'aspmx.l.google.com', priority: 10 },
+    ];
+    expect(await providerFromMx('a@x.com', resolve)).toEqual({ provider: 'gmail' });
+  });
+
+  it('answers null for an unknown host, no records, a failed lookup, or no domain', async () => {
+    expect(await providerFromMx('a@x.com', mx(['mail.x.com']))).toBeNull();
+    expect(await providerFromMx('a@x.com', mx([]))).toBeNull();
+    expect(
+      await providerFromMx('a@x.com', async () => {
+        throw new Error('ENOTFOUND');
+      }),
+    ).toBeNull();
+    expect(await providerFromMx('nobody', mx(['aspmx.l.google.com']))).toBeNull();
+  });
+});
+
+describe('verifyAccount', () => {
+  const ok = async () => {};
+  const refuse = (message: string) => async () => {
+    throw new Error(message);
+  };
+
+  it('reports each login separately and never throws', async () => {
+    const result = await verifyAccount(account({ provider: 'custom' }), { imap: ok, smtp: refuse('535 Authentication failed') });
+    expect(result.imap).toBeNull();
+    expect(result.smtp).toBe('SMTP login to smtp.example.com as me@example.com failed: 535 Authentication failed');
+    // A Forward Email refusal points at the per-alias password.
+    const forwarded = await verifyAccount(account(), { imap: refuse('Invalid credentials'), smtp: ok });
+    expect(forwarded.imap).toContain('Forward Email: the alias password');
+  });
+
+  it('names the app password when an app-password provider refuses', async () => {
+    const gmail = account({ provider: 'gmail', user: 'a@gmail.com', imap: { host: 'imap.gmail.com', port: 993, secure: true } });
+    const result = await verifyAccount(gmail, { imap: refuse('Command failed'), smtp: ok });
+    expect(result.imap).toContain('IMAP login to imap.gmail.com as a@gmail.com failed: Command failed');
+    expect(result.imap).toContain('use an app password (https://myaccount.google.com/apppasswords)');
+    expect(result.smtp).toBeNull();
+  });
+
+  it('asks whether the bridge is running when Proton refuses', async () => {
+    const proton = account({ provider: 'proton', imap: { host: '127.0.0.1', port: 1143, secure: false } });
+    const result = await verifyAccount(proton, { imap: refuse('ECONNREFUSED'), smtp: refuse('ECONNREFUSED') });
+    expect(result.imap).toContain('is the bridge running');
+    expect(result.smtp).toContain('is the bridge running');
+  });
+});
+
+describe('the wider table in configuration', () => {
+  it('accepts every provider name and the TLS flags from the vault', () => {
+    const config = accountsFromVault({
+      MAIL_Y_EMAIL: 'a@yahoo.com',
+      MAIL_Y_PROVIDER: 'yahoo',
+      MAIL_P_EMAIL: 'a@proton.me',
+      MAIL_P_PROVIDER: 'proton',
+      MAIL_P_IMAP_SECURE: 'false',
+      MAIL_P_INSECURE_TLS: 'yes',
+      MAIL_Z_EMAIL: 'a@zoho.eu',
+      MAIL_Z_PROVIDER: 'Zoho',
+    });
+    expect(config.accounts.y?.provider).toBe('yahoo');
+    expect(config.accounts.p).toMatchObject({ provider: 'proton', imapSecure: false, insecureTls: true });
+    expect(config.accounts.z?.provider).toBe('zoho');
+  });
+
+  it('keeps the TLS booleans in the file and infers a provider from any known domain', () => {
+    const config = normalizeConfig({
+      accounts: {
+        i: { email: 'a@icloud.com' },
+        c: { email: 'a@x.org', provider: 'custom', imapHost: 'imap.x.org', smtpHost: 'smtp.x.org', imapSecure: false, insecureTls: true },
+        bad: { email: 'a@x.org', provider: 'outlook' },
+      },
+    });
+    expect(config.accounts.i?.provider).toBe('icloud');
+    expect(config.accounts.c).toMatchObject({ imapSecure: false, insecureTls: true });
+    expect(config.accounts.bad?.provider).toBe('custom');
   });
 });
