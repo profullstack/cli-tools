@@ -52,6 +52,24 @@ export async function promptSecret(label: string): Promise<string> {
   });
 }
 
+/** One visible line from the terminal. Without one, the first line of stdin. */
+export async function promptLine(label: string): Promise<string> {
+  if (!process.stdin.isTTY) {
+    const chunks: Buffer[] = [];
+    for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+    return (Buffer.concat(chunks).toString('utf8').split('\n')[0] ?? '').trim();
+  }
+  process.stderr.write(label);
+  return new Promise<string>((resolve) => {
+    process.stdin.setEncoding('utf8');
+    process.stdin.resume();
+    process.stdin.once('data', (chunk) => {
+      process.stdin.pause();
+      resolve(String(chunk).trim());
+    });
+  });
+}
+
 /** A yes/no on stdin. Non-interactive callers must pass --yes rather than hang. */
 export async function confirm(question: string): Promise<boolean> {
   if (!process.stdin.isTTY) return false;

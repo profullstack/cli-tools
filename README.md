@@ -632,9 +632,12 @@ IMAP, read, reply in the thread, send over SMTP with Resend as the fallback,
 and mark, file or delete without a browser tab.
 
 ```sh
-mail accounts pull                            # accounts from the cli-tools-mail vault
-mail accounts add work you@example.com        # or by hand; prompts for the password
-mail accounts add home you@gmail.com          # gmail is inferred; wants an App Password
+mail providers                                # every host built in, and the password each wants
+mail login gmail you@gmail.com                # says "app password", checks IMAP + SMTP, stores it
+mail login you@yourdomain.com                 # provider read off the domain's MX records
+mail login forwardemail you@x.com --as work --default
+mail login custom you@x.org --imap-host imap.x.org --smtp-host smtp.x.org --starttls
+mail accounts pull                            # or import accounts from the cli-tools-mail vault
 
 mail ls                                       # newest 25, default account
 mail ls -a all --unread                       # unread across every account
@@ -652,14 +655,29 @@ mail rm 4213                                  # to Trash; --purge --yes to expun
 Accounts are configuration, not code — this repository is public and names
 nobody. They live in `~/.config/cli-tools/mail.json` (0600), and
 `mail accounts pull` imports them from the `cli-tools-mail` team vault as
-`MAIL_<NAME>_EMAIL`, `_PROVIDER` (`forwardemail`, `gmail`, `custom`),
-`_PASSWORD`, optional `_NAME`, `_USER`, `_IMAP_HOST`, `_SMTP_HOST`, `_SMTP_PORT`,
-and `MAIL_DEFAULT`. An exported `MAIL_<NAME>_PASSWORD` wins over the stored one;
-`mail accounts` says which source is in effect and never prints a password.
+`MAIL_<NAME>_EMAIL`, `_PROVIDER` (a provider name below, or `custom`),
+`_PASSWORD`, optional `_NAME`, `_USER`, `_IMAP_HOST`, `_IMAP_PORT`, `_IMAP_SECURE`,
+`_SMTP_HOST`, `_SMTP_PORT`, `_SMTP_SECURE`, `_TLS_CA`, and `MAIL_DEFAULT`. An
+exported `MAIL_<NAME>_PASSWORD` wins over the stored one; `mail accounts` says
+which source is in effect and never prints a password.
 
-Two providers are built in. Forward Email wants the alias password generated in
-its dashboard; Gmail wants an App Password (2-step verification on), and refuses
-the account password over IMAP. `custom` takes explicit hosts.
+Fifteen providers are built in — Forward Email, Gmail / Google Workspace, Yahoo,
+AOL, iCloud, Fastmail, Zoho, Proton (through Proton Mail Bridge on localhost),
+GMX, Yandex, mail.com, Posteo, mailbox.org, Migadu and Purelymail — each with
+its hosts, ports and the *kind* of password it takes, because that is what
+stalls a first login: Gmail, Yahoo, AOL, iCloud, Fastmail and Yandex refuse the
+account password over IMAP and want a generated app password, Forward Email
+wants the per-alias one, Proton wants the one its Bridge shows. `mail login`
+says which before asking, tries IMAP and SMTP, and stores nothing on a refusal.
+The provider is read off a webmail address, or off a custom domain's MX records
+(a domain hosted at Google, Zoho, Fastmail, Proton, iCloud or Forward Email
+needs no `--provider`). Outlook.com and Microsoft 365 are listed as unreachable:
+Microsoft takes only OAuth2 now, and app passwords no longer count; Tuta and HEY
+have no IMAP at all. `custom` takes explicit hosts, with `--starttls` and
+`--imap-starttls` for the odd server. Certificate verification is never switched
+off: a host that signs for itself, such as Proton Mail Bridge on localhost, is
+handled by pinning its certificate (`--tls-ca cert.pem`, or the copy Bridge keeps
+at its usual path, found automatically).
 
 Sending is SMTP with the account's password. If the *pipe* fails — refused
 login, dead host — Resend carries the message when `RESEND_API_KEY` is stored

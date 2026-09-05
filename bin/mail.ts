@@ -26,6 +26,7 @@ import { resolveCredentials } from '../src/credentials.ts';
 import { isMain } from '../src/is-main.ts';
 import {
   type Account,
+  type AccountConfig,
   type Folder,
   type MailConfig,
   type Mailbox,
@@ -34,7 +35,7 @@ import {
   type Transport,
   MAIL_VAULT_PROJECT,
   MailError,
-  PROVIDERS,
+  PROVIDER_NAMES,
   accountsFromVault,
   buildReply,
   chooseTransport,
@@ -44,26 +45,38 @@ import {
   formatFolders,
   formatList,
   formatMessage,
+  formatProviders,
   fromHeader,
   guessProvider,
+  isProviderName,
   loadConfig,
+  loginHint,
   mailConfigPath,
   mergeVaultAccounts,
   openMailbox,
   parseQuery,
   passwordVariable,
+  providerFor,
+  providerFromMx,
   resolveAccount,
   saveConfig,
   selectAccount,
   selectAccounts,
   sendMail,
+  unsupportedProvider,
+  verifyAccount,
 } from '../src/mail.ts';
-import { confirm, promptSecret } from '../src/prompt.ts';
+import { confirm, promptLine, promptSecret } from '../src/prompt.ts';
 import { pullVault, vaultTarget } from '../src/vault.ts';
 
 const USAGE = `Usage:
+  mail login <provider> [email] [--as NAME]        sign in to a provider: says which password it wants,
+                                                  checks IMAP and SMTP, then stores the account
+  mail login <email>                              the same, with the provider read off the address
+  mail providers                                  every provider built in, and what each wants
+
   mail accounts                                   the configured accounts
-  mail accounts add <name> <email> [options]       add or update one (prompts for the password)
+  mail accounts add <name> <email> [options]       add or update one by hand (prompts for the password)
   mail accounts password <name>                   store or replace a password
   mail accounts default <name>                    which account a bare command means
   mail accounts rm <name>
@@ -102,10 +115,20 @@ Options:
   --yes             rm --purge: skip the confirmation
   -h, --help        show this help
 
+Options for \`login\`:
+  --as NAME               the account name to store it under (default: the provider's name)
+  --default               make it the account a bare command means
+  --no-verify             store without trying the IMAP and SMTP logins first
+  --name, --user, and the host options below, for \`custom\`
+
 Account options for \`accounts add\`:
-  --provider forwardemail|gmail|custom   (gmail is inferred from the address)
+  --provider NAME         one of: ${PROVIDER_NAMES.join(', ')}, custom
+                          (inferred from the address when it is a known webmail domain)
   --name "Display Name"   --user LOGIN
-  --imap-host H --imap-port N --smtp-host H --smtp-port N --starttls
+  --imap-host H --imap-port N --smtp-host H --smtp-port N
+  --starttls              SMTP upgrades with STARTTLS (587) instead of TLS on connect (465)
+  --imap-starttls         IMAP upgrades with STARTTLS (143) instead of TLS on connect (993)
+  --tls-ca P              trust this PEM certificate in place of the system roots (a bridge's own, on localhost)
   --password              prompt for it now (the default when on a terminal)
   --no-password           do not prompt; export ${'MAIL_<NAME>_PASSWORD'} or pull it later
   --default               make this the default account
@@ -208,6 +231,119 @@ async function fileCopy(
   });
 }
 
+/** The host and TLS flags shared by `login custom` and `accounts add`. */
+function applyHostOptions(account: AccountConfig, parsed: ReturnType<typeof parseArgs>): void {
+  const setString = (flag: string, key: 'name' | 'user' | 'imapHost' | 'smtpHost') => {
+    const value = parsed.values.get(flag);
+    if (value !== undefined) account[key] = value;
+  };
+  setString('--name', 'name');
+  setString('--user', 'user');
+  setString('--imap-host', 'imapHost');
+  setString('--smtp-host', 'smtpHost');
+  if (parsed.values.has('--imap-port')) account.imapPort = integer(parsed.values, '--imap-port', 993, { min: 1, max: 65_535 });
+  if (parsed.values.has('--smtp-port')) account.smtpPort = integer(parsed.values, '--smtp-port', 465, { min: 1, max: 65_535 });
+  if (parsed.flags.has('--starttls')) account.smtpSecure = false;
+  if (parsed.flags.has('--imap-starttls')) account.imapSecure = false;
+  const ca = parsed.values.get('--tls-ca');
+  if (ca !== undefined) account.tlsCa = ca;
+}
+
+/**
+ * `mail login <provider|address> [address]`.
+ *
+ * The provider comes first because it decides what the password prompt
+ * says: Gmail and Yahoo refuse the account password and their error reads
+ * like a typo, so the kind of password is announced before it is asked for.
+ * Both logins are tried before anything is stored — a stored password that
+ * does not work is worse than none, because every later command fails
+ * somewhere further away from the cause.
+ */
+async function loginVerb(config: MailConfig, args: string[], parsed: ReturnType<typeof parseArgs>): Promise<number> {
+  const [first, second] = args;
+  if (!first) throw new UsageError('login needs a provider or an address: `mail login gmail you@gmail.com`');
+
+  let provider: ProviderName;
+  let email: string | undefined;
+  if (first.includes('@')) {
+    email = first;
+    const blocked = unsupportedProvider(email);
+    if (blocked) fail(`${blocked.label} cannot be reached with a password: ${blocked.reason}`, 1);
+    const guessed = guessProvider(email);
+    if (guessed) provider = guessed;
+    else if (parsed.values.has('--imap-host')) provider = 'custom';
+    else {
+      const mx = await providerFromMx(email);
+      if (mx && 'unsupported' in mx) {
+        fail(`${email} is hosted at ${mx.unsupported.label}, which cannot be reached with a password: ${mx.unsupported.reason}`, 1);
+      }
+      if (mx) {
+        provider = mx.provider;
+        process.stderr.write(`${email} is hosted at ${providerFor(provider)!.label} (from its MX records)\n`);
+      } else {
+        fail(
+          `"${email}" is not on a domain that names its provider, and its MX records do not either. Say which: ` +
+            `\`mail login <provider> ${email}\` with one of ${PROVIDER_NAMES.join(', ')}, ` +
+            `or \`mail login custom ${email} --imap-host … --smtp-host …\`. \`mail providers\` lists them.`,
+          1,
+        );
+      }
+    }
+  } else {
+    const requested = first.toLowerCase();
+    if (isProviderName(requested)) provider = requested;
+    else {
+      const blocked = unsupportedProvider(requested);
+      if (blocked) fail(`${blocked.label} cannot be reached with a password: ${blocked.reason}`, 1);
+      fail(`no provider "${first}". Built in: ${PROVIDER_NAMES.join(', ')}, custom — \`mail providers\` for details.`, 1);
+    }
+    email = second;
+  }
+
+  if (!email) {
+    if (!process.stdin.isTTY) throw new UsageError(`login needs the address: \`mail login ${provider} you@example.com\``);
+    email = await promptLine('address: ');
+  }
+  if (!email.includes('@')) throw new UsageError(`"${email}" is not an address`);
+  email = email.toLowerCase();
+
+  const name = (parsed.values.get('--as') ?? provider).toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) {
+    throw new UsageError('an account name is letters, digits, - and _ — it becomes MAIL_<NAME>_PASSWORD');
+  }
+
+  const existing = config.accounts[name];
+  const account: AccountConfig = { ...(existing ?? {}), email, provider };
+  applyHostOptions(account, parsed);
+  if (provider === 'custom' && (!account.imapHost || !account.smtpHost)) {
+    throw new UsageError('`login custom` needs --imap-host and --smtp-host');
+  }
+
+  const preset = providerFor(provider);
+  if (preset) process.stderr.write(`${loginHint(preset)}\n`);
+  const password = await promptSecret(`password for ${email}: `);
+  if (!password) fail('empty — nothing stored', 1);
+  account.password = password;
+
+  if (!parsed.flags.has('--no-verify')) {
+    const resolved = resolveAccount(name, account, {});
+    process.stderr.write(`checking ${resolved.imap.host} and ${resolved.smtp.host}…\n`);
+    const result = await verifyAccount(resolved);
+    if (result.imap) fail(`${result.imap}\nNothing stored. --no-verify stores it anyway.`, 1);
+    if (result.smtp) {
+      process.stderr.write(`warning: reading works but sending does not — ${result.smtp}\n`);
+    }
+  }
+
+  config.accounts[name] = account;
+  if (parsed.flags.has('--default') || Object.keys(config.accounts).length === 1) config.default = name;
+  const path = saveConfig(config);
+  out(`${existing ? 'updated' : 'logged in'}: ${name} (${email}, ${provider}) in ${path}`);
+  if (config.default === name) out(`${name} is the default account`);
+  else out(`\`mail ls -a ${name}\` reads it; \`mail accounts default ${name}\` makes it the default`);
+  return 0;
+}
+
 async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnType<typeof parseArgs>): Promise<number> {
   const [verb, ...rest] = args;
   const isJson = parsed.flags.has('--json');
@@ -226,8 +362,9 @@ async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnTy
           password: null,
           passwordSource: 'unset' as const,
           provider: entry.provider,
-          imap: { host: entry.imapHost ?? '?', port: entry.imapPort ?? 993 },
+          imap: { host: entry.imapHost ?? '?', port: entry.imapPort ?? 993, secure: true },
           smtp: { host: entry.smtpHost ?? '?', port: entry.smtpPort ?? 465, secure: true },
+          tlsCa: null,
         };
       }
     });
@@ -253,26 +390,27 @@ async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnTy
     const requested = parsed.values.get('--provider')?.toLowerCase();
     let provider: ProviderName;
     if (requested === undefined) {
-      provider = guessProvider(email) ?? (parsed.values.has('--imap-host') ? 'custom' : 'forwardemail');
-    } else if (requested === 'forwardemail' || requested === 'gmail' || requested === 'custom') {
+      const blocked = unsupportedProvider(email);
+      if (blocked && !parsed.values.has('--imap-host')) {
+        fail(`${blocked.label} cannot be reached with a password: ${blocked.reason}`, 1);
+      }
+      const mx = guessProvider(email) || parsed.values.has('--imap-host') ? null : await providerFromMx(email);
+      if (mx && 'unsupported' in mx) {
+        fail(`${email} is hosted at ${mx.unsupported.label}, which cannot be reached with a password: ${mx.unsupported.reason}`, 1);
+      }
+      provider =
+        guessProvider(email) ?? (mx ? mx.provider : parsed.values.has('--imap-host') ? 'custom' : 'forwardemail');
+    } else if (isProviderName(requested)) {
       provider = requested;
     } else {
-      throw new UsageError(`--provider must be forwardemail, gmail or custom, got "${requested}"`);
+      const blocked = unsupportedProvider(requested);
+      if (blocked) fail(`${blocked.label} cannot be reached with a password: ${blocked.reason}`, 1);
+      throw new UsageError(`--provider must be one of ${PROVIDER_NAMES.join(', ')} or custom, got "${requested}"`);
     }
 
     const existing = config.accounts[name.toLowerCase()];
     const account = { ...(existing ?? {}), email: email.toLowerCase(), provider };
-    const setString = (flag: string, key: 'name' | 'user' | 'imapHost' | 'smtpHost') => {
-      const value = parsed.values.get(flag);
-      if (value !== undefined) account[key] = value;
-    };
-    setString('--name', 'name');
-    setString('--user', 'user');
-    setString('--imap-host', 'imapHost');
-    setString('--smtp-host', 'smtpHost');
-    if (parsed.values.has('--imap-port')) account.imapPort = integer(parsed.values, '--imap-port', 993, { min: 1, max: 65_535 });
-    if (parsed.values.has('--smtp-port')) account.smtpPort = integer(parsed.values, '--smtp-port', 465, { min: 1, max: 65_535 });
-    if (parsed.flags.has('--starttls')) account.smtpSecure = false;
+    applyHostOptions(account, parsed);
 
     if (provider === 'custom' && (!account.imapHost || !account.smtpHost)) {
       throw new UsageError('a custom provider needs --imap-host and --smtp-host');
@@ -281,7 +419,8 @@ async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnTy
     const wantsPrompt =
       parsed.flags.has('--password') || (!parsed.flags.has('--no-password') && process.stdin.isTTY);
     if (wantsPrompt) {
-      const hint = provider === 'custom' ? '' : `\n  (${PROVIDERS[provider].passwordHint})`;
+      const preset = providerFor(provider);
+      const hint = preset ? `\n  (${preset.passwordHint})` : '';
       process.stderr.write(`Password for ${email}${hint}\n`);
       const password = await promptSecret('password: ');
       if (password) account.password = password;
@@ -307,9 +446,8 @@ async function accountsVerb(config: MailConfig, args: string[], parsed: ReturnTy
     if (!name) throw new UsageError('accounts password needs the account name');
     const account = config.accounts[name];
     if (!account) fail(`no account "${name}". Configured: ${Object.keys(config.accounts).join(', ') || 'none'}`, 1);
-    if (account.provider !== 'custom') {
-      process.stderr.write(`(${PROVIDERS[account.provider].passwordHint})\n`);
-    }
+    const preset = providerFor(account.provider);
+    if (preset) process.stderr.write(`(${preset.passwordHint})\n`);
     const password = await promptSecret(`password for ${account.email}: `);
     if (!password) fail('empty — nothing stored', 1);
     account.password = password;
@@ -387,12 +525,12 @@ async function main(argv: string[]): Promise<number> {
     boolean: [
       '--json', '--unread', '--gmail', '--keep-unread', '--raw', '--all', '--no-quote', '--draft',
       '--purge', '--yes', '--read', '--flag', '--unflag', '--password', '--no-password', '--default',
-      '--starttls', '-h', '--help',
+      '--starttls', '--imap-starttls', '--no-verify', '-h', '--help',
     ],
     string: [
       '-a', '--account', '--folder', '--limit', '--to', '--cc', '--bcc', '--subject', '--body',
       '--file', '--attach', '--via', '--provider', '--name', '--user', '--imap-host', '--imap-port',
-      '--smtp-host', '--smtp-port',
+      '--smtp-host', '--smtp-port', '--as', '--tls-ca',
     ],
   });
 
@@ -425,6 +563,13 @@ async function main(argv: string[]): Promise<number> {
     case 'accounts':
     case 'account':
       return accountsVerb(config, rest, parsed);
+
+    case 'login':
+      return loginVerb(config, rest, parsed);
+
+    case 'providers':
+      out(formatProviders());
+      return 0;
 
     case 'folders': {
       const account = selectAccount(config, selector);
