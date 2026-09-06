@@ -34,6 +34,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { onPath, resolveCommand } from './registry.ts';
 import { spawnInherit } from './codeburn.ts';
+import { delivered, heldBackNote, installedVersion, wantedVersion } from './vendor-verify.ts';
 
 /** The published package, and the executable it installs. */
 export const PACKAGE = '@profullstack/hqtui-demo';
@@ -173,6 +174,10 @@ export interface InstallResult {
   ok: boolean;
   manager?: PackageManager;
   code?: number | null;
+  /** What actually landed, when it could be read. */
+  version?: string;
+  /** Why an install that exited 0 was not accepted. */
+  note?: string;
 }
 
 /** Install (or refresh) the dashboard in the private prefix. */
@@ -184,10 +189,24 @@ export async function install(
   const root = vendorRoot(env);
   prepareVendorDir(root);
 
+  // What this install is supposed to produce, asked once rather than per
+  // manager. Null means the registry was unreachable, and an unverifiable
+  // install is allowed through: an offline box should still be able to
+  // reinstall what it already has.
+  const wanted = await wantedVersion(spec, PACKAGE);
+  let lastNote: string | undefined;
+
   for (const manager of managers(env)) {
     const plan = installPlan(manager, spec);
     const code = await run(plan.file, plan.args, root);
-    if (code === 0) return { ok: true, manager, code };
+    if (code !== 0) continue;
+
+    // Exit 0 is not proof. See src/vendor-verify.ts: pnpm's release-age
+    // cooldown installs the previous version and reports success.
+    const got = installedVersion(root, PACKAGE);
+    if (delivered(got, wanted)) return { ok: true, manager, code, ...(got ? { version: got } : {}) };
+    lastNote = heldBackNote(manager, got, wanted);
   }
-  return { ok: false };
+
+  return { ok: false, ...(lastNote ? { note: lastNote } : {}) };
 }
