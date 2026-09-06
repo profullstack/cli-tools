@@ -138,6 +138,25 @@
         "resend",
         "inbox"
       ]
+    },
+    {
+      "name": "cal",
+      "description": "The calendar from the terminal, over CalDAV: sign in to iCloud, Fastmail, Zoho, Yahoo, Forward Email, Nextcloud or any CalDAV host with the right kind of password, then read the agenda for today, the week or a range, look at one event, add one, or remove one.",
+      "source": "./plugins/cal",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#cal",
+      "keywords": [
+        "calendar",
+        "caldav",
+        "agenda",
+        "icloud",
+        "fastmail",
+        "nextcloud"
+      ]
     }
   ]
 }
