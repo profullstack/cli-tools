@@ -30,6 +30,7 @@ const SUMMARIES: Record<string, string> = {
   affiliate: 'Work through a list of programs you mean to sign up for',
   'ask-web': 'Answer a question from the live web, with its sources',
   'blog-post': 'Publish to a plain-HTML blog without breaking the feed',
+  cal: 'The calendar from the terminal, over CalDAV: agenda, one event, add, remove',
   'cli-tools': 'This dispatcher: list, update and wire up the others',
   codeburn: 'See where your AI spend goes, by task, tool, model and project',
   dl: 'Download a video, or just its audio, through yt-dlp',

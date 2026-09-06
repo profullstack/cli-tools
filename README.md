@@ -687,6 +687,44 @@ retried on the other path. A webmail address (gmail.com and friends) cannot be
 verified at Resend, so a Gmail account sends over SMTP only. `--via smtp|resend`
 pins one and refuses rather than swapping; `--draft` files to Drafts instead.
 
+### `cal`
+
+The calendar from the terminal, over CalDAV: the agenda for today, the week or
+a range, one event in full, add one, remove one.
+
+```sh
+cal providers                                 # every host built in, and the password each wants
+cal login icloud you@icloud.com               # says "app password", finds the calendars, stores it
+cal login forwardemail --like work            # borrow the `mail` account's address and password
+cal login custom you@x.org --url https://cloud.x.org/remote.php/dav   # Nextcloud, Radicale, Baïkal …
+cal accounts pull                             # or import from the cli-tools-cal vault
+
+cal calendars
+cal ls                                        # the next 7 days, every calendar
+cal ls --today | --tomorrow | --week | --days 30 | --from 2026-10-01 --to 2026-10-15
+cal ls -c Work --json                         # one calendar; uids are in the JSON
+cal show <uid>
+cal add "Dentist" --at "tomorrow 9:30"        # one hour, first calendar
+cal add "Offsite" --at 2026-09-10 --all-day --for 2d --where "Lake house"
+cal rm <uid>                                  # shows it, asks, then deletes; --yes skips the question
+```
+
+Nine providers are built in — Forward Email, iCloud, Fastmail, Zoho, Yahoo,
+AOL, GMX, mailbox.org, Posteo — plus `custom` with a URL for any CalDAV server.
+iCloud and Fastmail refuse the account password and want the app password their
+mail already uses, which is what `--like` is for. Google Calendar, Outlook and
+Proton are listed as unreachable: Google's CalDAV takes only OAuth2 (a Gmail app
+password opens the mailbox, not the calendar), Microsoft has no CalDAV, Proton
+has none on any plan.
+
+No library: CalDAV here is PROPFIND for the principal and calendars, REPORT for
+a window (the server expands recurring events, so a weekly standup lists on
+every day it happens), PUT and DELETE to write. Accounts live in
+`~/.config/cli-tools/cal.json` (0600) or the `cli-tools-cal` vault as
+`CAL_<NAME>_EMAIL` / `_PROVIDER` / `_PASSWORD` (optional `_USER`, `_URL`) and
+`CAL_DEFAULT`; `CAL_<NAME>_PASSWORD` in the environment wins. Times print in the
+machine's zone.
+
 Search takes `from:`, `to:`, `cc:`, `subject:`, `body:`, `since:`/`before:`/`on:`
 (`YYYY-MM-DD`), `is:unread|read|flagged|answered`, and bare words for the text;
 `--gmail` hands the whole query to Gmail's own search language instead.
