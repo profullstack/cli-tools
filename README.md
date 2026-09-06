@@ -1349,11 +1349,13 @@ nothing changed, which is the point.
 
 #### Accounts and groups
 
-New accounts land in `DEFAULT_GROUPS` (`sudo,admin` unless configured) when
-`--groups` is not passed. An unattended run — `--refresh`, or anything piped
-into bash — never reaches the group prompt, so that default is what *every*
-account it creates gets; set the key in `server.conf` on a box where new people
-should not be root-equivalent.
+New accounts land in `DEFAULT_GROUPS` when `--groups` is not passed. That
+default is `users` while confinement is on and `sudo,admin` when it is off — an
+unattended run (`--refresh`, or anything piped into bash) never reaches the
+group prompt, so it is what *every* account it creates gets, and handing a new
+tenant sudo on a confined box would be handing them the way straight back out
+of it. Setting the key yourself, in the environment or in `server.conf`, always
+wins over both.
 
 A full run is the wrong tool for a one-line change — putting somebody in
 `docker` should not drag an apt upgrade and a possible reboot behind it — and
@@ -1408,6 +1410,53 @@ ACL support; `ls -l` then shows a trailing `+` and `getfacl` shows the rest.
 `--private` puts a share back to `0700` and strips the ACL with it, because a
 mode that says private while a leftover entry still hands the directory to a
 daemon is worse than no lock at all.
+
+#### Confinement
+
+These are multi-tenant boxes — several people on one dev server, and the root
+VPSes we sell hand a customer an *account*, never the root password. So every
+account that is not an admin is confined, by default, with nothing to remember:
+
+| | before | confined |
+|---|---|---|
+| someone else's home | `0751`, walk in and read what is world-readable | `0700` |
+| `ps -ef` | every command line on the box, tokens and all | your own processes |
+| memory / tasks | unbounded; one runaway build is everybody's outage | `MemoryMax=50%`, `TasksMax=4096` |
+| fork bomb | takes the box | stopped at `nproc` |
+| `ssh -R` | relay out under our IP | refused (`ssh -L` still works) |
+| kernel | `kptr`/`dmesg`/`perf` readable | raised to a floor |
+
+```sh
+./root-ubuntu.sh confine            # what is confined here, and what is not
+./root-ubuntu.sh confine apply      # re-apply without a full run
+CONFINE=0 ./root-ubuntu.sh --refresh   # turn the whole thing off
+```
+
+**root is never confined, and neither is an admin.** Every cap is lifted again
+for uid 0 and for everyone in `CONFINE_EXEMPT_GROUPS`, explicitly, by uid —
+because `user-.slice.d` is a prefix drop-in that otherwise applies to root's own
+slice too, and the account you fix a wedged box with must not be subject to the
+cap that is wedging it. Membership is recomputed on every run, so promoting
+somebody releases them and demoting them confines them again without anyone
+having to remember which flag was passed when the account was made.
+
+**It will not take sudo away from an account that already has it.** Demoting a
+live sudoer unattended is how you lose a box: it might be a colleague, the only
+other admin, or the account your own automation logs in as. `confine` names them
+and stops there; `groups rm <user> sudo` is the rest, with a human present.
+
+Two details worth knowing. nginx has to walk through a home to reach
+`~/public_html`, and the old answer — `chmod o+x` — opens that path to every
+account on the box; confinement grants `www-data` an **execute-only ACL**
+instead, so it can traverse without listing, and only where something is
+actually published. And the kernel settings are **floors, not values**: Ubuntu
+ships `perf_event_paranoid=4` and `unprivileged_bpf_disabled=2` already stricter
+than what is asked for, so writing them unconditionally would loosen the box in
+the name of hardening it. Anything already stricter is left alone.
+
+Setting a home to `0700` closes the path to what is inside it; it does not
+change the mode of files that are already there. `CONFINE_UMASK` stops new ones
+being created world-readable behind it.
 
 #### Configuring it
 

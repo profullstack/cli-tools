@@ -88,6 +88,70 @@
 # ...or, for a zone at Cloudflare instead:
 #CLOUDFLARE_API_TOKEN=
 
+# ── confinement ──────────────────────────────────────────────────────────────
+
+# These boxes are multi-tenant, and the root VPSes we sell hand a customer an
+# account rather than the root password. So every account that is not an admin
+# is confined by default, with nothing to remember:
+#
+#   home 0700         nobody walks into anybody else's ~/.config
+#   /proc hidepid     `ps -ef` shows you your own processes and no one else's
+#   slice caps        one runaway build is not everybody's outage
+#   pam limits        a fork bomb is stopped in the fork
+#   ssh forwarding    ssh -L to your own app yes, ssh -R relay no
+#
+# root and anyone in CONFINE_EXEMPT_GROUPS are exempt -- explicitly, by uid,
+# because the account you fix a wedged box with must not be subject to the cap
+# that is wedging it. `root-ubuntu.sh confine` prints what is confined here and
+# what is not.
+#
+# It never takes sudo away from an account that already has it: demoting a live
+# sudoer unattended is how you lose a box. `confine` names them and leaves that
+# to you (`root-ubuntu.sh groups rm <user> sudo`).
+#CONFINE=1
+
+# Who counts as an admin, and so is not confined.
+#CONFINE_EXEMPT_GROUPS=sudo,admin
+
+# The group that carries the confinement. Recomputed every run from the line
+# above, so a promotion or demotion converges without being told twice.
+#CONFINE_GROUP=confined
+
+# The mode every human home is set to, and the umask new accounts get. Setting
+# the home closes the path; the umask stops new files being born world-readable
+# behind it. Neither fixes the mode of a file that is already there.
+#CONFINE_HOME_MODE=0700
+#CONFINE_UMASK=027
+
+# hidepid needs a group whose members still see every process -- admins go in
+# it automatically. Add a monitoring agent's unit to CONFINE_PROC_UNITS if it
+# reads /proc as a non-root user; polkit already does and is handled.
+#CONFINE_HIDEPID=1
+#CONFINE_PROC_GROUP=proc
+#CONFINE_PROC_UNITS=polkit.service
+
+# Per-account resource caps on the systemd user slice. Memory and tasks are
+# hard ceilings because their failure mode is the whole box. CPU is only a
+# weight -- it bites under contention and gets out of the way when the box is
+# idle -- so set CONFINE_CPU_QUOTA (e.g. 200%) only if you want a real ceiling
+# and are willing to throttle a build on an otherwise empty machine.
+#CONFINE_MEMORY_HIGH=35%
+#CONFINE_MEMORY_MAX=50%
+#CONFINE_TASKS_MAX=4096
+#CONFINE_CPU_WEIGHT=100
+#CONFINE_CPU_QUOTA=
+
+# PAM limits, which bite at login rather than in the cgroup.
+#CONFINE_NPROC=4096
+#CONFINE_NOFILE=16384
+#CONFINE_MAXLOGINS=20
+
+# local -- ssh -L to their own app works, ssh -R relays do not. The relay is
+# the one that matters: it turns the box into an open proxy under our IP.
+# no -- no forwarding at all. yes -- off, this box is a jump host on purpose.
+#CONFINE_SSH_FORWARDING=local
+#CONFINE_SSH=1
+
 # ── tailscale ────────────────────────────────────────────────────────────────
 
 # Joins the tailnet unattended. Without it the script prints the command to run
