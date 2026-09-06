@@ -64,9 +64,14 @@ async function main(argv: string[]): Promise<number> {
     const result = await install(spec);
     if (!result.ok) {
       process.stderr.write('crawlproof: could not install the dashboard.\n');
+      // An install that exited 0 and left the wrong version behind is the
+      // confusing case, so the reason goes out rather than just the failure.
+      if (result.note) process.stderr.write(`  ${result.note}\n`);
       return 1;
     }
-    process.stdout.write(`crawlproof: installed with ${result.manager}\n`);
+    process.stdout.write(
+      `crawlproof: installed ${result.version ?? ''} with ${result.manager}\n`.replace('  ', ' '),
+    );
     return 0;
   }
 
