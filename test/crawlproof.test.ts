@@ -12,6 +12,7 @@ import {
   resolveRunner,
   vendorBin,
   vendorRoot,
+  wantsSelfUpdate,
 } from '../src/crawlproof.ts';
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -132,6 +133,27 @@ describe('meetsNodeFloor', () => {
   it('ignores prerelease and build suffixes', () => {
     expect(meetsNodeFloor('23.0.0-nightly')).toBe(true);
     expect(MIN_NODE).toBe('22.6.0');
+  });
+});
+
+describe('the update verb', () => {
+  it('claims the words that mean "install the latest"', () => {
+    expect(wantsSelfUpdate(['update'])).toBe(true);
+    expect(wantsSelfUpdate(['upgrade'])).toBe(true);
+    expect(wantsSelfUpdate(['self-update'])).toBe(true);
+  });
+
+  it('leaves every other first word to the dashboard', () => {
+    for (const word of ['dashboard', 'stats', 'ad', 'ads', 'help', 'version', '--json']) {
+      expect(wantsSelfUpdate([word])).toBe(false);
+    }
+    expect(wantsSelfUpdate([])).toBe(false);
+  });
+
+  it('only claims it in first position, so a subcommand argument is safe', () => {
+    // `crawlproof ads budget update` must reach upstream untouched.
+    expect(wantsSelfUpdate(['ads', 'budget', 'update'])).toBe(false);
+    expect(wantsSelfUpdate(['stats', 'update'])).toBe(false);
   });
 });
 

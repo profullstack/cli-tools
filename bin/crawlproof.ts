@@ -28,6 +28,7 @@ import {
   meetsNodeFloor,
   resolveRunner,
   vendorBin,
+  wantsSelfUpdate,
 } from '../src/crawlproof.ts';
 import { spawnInherit } from '../src/codeburn.ts';
 import { isMain } from '../src/is-main.ts';
@@ -41,9 +42,14 @@ import { isMain } from '../src/is-main.ts';
  */
 const OURS = new Set(['--self-update', '--self-where']);
 
+
 async function main(argv: string[]): Promise<number> {
-  const flags = new Set(argv.filter((argument) => OURS.has(argument)));
-  const rest = argv.filter((argument) => !OURS.has(argument));
+  const wantsUpdate = wantsSelfUpdate(argv);
+  const given = wantsUpdate ? argv.slice(1) : argv;
+
+  const flags = new Set(given.filter((argument) => OURS.has(argument)));
+  if (wantsUpdate) flags.add('--self-update');
+  const rest = given.filter((argument) => !OURS.has(argument));
 
   if (!meetsNodeFloor(process.versions.node)) {
     process.stderr.write(
