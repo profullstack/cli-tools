@@ -1081,6 +1081,56 @@ watch directory (`--watch`, `$TORLINK_WATCH`) as the offline handoff. How long
 it seeds for is a torlnk daemon setting (`--seed-time`), not a per-torrent one;
 left alone, it seeds indefinitely.
 
+### `crawlproof`
+
+What the fleet costs and what it returns —
+[CrawlProof](https://crawlproof.com)'s dashboard, wrapped so it is a command:
+
+```sh
+crawlproof                     # the live dashboard, last day, humans
+crawlproof dashboard --range=1m
+crawlproof stats [site]        # who arrived and from where, as text
+crawlproof dashboard --json    # the same snapshot, for a script
+crawlproof --help              # it is upstream's CLI: upstream's flags
+```
+
+Five screens over three feeds that are not otherwise in the same place: the
+tracker for who arrived, the ad network for what was delivered, and CoinPay for
+what the bank actually did. **ROI** is monthly burn against revenue, cost per
+reader and break-even; **Traffic** ranks every site on the account with its
+share of the cost; **Ads** is delivery as advertiser and as publisher; **Money**
+is earnings, bank position and invoices; **Spend** is who you pay, largest
+first.
+
+Two rules run through the arithmetic. Where an account advertises on its own
+slots, ad spend and ad earnings are one dollar moving between two pockets, so
+they are shown under *Internal* and counted as neither cost nor revenue. And a
+bank feed carries groceries next to servers, so cost is the business scope
+only. It also reports what it cannot know: a site that did not answer is
+missing rather than zero, and a fleet whose visits run far above its pageviews
+says so next to the number.
+
+It needs a CrawlProof API token — `CRAWLPROOF_TOKEN`, or the `token` field of
+`~/.crawlproof.json`. The money screens additionally want a CoinPay merchant
+session (`~/.coinpay.json`, which `coinpay auth login` writes); without one the
+other four screens still work and the money panels say what is missing.
+
+Two flags are ours, spelled `--self-*` because every plain word belongs to the
+dashboard:
+
+```sh
+crawlproof --self-update       # reinstall the latest release
+crawlproof --self-where        # which copy runs, and from where
+```
+
+**The first run installs it**, with `pnpm` and with `npm` when pnpm is absent
+or fails. It lands in `~/.local/share/cli-tools/vendor/crawlproof`, not
+globally, and the reason is sharper here than for `hqtui`: upstream's
+executable is called `crawlproof` and so is this wrapper, so a global install
+would put two of them on PATH and the command could end up running itself. A
+private prefix means the name exists exactly once. `CRAWLPROOF_BIN` points at
+a checkout instead, and `CRAWLPROOF_SPEC` pins what gets installed.
+
 ### `hqtui`
 
 Every server's vitals, in the terminal —
