@@ -30,7 +30,8 @@
 #      automatically and refreshed
 #   2. apt update/upgrade + unattended security updates
 #   3. ufw
-#   4. a 2G swapfile, if the box has no swap at all
+#   4. a 2G swapfile, if the box has no swap at all; then zram on top of it and
+#      earlyoom watching, so a memory spike stalls instead of wedging the box
 #   5. dotfiles (.zsh*, .bash*, .ssh*, ...) from $DOTFILES_REPO, if you have one
 #   6. oh-my-zsh + plugins, oh-my-tmux, irssi configs
 #   7. mise      (curl https://mise.run | sh)
@@ -98,6 +99,13 @@
 #   SWAP_SIZE=2G   swapfile to create when the box has no swap (0 = never)
 #   SWAP_FILE=/swapfile   where that file goes
 #   SWAPPINESS=10  vm.swappiness once there is swap to speak of
+#   ZRAM_ENABLE=1  compressed RAM swap ahead of the file (0 skips it)
+#   ZRAM_SIZE='min(ram / 2, 8192)'   zram-generator expression, in MiB
+#   ZRAM_ALGO=zstd ...falling back to lzo-rle where the kernel lacks it
+#   ZRAM_SWAPPINESS=100   overrides SWAPPINESS, but only where zram came up
+#   EARLYOOM_ENABLE=1     kill the biggest hog early instead of at the wall
+#   EARLYOOM_MEM=10,5 / EARLYOOM_SWAP=10,5   SIGTERM% , SIGKILL%
+#   EARLYOOM_AVOID=... / EARLYOOM_PREFER=    unquoted regexes (see the note)
 #   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
 #   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed
 #                  (default sudo,admin). An unattended run never prompts, so
@@ -2348,6 +2356,186 @@ configure_swap() {
 
 log "configuring swap"
 try "swap" configure_swap
+
+# ------------------------------------------------------- zram + earlyoom ---
+#
+# Swap buys time. It does not decide what dies when the time runs out, and on
+# its own it buys that time in the most expensive currency the box has: disk.
+#
+# The failure this pair prevents is the one that reads as a hardware fault. RAM
+# fills, the kernel starts reclaiming, reclaim goes to disk, every process
+# blocks on that disk, load climbs, and the kernel's own OOM killer -- which
+# only fires once the machine is already thrashing -- eventually shoots
+# something large and arbitrary. From a terminal it looks exactly like the box
+# rebooted. It did not; `uptime` will happily say so afterwards and be believed
+# over the person who watched it happen.
+#
+# Two changes, and they fix different halves:
+#
+#   zram      a compressed block device in RAM, used as swap AHEAD of the file.
+#             Cold pages get zstd'd at roughly 3:1 instead of written out, so
+#             the reclaim that used to stall on I/O now costs some CPU and no
+#             seeks. It does not add memory, it postpones the wall.
+#
+#   earlyoom  a daemon that watches free memory and swap and kills the biggest
+#             consumer while the box is still responsive, rather than at the
+#             wall. Timing is the entire point -- the kernel's killer is not
+#             wrong about what to kill, it is late.
+#
+# Ordered after configure_swap on purpose: that function returns early if any
+# swap is already active, so zram first would suppress the swapfile entirely.
+# The file stays as the deeper, slower tier at a lower priority; zram sits on
+# top at priority 100 and absorbs everything normal.
+EARLYOOM_ENABLE="${EARLYOOM_ENABLE:-1}"   # 0 leaves the box's OOM behaviour alone
+ZRAM_ENABLE="${ZRAM_ENABLE:-1}"           # 0 skips zram, keeping only the swapfile
+# An expression, evaluated by zram-generator against this box's own RAM, so one
+# line sizes a 1G droplet and a 32G server correctly. Half of RAM is the usual
+# ceiling: compression means the real cost is roughly a third of the number.
+ZRAM_SIZE="${ZRAM_SIZE:-min(ram / 2, 8192)}"
+ZRAM_ALGO="${ZRAM_ALGO:-zstd}"
+# 10 (the swapfile default above) is right when paging out means a disk write
+# and wrong once it means a memcpy: it leaves zram sitting unused while the box
+# reclaims page cache it still wants. Raised only where zram actually came up.
+ZRAM_SWAPPINESS="${ZRAM_SWAPPINESS:-100}"
+# Kill at 10% free (SIGTERM) and 5% (SIGKILL), of memory AND swap together.
+EARLYOOM_MEM="${EARLYOOM_MEM:-10,5}"
+EARLYOOM_SWAP="${EARLYOOM_SWAP:-10,5}"
+# Never pick these. Losing sshd or systemd to the thing that was supposed to
+# save the box is how a recoverable incident becomes a console-only one.
+#
+# NOTE: no quotes around the regex, and none may be added. systemd expands
+# $EARLYOOM_ARGS from EnvironmentFile by splitting on whitespace with NO shell
+# quote removal, so '^(sshd|...)$' arrives with the quote characters inside the
+# pattern and matches nothing. The service starts happily either way, which is
+# what makes it worth a comment -- verify with `ps -o args= -C earlyoom`.
+EARLYOOM_AVOID="${EARLYOOM_AVOID:-^(sshd|systemd|tmux|zsh|bash|login|init|tailscaled|dockerd|containerd|nginx|postgres|coturn|redis)}"
+# Deliberately empty. A --prefer list is right on a workstation, where the
+# answer is obviously "the browser". On a server the biggest consumer IS the
+# app, and teaching earlyoom to shoot it first only means it dies sooner than
+# the box would have made it. Let size decide and let systemd restart it.
+EARLYOOM_PREFER="${EARLYOOM_PREFER:-}"
+
+configure_earlyoom() {
+	local changed=0 args
+
+	if [[ -z "$EARLYOOM_ENABLE" || "$EARLYOOM_ENABLE" == 0 ]]; then
+		info "earlyoom disabled (EARLYOOM_ENABLE=$EARLYOOM_ENABLE)"
+		return 0
+	fi
+
+	if ! dpkg -s earlyoom >/dev/null 2>&1; then
+		try "install earlyoom" apt-get install -y -qq earlyoom || return 0
+	fi
+
+	args="-m $EARLYOOM_MEM -s $EARLYOOM_SWAP -r 3600 --avoid $EARLYOOM_AVOID"
+	[[ -n "$EARLYOOM_PREFER" ]] && args="$args --prefer $EARLYOOM_PREFER"
+
+	write_if_changed /etc/default/earlyoom <<EOF && changed=1
+# Managed by root-ubuntu.sh. Kill the biggest consumer while the box can still
+# be typed at, instead of at the wall where the kernel would have done it.
+EARLYOOM_ARGS="$args"
+EOF
+	systemctl enable earlyoom >/dev/null 2>&1 || true
+
+	# Only bounce it when something actually changed or it is not running --
+	# a restart on every refresh is noise on a box that was already correct.
+	if (( changed )) || ! systemctl is-active --quiet earlyoom; then
+		try "earlyoom" systemctl restart earlyoom || return 0
+		note "earlyoom watching (TERM at ${EARLYOOM_MEM%%,*}% free, KILL at ${EARLYOOM_MEM##*,}%)"
+	else
+		info "earlyoom already watching"
+	fi
+}
+
+configure_zram() {
+	local changed=0 active=0 algo virt
+
+	if [[ -z "$ZRAM_ENABLE" || "$ZRAM_ENABLE" == 0 ]]; then
+		info "zram disabled (ZRAM_ENABLE=$ZRAM_ENABLE)"
+		return 0
+	fi
+
+	# Same reasoning as the swapfile: a container's swap is the host's.
+	virt="$(systemd-detect-virt --container 2>/dev/null)"
+	if [[ -n "$virt" && "$virt" != none ]]; then
+		info "inside a $virt container -- zram belongs to the host"
+		return 0
+	fi
+
+	# zram ships in linux-modules-extra on Ubuntu cloud images, which the
+	# DigitalOcean ones do not install. modprobe then says the module does not
+	# exist, and -- worse -- systemd-zram-setup@zram0 fails with "A dependency
+	# job failed", naming dev-zram0.device rather than the missing module, so
+	# the real cause never appears in the error.
+	if ! modprobe zram 2>/dev/null; then
+		apt-get install -y -qq "linux-modules-extra-$(uname -r)" >/dev/null 2>&1 || true
+		if ! modprobe zram 2>/dev/null; then
+			warn "zram: no zram module for $(uname -r) -- the swapfile stays the only tier"
+			return 0
+		fi
+		note "installed linux-modules-extra for zram"
+	fi
+
+	if ! dpkg -s systemd-zram-generator >/dev/null 2>&1; then
+		try "install systemd-zram-generator" apt-get install -y -qq systemd-zram-generator || return 0
+	fi
+
+	# zstd gets ~3:1 where lzo-rle manages ~2:1, but only if this kernel built
+	# it in; asking for one it does not have fails the device setup outright.
+	algo="$ZRAM_ALGO"
+	if [[ -r /sys/block/zram0/comp_algorithm ]] && ! grep -qw "$algo" /sys/block/zram0/comp_algorithm; then
+		warn "zram: $algo unavailable on this kernel -- falling back to lzo-rle"
+		algo=lzo-rle
+	fi
+
+	write_if_changed /etc/systemd/zram-generator.conf <<EOF && changed=1
+# Managed by root-ubuntu.sh. Compressed swap in RAM, ahead of any swapfile.
+[zram0]
+zram-size = $ZRAM_SIZE
+compression-algorithm = $algo
+swap-priority = 100
+fs-type = swap
+EOF
+	write_if_changed /etc/modules-load.d/zram.conf <<'EOF' || true
+# Managed by root-ubuntu.sh -- the generator needs the module at boot.
+zram
+EOF
+
+	swapon --show=NAME --noheadings 2>/dev/null | grep -qx /dev/zram0 && active=1
+
+	if (( active )) && (( ! changed )); then
+		info "zram already active: $(zramctl --noheadings --output DISKSIZE,ALGORITHM /dev/zram0 2>/dev/null | tr -s ' ')"
+	else
+		systemctl daemon-reload
+		# A zram0 that already has a disksize refuses reconfiguration with
+		# EBUSY ("Failed to configure compression algorithm ... Device or
+		# resource busy") and quietly keeps its previous size and algorithm,
+		# so a changed config would appear to apply and not have.
+		if [[ -b /dev/zram0 ]]; then
+			swapoff /dev/zram0 2>/dev/null || true
+			echo 1 >/sys/block/zram0/reset 2>/dev/null || true
+		fi
+		try "zram swap device" systemctl restart systemd-zram-setup@zram0.service || return 0
+		note "zram swap ($ZRAM_SIZE cap, $algo) ahead of $SWAP_FILE"
+	fi
+
+	# 61- so it sorts after (and overrides) the 60- file the swapfile writes.
+	# Only reached when zram is really up, so a box with just a disk swapfile
+	# keeps the conservative swappiness that is correct for it.
+	write_if_changed /etc/sysctl.d/61-profullstack-zram.conf <<EOF || return 0
+# Managed by root-ubuntu.sh. Overrides the swapfile's conservative swappiness:
+# paging to zram is a compress-and-memcpy, not a disk write, so the kernel
+# should reach for it early instead of evicting page cache it still wants.
+vm.swappiness = $ZRAM_SWAPPINESS
+vm.watermark_scale_factor = 125
+EOF
+	sysctl -q -p /etc/sysctl.d/61-profullstack-zram.conf 2>/dev/null || true
+	note "vm.swappiness=$ZRAM_SWAPPINESS (zram is cheap to page to)"
+}
+
+log "configuring OOM protection"
+try "earlyoom" configure_earlyoom
+try "zram" configure_zram
 
 # ------------------------------------------------------------------ motd ---
 
