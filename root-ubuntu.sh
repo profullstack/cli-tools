@@ -39,7 +39,7 @@
 #   9. a per-user ssh-agent as a systemd user service
 #  10. motd from $MOTD_URL
 #  11. nginx per-user pages, per-user dev apps, TLS
-#  12. the sandbox: every non-admin account confined (home, /proc, memory,
+#  12. confinement: every non-admin account confined (home, /proc, memory,
 #      tasks, ssh forwarding). Runs after the accounts exist, since which
 #      side of the line someone is on is decided by their groups.
 #
@@ -57,17 +57,17 @@
 #   ./root-ubuntu.sh share /mnt/volume --group www-data -R
 #                                           # ...to a second group as well (acl)
 #
-# The sandbox (see "the sandbox" below, or `sandbox --help`):
-#   ./root-ubuntu.sh sandbox            # what is confined on this box, and what is not
-#   ./root-ubuntu.sh sandbox apply      # re-apply it without a full run
+# Confinement (see "confinement" below, or `confine --help`):
+#   ./root-ubuntu.sh confine            # what is confined on this box, and what is not
+#   ./root-ubuntu.sh confine apply      # re-apply it without a full run
 #
 # Every account that is not an admin is confined, by default, with nothing to
 # remember: its home is 0700, it sees only its own processes, its memory and
 # task count are capped, and it cannot relay out over ssh. root and anyone in
 # sudo/admin are exempt -- explicitly, by uid, because the account you fix a
 # wedged box with must not be subject to the cap that is wedging it. It never
-# takes sudo away from an account that already has it; `sandbox` names those
-# and leaves the decision to you. SANDBOX=0 turns the whole thing off.
+# takes sudo away from an account that already has it; `confine` names those
+# and leaves the decision to you. CONFINE=0 turns the whole thing off.
 #
 # Accounts and groups (see "accounts" below, or `groups --help`):
 #   ./root-ubuntu.sh groups                 # every account, and the groups it is in
@@ -124,20 +124,20 @@
 #   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
 #   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed.
 #                  An unattended run never prompts, so this is what every
-#                  account it creates gets. Default: users when the sandbox is
+#                  account it creates gets. Default: users when confinement is
 #                  on, sudo,admin when it is not.
-#   SANDBOX=0      do not confine accounts at all (default: 1)
-#   SANDBOX_EXEMPT_GROUPS=sudo,admin   who counts as an admin, and is exempt
-#   SANDBOX_HOME_MODE=0700  mode every human home is set to
-#   SANDBOX_UMASK=027       umask for accounts created from here on
-#   SANDBOX_HIDEPID=0       leave /proc world-readable (default: hidepid)
-#   SANDBOX_MEMORY_MAX=50% / SANDBOX_MEMORY_HIGH=35% / SANDBOX_TASKS_MAX=4096
+#   CONFINE=0      do not confine accounts at all (default: 1)
+#   CONFINE_EXEMPT_GROUPS=sudo,admin   who counts as an admin, and is exempt
+#   CONFINE_HOME_MODE=0700  mode every human home is set to
+#   CONFINE_UMASK=027       umask for accounts created from here on
+#   CONFINE_HIDEPID=0       leave /proc world-readable (default: hidepid)
+#   CONFINE_MEMORY_MAX=50% / CONFINE_MEMORY_HIGH=35% / CONFINE_TASKS_MAX=4096
 #                  per-account caps on the systemd user slice
-#   SANDBOX_CPU_QUOTA=200%  a hard CPU ceiling; by default CPU is a weight,
+#   CONFINE_CPU_QUOTA=200%  a hard CPU ceiling; by default CPU is a weight,
 #                  so a build gets the whole box when the box is idle
-#   SANDBOX_NPROC=4096 / SANDBOX_NOFILE=16384 / SANDBOX_MAXLOGINS=20
-#   SANDBOX_SSH_FORWARDING=local|no|yes   ssh -L yes, ssh -R no (default local)
-#   SANDBOX_PROC_UNITS=polkit.service     units that must still read /proc
+#   CONFINE_NPROC=4096 / CONFINE_NOFILE=16384 / CONFINE_MAXLOGINS=20
+#   CONFINE_SSH_FORWARDING=local|no|yes   ssh -L yes, ssh -R no (default local)
+#   CONFINE_PROC_UNITS=polkit.service     units that must still read /proc
 #   NO_REBOOT=1    skip the reboot at the end
 #   MOTD_URL=...   override the motd endpoint
 #   TS_AUTHKEY=... tailscale auth key, to join the tailnet unattended
@@ -415,14 +415,14 @@ GROUP_CHOICES=(sudo admin docker adm www-data users)
 # unattended run takes it verbatim for every account it creates. Assigning it
 # unconditionally (as this line used to) meant a box that had configured, say,
 # www-data,users,docker still got its new accounts put in sudo,admin.
-# Was it said out loud, or is it just the default? The sandbox turns the
+# Was it said out loud, or is it just the default? Confinement turns the
 # default from sudo,admin into users, and the difference between "nobody chose
 # this" and "the config file chose this" is the whole basis for being allowed
 # to change it underneath them.
 DEFAULT_GROUPS_EXPLICIT="${DEFAULT_GROUPS+1}"
 DEFAULT_GROUPS="${DEFAULT_GROUPS:-sudo,admin}"
 
-# --------------------------------------------------------- the sandbox ---
+# ------------------------------------------------------- confinement ---
 #
 # These boxes are multi-tenant. Several people share one dev server, and the
 # root VPSes we sell hand a customer an ACCOUNT, never the root password. So
@@ -436,74 +436,74 @@ DEFAULT_GROUPS="${DEFAULT_GROUPS:-sudo,admin}"
 #              Every limit below is explicitly lifted for uid 0, because the
 #              account you use to fix a wedged box must not be the account the
 #              wedge applies to.
-#   admin      anyone in $SANDBOX_EXEMPT_GROUPS. Us. Exempt from the resource
+#   admin      anyone in $CONFINE_EXEMPT_GROUPS. Us. Exempt from the resource
 #              caps, and kept able to see every process on the box.
-#   sandboxed  everybody else, by default, with nothing to remember. Confined
+#   confined  everybody else, by default, with nothing to remember. Confined
 #              home, own processes only, capped memory and tasks, no relay out
 #              over ssh.
 #
-# What each mechanism is actually worth is written up at configure_user_sandbox
-# below. SANDBOX=0 turns all of it off and gives back the older behaviour.
-SANDBOX="${SANDBOX:-1}"
+# What each mechanism is actually worth is written up at configure_confinement
+# below. CONFINE=0 turns all of it off and gives back the older behaviour.
+CONFINE="${CONFINE:-1}"
 
 # The group that carries the confinement. Membership is recomputed on every run
 # from "is this account in an exempt group", so it converges rather than
 # drifting: promote someone and the next run takes them back out of it.
-SANDBOX_GROUP="${SANDBOX_GROUP:-sandboxed}"
-SANDBOX_EXEMPT_GROUPS="${SANDBOX_EXEMPT_GROUPS:-sudo,admin}"
+CONFINE_GROUP="${CONFINE_GROUP:-confined}"
+CONFINE_EXEMPT_GROUPS="${CONFINE_EXEMPT_GROUPS:-sudo,admin}"
 
 # Members still see every process once /proc is mounted hidepid. Admins go in
 # here; a monitoring agent that reads /proc should too.
-SANDBOX_PROC_GROUP="${SANDBOX_PROC_GROUP:-proc}"
-SANDBOX_HIDEPID="${SANDBOX_HIDEPID:-1}"
+CONFINE_PROC_GROUP="${CONFINE_PROC_GROUP:-proc}"
+CONFINE_HIDEPID="${CONFINE_HIDEPID:-1}"
 
 # Units that must keep seeing other people's processes. polkit runs as polkitd
 # rather than as root and reads /proc/<pid> of whoever is asking it for
 # authorisation, so it goes blind under hidepid without this. Anything else you
 # run that reads /proc as a non-root user belongs on this list.
-SANDBOX_PROC_UNITS="${SANDBOX_PROC_UNITS:-polkit.service}"
+CONFINE_PROC_UNITS="${CONFINE_PROC_UNITS:-polkit.service}"
 
 # 0700, so a home is the account's own business. This is the single biggest
 # item in here: useradd on Ubuntu makes a home 0750 and this script then
 # chmod o+x'd it, which is enough for anyone with a shell on the box to walk
 # into someone else's ~/.config and read whatever is world-readable in there.
-SANDBOX_HOME_MODE="${SANDBOX_HOME_MODE:-0700}"
+CONFINE_HOME_MODE="${CONFINE_HOME_MODE:-0700}"
 
 # ...and 027, so what gets CREATED in there from now on is not world-readable
 # either. Fixing the mode of the home does not fix the mode of the files
 # already inside it, but it does close the path to them.
-SANDBOX_UMASK="${SANDBOX_UMASK:-027}"
+CONFINE_UMASK="${CONFINE_UMASK:-027}"
 
-SANDBOX_SYSCTL="${SANDBOX_SYSCTL:-1}"
+CONFINE_SYSCTL="${CONFINE_SYSCTL:-1}"
 
 # Resource caps on the per-user systemd slice. Memory and tasks are HARD caps,
 # because their failure mode is the whole box going down with one account. CPU
 # is a weight rather than a quota, because ITS failure mode is only slowness,
 # and throttling a build while the box is otherwise idle is a bad trade. Set
-# SANDBOX_CPU_QUOTA (e.g. 200%) when you would rather have the ceiling.
-SANDBOX_MEMORY_HIGH="${SANDBOX_MEMORY_HIGH:-35%}"
-SANDBOX_MEMORY_MAX="${SANDBOX_MEMORY_MAX:-50%}"
-SANDBOX_TASKS_MAX="${SANDBOX_TASKS_MAX:-4096}"
-SANDBOX_CPU_WEIGHT="${SANDBOX_CPU_WEIGHT:-100}"
-SANDBOX_CPU_QUOTA="${SANDBOX_CPU_QUOTA:-}"
+# CONFINE_CPU_QUOTA (e.g. 200%) when you would rather have the ceiling.
+CONFINE_MEMORY_HIGH="${CONFINE_MEMORY_HIGH:-35%}"
+CONFINE_MEMORY_MAX="${CONFINE_MEMORY_MAX:-50%}"
+CONFINE_TASKS_MAX="${CONFINE_TASKS_MAX:-4096}"
+CONFINE_CPU_WEIGHT="${CONFINE_CPU_WEIGHT:-100}"
+CONFINE_CPU_QUOTA="${CONFINE_CPU_QUOTA:-}"
 
 # PAM limits, which bite at login rather than in the cgroup: a fork bomb is
 # stopped by nproc long before MemoryMax notices it happening.
-SANDBOX_NPROC="${SANDBOX_NPROC:-4096}"
-SANDBOX_NOFILE="${SANDBOX_NOFILE:-16384}"
-SANDBOX_MAXLOGINS="${SANDBOX_MAXLOGINS:-20}"
+CONFINE_NPROC="${CONFINE_NPROC:-4096}"
+CONFINE_NOFILE="${CONFINE_NOFILE:-16384}"
+CONFINE_MAXLOGINS="${CONFINE_MAXLOGINS:-20}"
 
 # local  -- ssh -L to their own app still works, ssh -R relays do not
 # no     -- no forwarding at all, for a box whose tenants only need a shell
 # yes    -- off; this box is a jump host on purpose
-SANDBOX_SSH_FORWARDING="${SANDBOX_SSH_FORWARDING:-local}"
-SANDBOX_SSH="${SANDBOX_SSH:-1}"
+CONFINE_SSH_FORWARDING="${CONFINE_SSH_FORWARDING:-local}"
+CONFINE_SSH="${CONFINE_SSH:-1}"
 
 # An unattended run creates accounts with $DEFAULT_GROUPS, and that default was
-# sudo,admin -- which on a sandboxed box would hand every new tenant the way
-# out of the sandbox on the first --refresh. Only the default moves: a
+# sudo,admin -- which on a confined box would hand every new tenant the way
+# out of confinement on the first --refresh. Only the default moves: a
 # DEFAULT_GROUPS in the environment or in server.conf is an answer, and stands.
-if [[ "$SANDBOX" == 1 && -z "$DEFAULT_GROUPS_EXPLICIT" ]]; then
+if [[ "$CONFINE" == 1 && -z "$DEFAULT_GROUPS_EXPLICIT" ]]; then
 	DEFAULT_GROUPS="users"
 fi
 
@@ -1783,10 +1783,10 @@ cmd_groups() {
 	esac
 }
 
-# --------------------------------------------------------- user sandbox ---
+# --------------------------------------------------------- user confine ---
 #
 # Confine every account that is not an admin. See the tier model up at the
-# SANDBOX knobs; this is what each tier actually costs the tenant.
+# CONFINE knobs; this is what each tier actually costs the tenant.
 #
 # The threat is not a stranger -- it is the account we just created. Someone
 # with a shell on a shared box, or the customer of a VPS we sold, who should be
@@ -1809,18 +1809,18 @@ cmd_groups() {
 # What it deliberately does NOT do is take sudo away from an account that
 # already has it. Demoting a live sudoer unattended is how you lose a box --
 # maybe it is a colleague, maybe it is the only other admin, maybe it is the
-# account your own automation logs in as. `sandbox status` names them and
+# account your own automation logs in as. `confine status` names them and
 # `groups rm <user> sudo` demotes them, both with a human present.
 
-_sandbox_on() { [[ "$SANDBOX" == 1 ]]; }
+_confine_on() { [[ "$CONFINE" == 1 ]]; }
 
 # Is this account exempt -- root, or an admin? The safe direction on every
 # unknown is "no": an account we cannot classify is confined, not let out.
-_sandbox_exempt() {
+_confine_exempt() {
 	local login="$1" g uid
 	uid="$(id -u "$login" 2>/dev/null)" || return 1
 	[[ "$uid" == 0 ]] && return 0
-	for g in ${SANDBOX_EXEMPT_GROUPS//,/ }; do
+	for g in ${CONFINE_EXEMPT_GROUPS//,/ }; do
 		[[ -n "${g// }" ]] || continue
 		_groups_in "$login" "$g" && return 0
 	done
@@ -1828,52 +1828,52 @@ _sandbox_exempt() {
 }
 
 # Every human account on the box. Not $KNOWN_USERS: an account this script
-# never created still shares the machine, and a sandbox with a hole in it the
-# shape of the cloud image's default user is not a sandbox.
-_sandbox_humans() {
+# never created still shares the machine, and confinement with a hole in it the
+# shape of the cloud image's default user is not confinement.
+_confine_humans() {
 	getent passwd | awk -F: -v floor="${GROUPS_SYSTEM_FLOOR:-1000}" \
 		'$3 >= floor && $3 < 65534 && $7 !~ /(nologin|\/false|sync)$/ { print $1 }'
 }
 
-_sandbox_group_ensure() {
+_confine_group_ensure() {
 	local g="$1"
 	getent group "$g" >/dev/null && return 0
-	valid_group "$g" || { warn "sandbox: '$g' is not a valid group name"; return 1; }
-	groupadd "$g" >/dev/null 2>&1 || { warn "sandbox: could not create group $g"; return 1; }
+	valid_group "$g" || { warn "confine: '$g' is not a valid group name"; return 1; }
+	groupadd "$g" >/dev/null 2>&1 || { warn "confine: could not create group $g"; return 1; }
 	note "created group $g"
 	return 0
 }
 
 # Recompute who is in which tier. Convergent in both directions: a promotion
-# takes someone out of the sandbox group on the next run, a demotion puts them
+# takes someone out of the confined group on the next run, a demotion puts them
 # back, and neither needs the flag that was passed when the account was made.
-sync_sandbox_membership() {
+sync_confine_membership() {
 	local login rc=0
-	_sandbox_group_ensure "$SANDBOX_GROUP" || return 1
-	if [[ "$SANDBOX_HIDEPID" == 1 ]]; then
-		_sandbox_group_ensure "$SANDBOX_PROC_GROUP" || rc=1
+	_confine_group_ensure "$CONFINE_GROUP" || return 1
+	if [[ "$CONFINE_HIDEPID" == 1 ]]; then
+		_confine_group_ensure "$CONFINE_PROC_GROUP" || rc=1
 	fi
 
 	while read -r login; do
 		[[ -n "$login" ]] || continue
-		if _sandbox_exempt "$login"; then
-			if _groups_in "$login" "$SANDBOX_GROUP"; then
-				gpasswd -d "$login" "$SANDBOX_GROUP" >/dev/null 2>&1 \
-					&& note "sandbox: $login is an admin -- released from $SANDBOX_GROUP"
+		if _confine_exempt "$login"; then
+			if _groups_in "$login" "$CONFINE_GROUP"; then
+				gpasswd -d "$login" "$CONFINE_GROUP" >/dev/null 2>&1 \
+					&& note "confine: $login is an admin -- released from $CONFINE_GROUP"
 			fi
-			if [[ "$SANDBOX_HIDEPID" == 1 ]] && getent group "$SANDBOX_PROC_GROUP" >/dev/null \
-				&& ! _groups_in "$login" "$SANDBOX_PROC_GROUP"; then
-				usermod -aG "$SANDBOX_PROC_GROUP" "$login" \
-					&& note "sandbox: $login -> $SANDBOX_PROC_GROUP (keeps seeing every process)"
+			if [[ "$CONFINE_HIDEPID" == 1 ]] && getent group "$CONFINE_PROC_GROUP" >/dev/null \
+				&& ! _groups_in "$login" "$CONFINE_PROC_GROUP"; then
+				usermod -aG "$CONFINE_PROC_GROUP" "$login" \
+					&& note "confine: $login -> $CONFINE_PROC_GROUP (keeps seeing every process)"
 			fi
 		else
-			if ! _groups_in "$login" "$SANDBOX_GROUP"; then
-				usermod -aG "$SANDBOX_GROUP" "$login" \
-					&& note "sandbox: confined $login" \
-					|| { warn "sandbox: could not confine $login"; rc=1; }
+			if ! _groups_in "$login" "$CONFINE_GROUP"; then
+				usermod -aG "$CONFINE_GROUP" "$login" \
+					&& note "confine: confined $login" \
+					|| { warn "confine: could not confine $login"; rc=1; }
 			fi
 		fi
-	done < <(_sandbox_humans)
+	done < <(_confine_humans)
 	return $rc
 }
 
@@ -1886,7 +1886,7 @@ sync_sandbox_membership() {
 # quietly, on exactly the distribution we run everywhere. So each line is a
 # floor rather than a setting, and a key the kernel does not have at all
 # (yama on a kernel built without it) is skipped rather than guessed at.
-_sandbox_sysctl_floor() {
+_confine_sysctl_floor() {
 	local key="$1" want="$2" have
 	have="$(sysctl -n "$key" 2>/dev/null)" || return 1
 	[[ "$have" =~ ^-?[0-9]+$ ]] || return 1
@@ -1895,11 +1895,11 @@ _sandbox_sysctl_floor() {
 	return 0
 }
 
-configure_sandbox_sysctl() {
-	local conf=/etc/sysctl.d/62-profullstack-sandbox.conf body="" dumpable
+configure_confine_sysctl() {
+	local conf=/etc/sysctl.d/62-profullstack-confine.conf body="" dumpable
 
-	if [[ "$SANDBOX_SYSCTL" != 1 ]]; then
-		info "sandbox: sysctl hardening off (SANDBOX_SYSCTL=0)"
+	if [[ "$CONFINE_SYSCTL" != 1 ]]; then
+		info "confine: sysctl hardening off (CONFINE_SYSCTL=0)"
 		return 0
 	fi
 
@@ -1909,16 +1909,16 @@ configure_sandbox_sysctl() {
 	# protected_*: the /tmp symlink and hardlink games, which only matter on a
 	# box where someone else is also writing to /tmp. suid_dumpable 0: a core
 	# from a setuid binary is a memory image nobody should be handed.
-	body+="$(_sandbox_sysctl_floor kernel.kptr_restrict 2)"$'\n'
-	body+="$(_sandbox_sysctl_floor kernel.dmesg_restrict 1)"$'\n'
-	body+="$(_sandbox_sysctl_floor kernel.perf_event_paranoid 3)"$'\n'
-	body+="$(_sandbox_sysctl_floor kernel.yama.ptrace_scope 1)"$'\n'
-	body+="$(_sandbox_sysctl_floor kernel.unprivileged_bpf_disabled 1)"$'\n'
-	body+="$(_sandbox_sysctl_floor net.core.bpf_jit_harden 2)"$'\n'
-	body+="$(_sandbox_sysctl_floor fs.protected_symlinks 1)"$'\n'
-	body+="$(_sandbox_sysctl_floor fs.protected_hardlinks 1)"$'\n'
-	body+="$(_sandbox_sysctl_floor fs.protected_fifos 2)"$'\n'
-	body+="$(_sandbox_sysctl_floor fs.protected_regular 2)"$'\n'
+	body+="$(_confine_sysctl_floor kernel.kptr_restrict 2)"$'\n'
+	body+="$(_confine_sysctl_floor kernel.dmesg_restrict 1)"$'\n'
+	body+="$(_confine_sysctl_floor kernel.perf_event_paranoid 3)"$'\n'
+	body+="$(_confine_sysctl_floor kernel.yama.ptrace_scope 1)"$'\n'
+	body+="$(_confine_sysctl_floor kernel.unprivileged_bpf_disabled 1)"$'\n'
+	body+="$(_confine_sysctl_floor net.core.bpf_jit_harden 2)"$'\n'
+	body+="$(_confine_sysctl_floor fs.protected_symlinks 1)"$'\n'
+	body+="$(_confine_sysctl_floor fs.protected_hardlinks 1)"$'\n'
+	body+="$(_confine_sysctl_floor fs.protected_fifos 2)"$'\n'
+	body+="$(_confine_sysctl_floor fs.protected_regular 2)"$'\n'
 
 	# fs.suid_dumpable is the one key here that does NOT run in one direction,
 	# so it cannot be a floor: 0 (never dump) is safest, 2 (dump, readable only
@@ -1935,9 +1935,9 @@ configure_sandbox_sysctl() {
 	if [[ -z "$body" ]]; then
 		# Nothing to raise. Leave no file behind claiming otherwise.
 		if [[ -f "$conf" ]]; then
-			rm -f "$conf" && note "sandbox: kernel already at or above every floor -- removed $conf"
+			rm -f "$conf" && note "confine: kernel already at or above every floor -- removed $conf"
 		else
-			info "sandbox: kernel already at or above every hardening floor"
+			info "confine: kernel already at or above every hardening floor"
 		fi
 		return 0
 	fi
@@ -1950,7 +1950,7 @@ $body
 EOF
 	then
 		sysctl -q -p "$conf" 2>/dev/null || true
-		note "sandbox: kernel hardening ($(printf '%s' "$body" | wc -l) floor(s) raised)"
+		note "confine: kernel hardening ($(printf '%s' "$body" | wc -l) floor(s) raised)"
 	fi
 	return 0
 }
@@ -1965,24 +1965,24 @@ EOF
 #
 # root is not affected by any of this -- it sees everything regardless, which
 # is why earlyoom (running as root) can still find the hog to kill.
-configure_sandbox_proc() {
+configure_confine_proc() {
 	local gid opts="" want spelling ok=0
 
-	[[ "$SANDBOX_HIDEPID" == 1 ]] || { info "sandbox: hidepid off (SANDBOX_HIDEPID=0)"; return 0; }
+	[[ "$CONFINE_HIDEPID" == 1 ]] || { info "confine: hidepid off (CONFINE_HIDEPID=0)"; return 0; }
 
 	# A container is handed its /proc by the runtime and cannot remount it.
 	if [[ "$(systemd-detect-virt --container 2>/dev/null)" != "none" ]]; then
-		info "sandbox: inside a container -- /proc is the runtime's to mount, skipping hidepid"
+		info "confine: inside a container -- /proc is the runtime's to mount, skipping hidepid"
 		return 0
 	fi
 
-	getent group "$SANDBOX_PROC_GROUP" >/dev/null || _sandbox_group_ensure "$SANDBOX_PROC_GROUP" || return 1
-	gid="$(getent group "$SANDBOX_PROC_GROUP" | cut -d: -f3)"
-	[[ -n "$gid" ]] || { warn "sandbox: no gid for group $SANDBOX_PROC_GROUP"; return 1; }
+	getent group "$CONFINE_PROC_GROUP" >/dev/null || _confine_group_ensure "$CONFINE_PROC_GROUP" || return 1
+	gid="$(getent group "$CONFINE_PROC_GROUP" | cut -d: -f3)"
+	[[ -n "$gid" ]] || { warn "confine: no gid for group $CONFINE_PROC_GROUP"; return 1; }
 
 	# The units that read other people's /proc as a non-root user, before the
 	# mount that would blind them rather than after.
-	_sandbox_proc_units "$gid"
+	_confine_proc_units "$gid"
 
 	for spelling in invisible 2; do
 		want="hidepid=$spelling,gid=$gid"
@@ -1995,39 +1995,39 @@ configure_sandbox_proc() {
 	done
 
 	if [[ "$ok" != 1 ]]; then
-		warn "sandbox: this kernel would not remount /proc with hidepid -- processes stay visible"
+		warn "confine: this kernel would not remount /proc with hidepid -- processes stay visible"
 		return 1
 	fi
 
-	if _sandbox_fstab_proc "$opts" "$gid"; then
-		note "sandbox: /proc hidepid -- an account sees only its own processes"
+	if _confine_fstab_proc "$opts" "$gid"; then
+		note "confine: /proc hidepid -- an account sees only its own processes"
 	else
-		info "sandbox: /proc already hidepid ($opts)"
+		info "confine: /proc already hidepid ($opts)"
 	fi
 	return 0
 }
 
 # SupplementaryGroups for the units that would otherwise go blind. Written per
 # unit, and only for units this box actually has.
-_sandbox_proc_units() {
+_confine_proc_units() {
 	local u dir
-	for u in ${SANDBOX_PROC_UNITS//,/ }; do
+	for u in ${CONFINE_PROC_UNITS//,/ }; do
 		[[ -n "${u// }" ]] || continue
 		systemctl list-unit-files "$u" >/dev/null 2>&1 || continue
 		[[ -n "$(systemctl list-unit-files --no-legend "$u" 2>/dev/null)" ]] || continue
 		dir="/etc/systemd/system/$u.d"
 		install -d -m 0755 "$dir"
-		if write_if_changed "$dir/50-profullstack-sandbox.conf" 0644 <<EOF
+		if write_if_changed "$dir/50-profullstack-confine.conf" 0644 <<EOF
 # /proc is mounted hidepid: this unit runs as a non-root user and reads
 # /proc/<pid> of processes belonging to other people, so it needs the group
 # that is still allowed to see them.
 [Service]
-SupplementaryGroups=$SANDBOX_PROC_GROUP
+SupplementaryGroups=$CONFINE_PROC_GROUP
 EOF
 		then
 			systemctl daemon-reload 2>/dev/null || true
 			systemctl try-restart "$u" 2>/dev/null || true
-			note "sandbox: $u keeps /proc visibility"
+			note "confine: $u keeps /proc visibility"
 		fi
 	done
 	return 0
@@ -2036,14 +2036,14 @@ EOF
 # Rewrite the /proc line in /etc/fstab. Our own comment lines carry a marker so
 # that they are stripped and re-added rather than accumulating a fresh pair on
 # every single run.
-_sandbox_fstab_proc() {
+_confine_fstab_proc() {
 	local opts="$1" gid="$2" tmp
 	tmp="$(mktemp)" || return 1
 	grep -vE '^#root-ubuntu:proc|^[^#]*[[:space:]]/proc[[:space:]]' /etc/fstab >"$tmp" 2>/dev/null
 	{
 		printf '#root-ubuntu:proc hidepid -- an account sees only its own processes.\n'
 		printf '#root-ubuntu:proc gid %s is the "%s" group; its members still see them all.\n' \
-			"$gid" "$SANDBOX_PROC_GROUP"
+			"$gid" "$CONFINE_PROC_GROUP"
 		printf 'proc /proc proc %s 0 0\n' "$opts"
 	} >>"$tmp"
 	if cmp -s "$tmp" /etc/fstab; then
@@ -2064,59 +2064,59 @@ _sandbox_fstab_proc() {
 # Then both are LIFTED for root and for every admin, explicitly, by name. That
 # is the point of the exercise: the account you fix the box with must not be
 # subject to the cap that is wedging it.
-configure_sandbox_limits() {
+configure_confine_limits() {
 	local dir=/etc/systemd/system/user-.slice.d changed=0 quota=""
 
-	if write_if_changed /etc/security/limits.d/60-profullstack-sandbox.conf 0644 <<EOF
-# Written by root-ubuntu.sh. Applies to @$SANDBOX_GROUP only -- root and
+	if write_if_changed /etc/security/limits.d/60-profullstack-confine.conf 0644 <<EOF
+# Written by root-ubuntu.sh. Applies to @$CONFINE_GROUP only -- root and
 # admins are not in that group and so are not named here at all.
-@$SANDBOX_GROUP  soft  nproc      $SANDBOX_NPROC
-@$SANDBOX_GROUP  hard  nproc      $SANDBOX_NPROC
-@$SANDBOX_GROUP  soft  nofile     $SANDBOX_NOFILE
-@$SANDBOX_GROUP  hard  nofile     $SANDBOX_NOFILE
-@$SANDBOX_GROUP  hard  maxlogins  $SANDBOX_MAXLOGINS
+@$CONFINE_GROUP  soft  nproc      $CONFINE_NPROC
+@$CONFINE_GROUP  hard  nproc      $CONFINE_NPROC
+@$CONFINE_GROUP  soft  nofile     $CONFINE_NOFILE
+@$CONFINE_GROUP  hard  nofile     $CONFINE_NOFILE
+@$CONFINE_GROUP  hard  maxlogins  $CONFINE_MAXLOGINS
 # A core dump is a memory image, written where the account can read it back.
-@$SANDBOX_GROUP  hard  core       0
+@$CONFINE_GROUP  hard  core       0
 EOF
 	then
-		note "sandbox: pam limits for @$SANDBOX_GROUP (nproc=$SANDBOX_NPROC, nofile=$SANDBOX_NOFILE)"
+		note "confine: pam limits for @$CONFINE_GROUP (nproc=$CONFINE_NPROC, nofile=$CONFINE_NOFILE)"
 	fi
 
-	if [[ -n "$SANDBOX_CPU_QUOTA" ]]; then
-		quota="CPUQuota=$SANDBOX_CPU_QUOTA"
+	if [[ -n "$CONFINE_CPU_QUOTA" ]]; then
+		quota="CPUQuota=$CONFINE_CPU_QUOTA"
 	else
-		quota="# CPUQuota: deliberately unset -- see above. SANDBOX_CPU_QUOTA sets it."
+		quota="# CPUQuota: deliberately unset -- see above. CONFINE_CPU_QUOTA sets it."
 	fi
 
 	# user-.slice.d is systemd's prefix drop-in: it applies to user-1000.slice,
 	# user-1001.slice and every other instance -- including user-0.slice, which
 	# is root's, which is why the exemption below is not optional.
 	install -d -m 0755 "$dir"
-	if write_if_changed "$dir/50-profullstack-sandbox.conf" 0644 <<EOF
+	if write_if_changed "$dir/50-profullstack-confine.conf" 0644 <<EOF
 # Written by root-ubuntu.sh. Per-account resource caps.
 #
 # Memory and tasks are hard ceilings: their failure mode is the whole box
 # going down with one account. CPU is a weight, not a quota -- it only bites
 # under contention, so a build gets the whole machine when the machine is idle
-# and a fair share when it is not. Set SANDBOX_CPU_QUOTA for a real ceiling.
+# and a fair share when it is not. Set CONFINE_CPU_QUOTA for a real ceiling.
 [Slice]
 MemoryAccounting=yes
-MemoryHigh=$SANDBOX_MEMORY_HIGH
-MemoryMax=$SANDBOX_MEMORY_MAX
+MemoryHigh=$CONFINE_MEMORY_HIGH
+MemoryMax=$CONFINE_MEMORY_MAX
 TasksAccounting=yes
-TasksMax=$SANDBOX_TASKS_MAX
+TasksMax=$CONFINE_TASKS_MAX
 CPUAccounting=yes
-CPUWeight=$SANDBOX_CPU_WEIGHT
+CPUWeight=$CONFINE_CPU_WEIGHT
 IOAccounting=yes
 IOWeight=100
 $quota
 EOF
 	then
 		changed=1
-		note "sandbox: slice caps (MemoryMax=$SANDBOX_MEMORY_MAX, TasksMax=$SANDBOX_TASKS_MAX)"
+		note "confine: slice caps (MemoryMax=$CONFINE_MEMORY_MAX, TasksMax=$CONFINE_TASKS_MAX)"
 	fi
 
-	_sandbox_slice_exemptions && changed=1
+	_confine_slice_exemptions && changed=1
 	[[ "$changed" == 1 ]] && systemctl daemon-reload 2>/dev/null
 	return 0
 }
@@ -2124,16 +2124,16 @@ EOF
 # Lift the caps back off root and every admin, and take the lifting away again
 # from anyone who is no longer one. Written per uid because that is the only
 # way to override a prefix drop-in for one instance of it.
-_sandbox_slice_exemptions() {
+_confine_slice_exemptions() {
 	local login uid want=() u f changed=0
 
 	want=(0)
 	while read -r login; do
 		[[ -n "$login" ]] || continue
-		_sandbox_exempt "$login" || continue
+		_confine_exempt "$login" || continue
 		uid="$(id -u "$login" 2>/dev/null)" || continue
 		want+=("$uid")
-	done < <(_sandbox_humans)
+	done < <(_confine_humans)
 
 	for uid in "${want[@]}"; do
 		install -d -m 0755 "/etc/systemd/system/user-$uid.slice.d"
@@ -2149,7 +2149,7 @@ CPUQuota=
 EOF
 		then
 			changed=1
-			note "sandbox: uid $uid exempt from the resource caps"
+			note "confine: uid $uid exempt from the resource caps"
 		fi
 	done
 
@@ -2161,7 +2161,7 @@ EOF
 		rm -f "$f"
 		rmdir "$(dirname "$f")" 2>/dev/null || true
 		changed=1
-		note "sandbox: uid $u is no longer an admin -- resource caps now apply"
+		note "confine: uid $u is no longer an admin -- resource caps now apply"
 	done
 
 	[[ "$changed" == 1 ]]
@@ -2171,10 +2171,10 @@ EOF
 # born private. Neither fixes a file that already exists -- that is what
 # fix_home_permissions does to the home itself -- but together they stop the
 # box from generating the problem again with every new account.
-configure_sandbox_login() {
+configure_confine_login() {
 	local changed=0
-	_set_login_def UMASK "$SANDBOX_UMASK" && { changed=1; note "sandbox: login.defs UMASK $SANDBOX_UMASK"; }
-	_set_login_def HOME_MODE "$SANDBOX_HOME_MODE" && { changed=1; note "sandbox: login.defs HOME_MODE $SANDBOX_HOME_MODE"; }
+	_set_login_def UMASK "$CONFINE_UMASK" && { changed=1; note "confine: login.defs UMASK $CONFINE_UMASK"; }
+	_set_login_def HOME_MODE "$CONFINE_HOME_MODE" && { changed=1; note "confine: login.defs HOME_MODE $CONFINE_HOME_MODE"; }
 	return 0
 }
 
@@ -2196,7 +2196,7 @@ _set_login_def() {
 	return 0
 }
 
-# What a sandboxed account may do over ssh.
+# What a confined account may do over ssh.
 #
 # Forwarding is the interesting one, and the interesting direction is OUT. A
 # tenant with -L can reach a service on localhost -- but so can any shell on
@@ -2204,28 +2204,28 @@ _set_login_def() {
 # turns the machine into an open relay under our IP, and that is how a dev box
 # ends up on a blocklist. Hence "local" by default: keep ssh -L for previewing
 # your own app, drop the relay.
-configure_sandbox_ssh() {
-	local conf=/etc/ssh/sshd_config.d/60-profullstack-sandbox.conf backup fwd
+configure_confine_ssh() {
+	local conf=/etc/ssh/sshd_config.d/60-profullstack-confine.conf backup fwd
 
-	[[ "$SANDBOX_SSH" == 1 ]] || { info "sandbox: sshd policy off (SANDBOX_SSH=0)"; return 0; }
-	[[ -d /etc/ssh/sshd_config.d ]] || { info "sandbox: no sshd_config.d on this box -- skipping"; return 0; }
+	[[ "$CONFINE_SSH" == 1 ]] || { info "confine: sshd policy off (CONFINE_SSH=0)"; return 0; }
+	[[ -d /etc/ssh/sshd_config.d ]] || { info "confine: no sshd_config.d on this box -- skipping"; return 0; }
 
 	# A drop-in in a directory nothing includes is a policy that does not exist.
 	if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/' /etc/ssh/sshd_config 2>/dev/null; then
-		warn "sandbox: /etc/ssh/sshd_config has no Include for sshd_config.d -- ssh policy NOT applied"
+		warn "confine: /etc/ssh/sshd_config has no Include for sshd_config.d -- ssh policy NOT applied"
 		return 1
 	fi
 
-	case "$SANDBOX_SSH_FORWARDING" in
-		local|no|yes) fwd="$SANDBOX_SSH_FORWARDING" ;;
-		*) warn "sandbox: SANDBOX_SSH_FORWARDING='$SANDBOX_SSH_FORWARDING' is not local|no|yes -- using local"; fwd=local ;;
+	case "$CONFINE_SSH_FORWARDING" in
+		local|no|yes) fwd="$CONFINE_SSH_FORWARDING" ;;
+		*) warn "confine: CONFINE_SSH_FORWARDING='$CONFINE_SSH_FORWARDING' is not local|no|yes -- using local"; fwd=local ;;
 	esac
 
 	backup="$(mktemp)"
 	[[ -f "$conf" ]] && cp -f "$conf" "$backup"
 
 	write_if_changed "$conf" 0644 <<EOF || { rm -f "$backup"; return 0; }
-# Written by root-ubuntu.sh. What an account in @$SANDBOX_GROUP may do.
+# Written by root-ubuntu.sh. What an account in @$CONFINE_GROUP may do.
 #
 # The closing 'Match all' is deliberate. On Ubuntu this directory is included
 # from the FIRST line of /etc/ssh/sshd_config, so everything in the main file
@@ -2235,7 +2235,7 @@ configure_sandbox_ssh() {
 # braces rather than a fix for a live bug. It costs one line, it makes the file
 # safe to concatenate or move, and 'Match Group' as the last thing in an
 # included file is a footgun waiting for the version where that changes.
-Match Group $SANDBOX_GROUP
+Match Group $CONFINE_GROUP
 	AllowTcpForwarding $fwd
 	AllowStreamLocalForwarding no
 	GatewayPorts no
@@ -2255,17 +2255,17 @@ EOF
 			rm -f "$conf"
 		fi
 		rm -f "$backup"
-		warn "sandbox: sshd rejected the policy drop-in -- rolled back, sshd untouched"
+		warn "confine: sshd rejected the policy drop-in -- rolled back, sshd untouched"
 		return 1
 	fi
 	rm -f "$backup"
 
 	systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-	note "sandbox: sshd policy for @$SANDBOX_GROUP (forwarding=$fwd)"
+	note "confine: sshd policy for @$CONFINE_GROUP (forwarding=$fwd)"
 	return 0
 }
 
-# A home is the account's own business: $SANDBOX_HOME_MODE, and an ACL for
+# A home is the account's own business: $CONFINE_HOME_MODE, and an ACL for
 # nginx where nginx actually has something to serve.
 #
 # The mode alone would break the per-user web pages, because www-data has to
@@ -2276,24 +2276,24 @@ EOF
 #
 # Granted only where there is something published, so a home with no web
 # content grants nothing at all.
-_sandbox_home_mode() {
+_confine_home_mode() {
 	local home="$1" login="$2"
 
-	chmod "$SANDBOX_HOME_MODE" "$home" 2>/dev/null || {
-		warn "sandbox: could not chmod $SANDBOX_HOME_MODE $home"
+	chmod "$CONFINE_HOME_MODE" "$home" 2>/dev/null || {
+		warn "confine: could not chmod $CONFINE_HOME_MODE $home"
 		return 1
 	}
 
 	if [[ -d "$home/public_html" || -d "$home/apps" ]] && getent group "$WEB_GROUP" >/dev/null; then
 		if command -v setfacl >/dev/null 2>&1; then
 			setfacl -m "u:$WEB_GROUP:--x" "$home" 2>/dev/null \
-				|| warn "sandbox: could not grant $WEB_GROUP traverse on $home"
+				|| warn "confine: could not grant $WEB_GROUP traverse on $home"
 		else
 			# No acl package yet (it arrives in the apt stage). Fall back to the
 			# old behaviour rather than silently breaking the user's web page --
 			# less private, but a working box, and the next run fixes it.
 			chmod o+x "$home"
-			warn "sandbox: setfacl missing -- $home left traversable; re-run after apt installs acl"
+			warn "confine: setfacl missing -- $home left traversable; re-run after apt installs acl"
 		fi
 	fi
 	return 0
@@ -2302,62 +2302,62 @@ _sandbox_home_mode() {
 # Every human home, not only the accounts this script provisioned. The cloud
 # image's own `ubuntu` was never created by us and so never had its permissions
 # touched -- and it is on every box.
-configure_sandbox_homes() {
+configure_confine_homes() {
 	local login home before
 	while read -r login; do
 		[[ -n "$login" ]] || continue
 		home="$(user_home "$login")"
 		[[ -n "$home" && -d "$home" ]] || continue
 		before="$(stat -c '%a' "$home" 2>/dev/null)"
-		_sandbox_home_mode "$home" "$login" || continue
+		_confine_home_mode "$home" "$login" || continue
 		[[ "$(stat -c '%a' "$home" 2>/dev/null)" != "$before" ]] \
-			&& note "sandbox: $home $before -> $(stat -c '%a' "$home" 2>/dev/null)"
-	done < <(_sandbox_humans)
+			&& note "confine: $home $before -> $(stat -c '%a' "$home" 2>/dev/null)"
+	done < <(_confine_humans)
 	return 0
 }
 
-configure_user_sandbox() {
+configure_confinement() {
 	local rc=0
-	sync_sandbox_membership   || rc=1
-	configure_sandbox_homes   || rc=1
-	configure_sandbox_sysctl  || rc=1
-	configure_sandbox_login   || rc=1
-	configure_sandbox_limits  || rc=1
-	configure_sandbox_proc    || rc=1
-	configure_sandbox_ssh     || rc=1
-	_sandbox_report_sudoers
+	sync_confine_membership   || rc=1
+	configure_confine_homes   || rc=1
+	configure_confine_sysctl  || rc=1
+	configure_confine_login   || rc=1
+	configure_confine_limits  || rc=1
+	configure_confine_proc    || rc=1
+	configure_confine_ssh     || rc=1
+	_confine_report_sudoers
 	return $rc
 }
 
 # The one thing this will not do by itself. Naming them is the whole point:
-# an account with sudo is outside the sandbox no matter what else is set.
-_sandbox_report_sudoers() {
+# an account with sudo is outside confinement no matter what else is set.
+_confine_report_sudoers() {
 	local login extra=()
 	while read -r login; do
 		[[ -n "$login" ]] || continue
-		_sandbox_exempt "$login" || continue
+		_confine_exempt "$login" || continue
 		extra+=("$login")
-	done < <(_sandbox_humans)
+	done < <(_confine_humans)
 	[[ ${#extra[@]} -gt 0 ]] || return 0
-	info "sandbox: NOT confined (admins): ${extra[*]}"
-	info "sandbox: each of those can leave the sandbox at will -- \`groups rm <user> sudo\` to demote"
+	info "confine: NOT confined (admins): ${extra[*]}"
+	info "confine: each of those can leave confinement at will -- \`groups rm <user> sudo\` to demote"
 	return 0
 }
 
-sandbox_usage() {
+confine_usage() {
 	cat <<EOF
-usage: $0 sandbox [status|apply]
+usage: $0 confine [status|apply]
 
   status    what is confined on this box right now, and what is not (default).
             Reads only, and needs no root.
-  apply     (re)apply the sandbox. Root. This is also done by every ordinary
+  apply     (re)apply confinement. Root. This is also done by every ordinary
             run, so you only need it to pick up a changed setting without
             doing the rest of the provisioning.
 
 The model, in one line: root and admins are never confined, everybody else is
-confined by default. Admins are whoever is in $SANDBOX_EXEMPT_GROUPS.
+confined by default. Admins are whoever is in $CONFINE_EXEMPT_GROUPS.
 
-Turning it off:      SANDBOX=0 $0 --refresh
+Turning it off:      CONFINE=0 $0 --refresh
 Letting someone out: $0 groups add <user> sudo
 Putting them back:   $0 groups rm <user> sudo
 EOF
@@ -2367,23 +2367,23 @@ EOF
 # A read-only report on the posture. The point is to be able to answer "is this
 # box actually tight?" without reading five config files -- and to be honest
 # about the parts that are not, rather than printing a row of ticks.
-_sandbox_status() {
+_confine_status() {
 	local login home mode tier admins=() confined=() leaky=() key want have
 
-	printf '\n\033[1msandbox\033[0m: %s\n' \
-		"$([[ "$SANDBOX" == 1 ]] && echo "on" || echo "OFF (SANDBOX=0)")"
-	printf '  admin groups : %s\n' "$SANDBOX_EXEMPT_GROUPS"
-	printf '  sandbox group: %s\n' "$SANDBOX_GROUP"
+	printf '\n\033[1mconfine\033[0m: %s\n' \
+		"$([[ "$CONFINE" == 1 ]] && echo "on" || echo "OFF (CONFINE=0)")"
+	printf '  admin groups : %s\n' "$CONFINE_EXEMPT_GROUPS"
+	printf '  confine group: %s\n' "$CONFINE_GROUP"
 
 	printf '\n\033[1maccounts\033[0m\n'
 	while read -r login; do
 		[[ -n "$login" ]] || continue
 		home="$(user_home "$login")"
 		mode="$(stat -c '%a' "$home" 2>/dev/null || echo '?')"
-		if _sandbox_exempt "$login"; then
+		if _confine_exempt "$login"; then
 			tier="admin    "; admins+=("$login")
 		else
-			tier="sandboxed"; confined+=("$login")
+			tier="confined"; confined+=("$login")
 		fi
 		# 'other' with any bit set means every account on the box can at least
 		# walk in. That is the leak this whole thing exists to close.
@@ -2393,7 +2393,7 @@ _sandbox_status() {
 		else
 			printf '  %s  %-16s %s\n' "$tier" "$login" "$mode"
 		fi
-	done < <(_sandbox_humans)
+	done < <(_confine_humans)
 
 	printf '\n\033[1mmechanisms\033[0m\n'
 	if grep ' /proc ' /proc/mounts 2>/dev/null | grep -q hidepid; then
@@ -2401,21 +2401,21 @@ _sandbox_status() {
 	else
 		printf '  hidepid      \033[1;33mno\033[0m   (ps -ef shows every command line on the box)\n'
 	fi
-	if [[ -f /etc/systemd/system/user-.slice.d/50-profullstack-sandbox.conf ]]; then
-		printf '  slice caps   yes  MemoryMax=%s TasksMax=%s\n' "$SANDBOX_MEMORY_MAX" "$SANDBOX_TASKS_MAX"
+	if [[ -f /etc/systemd/system/user-.slice.d/50-profullstack-confine.conf ]]; then
+		printf '  slice caps   yes  MemoryMax=%s TasksMax=%s\n' "$CONFINE_MEMORY_MAX" "$CONFINE_TASKS_MAX"
 		printf '  exempt uids  %s\n' \
 			"$(ls -d /etc/systemd/system/user-*.slice.d 2>/dev/null \
 				| sed 's#.*/user-##; s#\.slice\.d##' | tr '\n' ' ')"
 	else
 		printf '  slice caps   \033[1;33mno\033[0m   (one account can take the box down)\n'
 	fi
-	if [[ -f /etc/security/limits.d/60-profullstack-sandbox.conf ]]; then
-		printf '  pam limits   yes  nproc=%s nofile=%s\n' "$SANDBOX_NPROC" "$SANDBOX_NOFILE"
+	if [[ -f /etc/security/limits.d/60-profullstack-confine.conf ]]; then
+		printf '  pam limits   yes  nproc=%s nofile=%s\n' "$CONFINE_NPROC" "$CONFINE_NOFILE"
 	else
 		printf '  pam limits   \033[1;33mno\033[0m\n'
 	fi
-	if [[ -f /etc/ssh/sshd_config.d/60-profullstack-sandbox.conf ]]; then
-		printf '  ssh policy   yes  forwarding=%s\n' "$SANDBOX_SSH_FORWARDING"
+	if [[ -f /etc/ssh/sshd_config.d/60-profullstack-confine.conf ]]; then
+		printf '  ssh policy   yes  forwarding=%s\n' "$CONFINE_SSH_FORWARDING"
 	else
 		printf '  ssh policy   \033[1;33mno\033[0m   (ssh -R can relay through this box)\n'
 	fi
@@ -2444,30 +2444,30 @@ _sandbox_status() {
 	if [[ ${#admins[@]} -gt 0 ]]; then
 		printf '%d account(s) are NOT confined, because they are admins: %s\n' \
 			"${#admins[@]}" "${admins[*]}"
-		printf 'An admin can leave the sandbox at will. Demote with: %s groups rm <user> sudo\n' "$0"
+		printf 'An admin can leave confinement at will. Demote with: %s groups rm <user> sudo\n' "$0"
 	fi
 	[[ ${#confined[@]} -gt 0 ]] && printf '%d account(s) confined: %s\n' "${#confined[@]}" "${confined[*]}"
 	if [[ ${#leaky[@]} -gt 0 ]]; then
 		printf '\n\033[1;33m%d home(s) are still reachable by other accounts: %s\033[0m\n' \
 			"${#leaky[@]}" "${leaky[*]}"
-		printf 'Fix with: sudo %s sandbox apply\n' "$0"
+		printf 'Fix with: sudo %s confine apply\n' "$0"
 	fi
 	return 0
 }
 
-cmd_sandbox() {
+cmd_confine() {
 	local action="${1:-status}"
 	case "$action" in
-		-h|--help|help) sandbox_usage 0 ;;
-		status|"")      _sandbox_status ;;
+		-h|--help|help) confine_usage 0 ;;
+		status|"")      _confine_status ;;
 		apply)
-			[[ $EUID -eq 0 ]] || die "sandbox apply: must run as root (try: sudo $0 sandbox apply)"
-			[[ "$SANDBOX" == 1 ]] || die "sandbox apply: SANDBOX=0 -- nothing to apply"
-			configure_user_sandbox
+			[[ $EUID -eq 0 ]] || die "confine apply: must run as root (try: sudo $0 confine apply)"
+			[[ "$CONFINE" == 1 ]] || die "confine apply: CONFINE=0 -- nothing to apply"
+			configure_confinement
 			printf '\n'
-			_sandbox_status
+			_confine_status
 			;;
-		*) die "sandbox: unknown action '$action' (try: status, apply)" ;;
+		*) die "confine: unknown action '$action' (try: status, apply)" ;;
 	esac
 }
 
@@ -2481,7 +2481,7 @@ usage() {
 SUBCMD=""
 SUBARGS=()
 case "${1:-}" in
-	mount|umount|mounts|share|groups|sandbox) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
+	mount|umount|mounts|share|groups|confine) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
 esac
 
 ARGS=()
@@ -2525,7 +2525,7 @@ case "$SUBCMD" in
 	mounts) cmd_mounts; exit $? ;;
 	share)  cmd_share  ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 	groups) cmd_groups ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
-	sandbox) cmd_sandbox ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
+	confine) cmd_confine ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 esac
 
 # Root, not sudo-capable: this writes to /etc, creates accounts and drives
@@ -3750,8 +3750,8 @@ fix_home_permissions() {
 	[[ -d "$home" ]] || { warn "no home dir $home"; return 1; }
 
 	chown "$login:$login" "$home"
-	if _sandbox_on; then
-		_sandbox_home_mode "$home" "$login"
+	if _confine_on; then
+		_confine_home_mode "$home" "$login"
 	else
 		chmod g-w,o-w "$home"
 		chmod o+x "$home"
@@ -5614,11 +5614,11 @@ fi
 # After every account exists and has its groups, because who is confined is
 # decided by group membership -- and before the tools, so that anything the
 # rest of the run installs into a home lands under the new umask.
-if [[ "$SANDBOX" == 1 ]]; then
-	log "confining accounts (sandbox)"
-	try "sandbox" configure_user_sandbox
+if [[ "$CONFINE" == 1 ]]; then
+	log "confining accounts (confine)"
+	try "confine" configure_confinement
 else
-	log "sandbox is OFF (SANDBOX=0) -- accounts are not confined"
+	log "confine is OFF (CONFINE=0) -- accounts are not confined"
 fi
 
 log "installing dotfiles for root"

@@ -503,7 +503,7 @@ describe('the groups subcommand', () => {
   });
 
   it('is peeled off before the root check, like the share subcommands', () => {
-    expect(SOURCE).toContain('mount|umount|mounts|share|groups|sandbox)');
+    expect(SOURCE).toContain('mount|umount|mounts|share|groups|confine)');
     expect(SOURCE).toMatch(/groups\)\s+cmd_groups/);
   });
 
@@ -883,7 +883,7 @@ describe('configure_sensors', () => {
   });
 });
 
-describe('the user sandbox', () => {
+describe('the user confine', () => {
   /**
    * The model is "root and admins are never confined, everybody else is
    * confined by default", so most of what is worth testing is the boundary:
@@ -891,23 +891,23 @@ describe('the user sandbox', () => {
    * quietly do the opposite of what it claims.
    */
 
-  const SANDBOX_DECLS = [
-    ...SOURCE.matchAll(/^(?:SANDBOX|SANDBOX_[A-Z_]+)=.*$/gm),
+  const CONFINE_DECLS = [
+    ...SOURCE.matchAll(/^(?:CONFINE|CONFINE_[A-Z_]+)=.*$/gm),
   ]
     .map((m) => m[0])
     .join('\n');
 
-  describe('_sandbox_exempt', () => {
-    const FNS = ['_sandbox_exempt'];
+  describe('_confine_exempt', () => {
+    const FNS = ['_confine_exempt'];
     const stubs = `
-      SANDBOX_EXEMPT_GROUPS=sudo,admin
+      CONFINE_EXEMPT_GROUPS=sudo,admin
       id() { [[ "\${2:-}" == root ]] && { echo 0; return 0; }
              [[ "\${2:-}" == ghost ]] && return 1
              echo 1000; }
       _groups_in() { [[ " \$FAKE_GROUPS " == *" \$2 "* ]]; }
     `;
     const exempt = (login: string, groups = '') =>
-      status(FNS, `${stubs}\nFAKE_GROUPS="${groups}" _sandbox_exempt ${login}`);
+      status(FNS, `${stubs}\nFAKE_GROUPS="${groups}" _confine_exempt ${login}`);
 
     it('always exempts root, whatever groups say', () => {
       expect(exempt('root')).toBe(0);
@@ -924,14 +924,14 @@ describe('the user sandbox', () => {
 
     it('confines an account it cannot classify, rather than letting it out', () => {
       // The safe direction on an unknown. An account that does not resolve is
-      // not evidence of an admin, and treating it as one is how a sandbox
+      // not evidence of an admin, and treating it as one is how a confine
       // grows a hole shaped like whatever the lookup failed on.
       expect(exempt('ghost', 'sudo')).toBe(1);
     });
   });
 
-  describe('_sandbox_humans', () => {
-    const FNS = ['_sandbox_humans'];
+  describe('_confine_humans', () => {
+    const FNS = ['_confine_humans'];
     const passwd = [
       'root:x:0:0:root:/root:/bin/bash',
       'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin',
@@ -945,12 +945,12 @@ describe('the user sandbox', () => {
     // %b, not %s: JSON.stringify turns the newlines into two-character \n
     // escapes, and printf %s hands awk one very long single record.
     const humans = () =>
-      shell(FNS, `getent() { printf '%b\\n' ${JSON.stringify(passwd)}; }\n_sandbox_humans`);
+      shell(FNS, `getent() { printf '%b\\n' ${JSON.stringify(passwd)}; }\n_confine_humans`);
 
     it('is every human account, not only the ones this script created', () => {
       // The cloud image's own `ubuntu` was never created by us and still
-      // shares the box. A sandbox with a hole shaped like the default user
-      // is not a sandbox.
+      // shares the box. A confine with a hole shaped like the default user
+      // is not a confine.
       expect(humans().split('\n')).toEqual(['alice', 'bob']);
     });
 
@@ -963,14 +963,14 @@ describe('the user sandbox', () => {
     });
   });
 
-  describe('_sandbox_sysctl_floor', () => {
-    const FNS = ['_sandbox_sysctl_floor'];
+  describe('_confine_sysctl_floor', () => {
+    const FNS = ['_confine_sysctl_floor'];
     const floor = (have: string, want: number) =>
       shell(
         FNS,
         `sysctl() { [[ "\${2:-}" == missing ]] && return 1; printf '%s\\n' ${JSON.stringify(
           have,
-        )}; }\n_sandbox_sysctl_floor a.key ${want} || true`,
+        )}; }\n_confine_sysctl_floor a.key ${want} || true`,
       );
 
     it('raises a key the kernel sets lower', () => {
@@ -992,7 +992,7 @@ describe('the user sandbox', () => {
 
     it('skips a key this kernel does not have rather than guessing', () => {
       expect(
-        shell(FNS, `sysctl() { return 1; }\n_sandbox_sysctl_floor a.key 2 || true`),
+        shell(FNS, `sysctl() { return 1; }\n_confine_sysctl_floor a.key 2 || true`),
       ).toBe('');
     });
 
@@ -1011,8 +1011,8 @@ describe('the user sandbox', () => {
      * box on 1 alone entirely.
      */
     const FNS = [
-      '_sandbox_sysctl_floor',
-      'configure_sandbox_sysctl',
+      '_confine_sysctl_floor',
+      'configure_confine_sysctl',
       'write_if_changed',
       'file_sha',
     ];
@@ -1021,7 +1021,7 @@ describe('the user sandbox', () => {
       const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-suid-'));
       shell(
         FNS,
-        `SANDBOX_SYSCTL=1
+        `CONFINE_SYSCTL=1
          note() { :; }; info() { :; }; warn() { :; }
          sysctl() {
            case "\${2:-}" in
@@ -1029,8 +1029,8 @@ describe('the user sandbox', () => {
              -p|*) return 0 ;;
            esac
          }
-         eval "$(declare -f configure_sandbox_sysctl | sed 's#/etc/sysctl.d/62-profullstack-sandbox.conf#${dir}/out.conf#g')"
-         configure_sandbox_sysctl`,
+         eval "$(declare -f configure_confine_sysctl | sed 's#/etc/sysctl.d/62-profullstack-confine.conf#${dir}/out.conf#g')"
+         configure_confine_sysctl`,
       );
       try {
         return readFileSync(join(dir, 'out.conf'), 'utf8');
@@ -1052,11 +1052,11 @@ describe('the user sandbox', () => {
     });
   });
 
-  describe('_sandbox_fstab_proc', () => {
-    const FNS = ['_sandbox_fstab_proc'];
+  describe('_confine_fstab_proc', () => {
+    const FNS = ['_confine_fstab_proc'];
 
     function box(fstab: string): string {
-      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-sandbox-'));
+      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-confine-'));
       writeFileSync(join(dir, 'fstab'), fstab);
       return dir;
     }
@@ -1064,9 +1064,9 @@ describe('the user sandbox', () => {
     const run = (dir: string, opts = 'rw,hidepid=invisible,gid=1001') =>
       shell(
         FNS,
-        `SANDBOX_PROC_GROUP=proc
-         eval "$(declare -f _sandbox_fstab_proc | sed 's#/etc/fstab#${dir}/fstab#g')"
-         _sandbox_fstab_proc '${opts}' 1001 && echo CHANGED || echo SAME`,
+        `CONFINE_PROC_GROUP=proc
+         eval "$(declare -f _confine_fstab_proc | sed 's#/etc/fstab#${dir}/fstab#g')"
+         _confine_fstab_proc '${opts}' 1001 && echo CHANGED || echo SAME`,
       );
 
     const fstabOf = (dir: string) => readFileSync(join(dir, 'fstab'), 'utf8');
@@ -1149,13 +1149,13 @@ describe('the user sandbox', () => {
     });
   });
 
-  describe('what the sandbox will not do on its own', () => {
+  describe('what the confine will not do on its own', () => {
     it('never removes sudo from an account that already has it', () => {
       // Demoting a live sudoer unattended is how you lose a box: it might be
       // a colleague, the only other admin, or the account your automation
       // logs in as. The script names them and stops.
-      expect(SOURCE).toContain('_sandbox_report_sudoers');
-      const fn = SOURCE.slice(SOURCE.indexOf('sync_sandbox_membership() {'));
+      expect(SOURCE).toContain('_confine_report_sudoers');
+      const fn = SOURCE.slice(SOURCE.indexOf('sync_confine_membership() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       expect(body).not.toMatch(/gpasswd -d[^\n]*sudo/);
       expect(body).not.toMatch(/deluser[^\n]*sudo/);
@@ -1184,7 +1184,7 @@ describe('the user sandbox', () => {
       // file comes after this block — and leaving a Match open as the last
       // thing in an included file is a footgun waiting for the version where
       // that scoping changes.
-      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_ssh() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_confine_ssh() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       // Anchored to the start of a line: both phrases also appear in the
       // comment above the block explaining why this matters, and matching
@@ -1197,7 +1197,7 @@ describe('the user sandbox', () => {
     });
 
     it('validates with sshd -t and rolls back rather than locking the box', () => {
-      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_ssh() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_confine_ssh() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       expect(body).toContain('sshd -t');
       expect(body).toContain('rolled back');
@@ -1217,20 +1217,20 @@ describe('the user sandbox', () => {
       // An fstab entry the kernel rejects fails the mount at boot, which is
       // the worst possible place to discover it. So: remount first, write the
       // file only once that has actually worked.
-      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_proc() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_confine_proc() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       expect(body.indexOf('mount -o "remount,$want" /proc')).toBeLessThan(
-        body.indexOf('_sandbox_fstab_proc'),
+        body.indexOf('_confine_fstab_proc'),
       );
     });
 
     it('gives the units that read other people’s /proc the group first', () => {
-      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_proc() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_confine_proc() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
-      expect(body.indexOf('_sandbox_proc_units')).toBeLessThan(
+      expect(body.indexOf('_confine_proc_units')).toBeLessThan(
         body.indexOf('mount -o "remount,$want" /proc'),
       );
-      expect(SOURCE).toContain('SupplementaryGroups=$SANDBOX_PROC_GROUP');
+      expect(SOURCE).toContain('SupplementaryGroups=$CONFINE_PROC_GROUP');
     });
 
     it('does not try to remount /proc inside a container', () => {
@@ -1239,7 +1239,7 @@ describe('the user sandbox', () => {
   });
 
   describe('the default groups a new account lands in', () => {
-    const decls = SANDBOX_DECLS;
+    const decls = CONFINE_DECLS;
     const explicit = SOURCE.slice(
       SOURCE.indexOf('DEFAULT_GROUPS_EXPLICIT='),
       SOURCE.indexOf('USERS=()'),
@@ -1250,35 +1250,35 @@ describe('the user sandbox', () => {
         encoding: 'utf8',
       });
 
-    it('is users, not sudo, once the box is sandboxed', () => {
+    it('is users, not sudo, once the box is confined', () => {
       // Otherwise the first unattended --refresh hands every new tenant the
-      // way straight out of the sandbox.
+      // way straight out of the confine.
       expect(groupsFor('')).toBe('users');
     });
 
-    it('is still sudo,admin when the sandbox is off', () => {
-      expect(groupsFor('SANDBOX=0')).toBe('sudo,admin');
+    it('is still sudo,admin when the confine is off', () => {
+      expect(groupsFor('CONFINE=0')).toBe('sudo,admin');
     });
 
     it('never overrides a DEFAULT_GROUPS somebody actually set', () => {
       // The environment and server.conf both win over a default, everywhere
       // else in this script. This is no different.
       expect(groupsFor('DEFAULT_GROUPS=sudo,docker')).toBe('sudo,docker');
-      expect(groupsFor('SANDBOX=1 DEFAULT_GROUPS=admin')).toBe('admin');
+      expect(groupsFor('CONFINE=1 DEFAULT_GROUPS=admin')).toBe('admin');
     });
   });
 
-  describe('the sandbox subcommand', () => {
+  describe('the confine subcommand', () => {
     it('reports without root, since reading a posture is not a privileged act', () => {
-      const out = execFileSync('bash', [SCRIPT, 'sandbox', 'status'], { encoding: 'utf8' });
-      expect(out).toContain('sandbox');
+      const out = execFileSync('bash', [SCRIPT, 'confine', 'status'], { encoding: 'utf8' });
+      expect(out).toContain('confine');
       expect(out).toMatch(/admin groups/);
     });
 
     it('refuses to apply without root, and names what to run instead', () => {
       let out = '';
       try {
-        execFileSync('bash', [SCRIPT, 'sandbox', 'apply'], { encoding: 'utf8', stdio: 'pipe' });
+        execFileSync('bash', [SCRIPT, 'confine', 'apply'], { encoding: 'utf8', stdio: 'pipe' });
       } catch (error) {
         out = String((error as { stderr?: Buffer }).stderr ?? '');
       }
@@ -1286,12 +1286,12 @@ describe('the user sandbox', () => {
     });
 
     it('is peeled off before the root check, like the other subcommands', () => {
-      expect(SOURCE).toMatch(/mount\|umount\|mounts\|share\|groups\|sandbox\)/);
+      expect(SOURCE).toMatch(/mount\|umount\|mounts\|share\|groups\|confine\)/);
     });
 
     it('is offered by the top-level help', () => {
       const out = execFileSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
-      expect(out).toContain('sandbox');
+      expect(out).toContain('confine');
     });
   });
 
@@ -1304,7 +1304,7 @@ describe('the user sandbox', () => {
     });
 
     it('only grants it where there is something published', () => {
-      const fn = SOURCE.slice(SOURCE.indexOf('_sandbox_home_mode() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('_confine_home_mode() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       expect(body).toMatch(/-d "\$home\/public_html" \|\| -d "\$home\/apps"/);
     });
@@ -1312,26 +1312,26 @@ describe('the user sandbox', () => {
     it('falls back to the old behaviour when acl is not installed yet', () => {
       // setfacl arrives with the apt stage. Failing closed here would break
       // the user's web page on a first run instead of on no run at all.
-      const fn = SOURCE.slice(SOURCE.indexOf('_sandbox_home_mode() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('_confine_home_mode() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
       expect(body).toContain('command -v setfacl');
       expect(body).toContain('chmod o+x');
     });
 
     it('covers accounts this script never created', () => {
-      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_homes() {'));
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_confine_homes() {'));
       const body = fn.slice(0, fn.indexOf('\n}\n'));
-      expect(body).toContain('_sandbox_humans');
+      expect(body).toContain('_confine_humans');
       expect(body).not.toContain('KNOWN_USERS');
     });
   });
 
   it('is wired into an ordinary run, not only into the subcommand', () => {
-    expect(SOURCE).toContain('try "sandbox" configure_user_sandbox');
+    expect(SOURCE).toContain('try "confine" configure_confinement');
   });
 
   it('can be turned off in one place, and says so when it is', () => {
-    expect(SOURCE).toContain('SANDBOX="${SANDBOX:-1}"');
-    expect(SOURCE).toContain('sandbox is OFF (SANDBOX=0)');
+    expect(SOURCE).toContain('CONFINE="${CONFINE:-1}"');
+    expect(SOURCE).toContain('confine is OFF (CONFINE=0)');
   });
 });

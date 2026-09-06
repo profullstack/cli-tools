@@ -88,7 +88,7 @@
 # ...or, for a zone at Cloudflare instead:
 #CLOUDFLARE_API_TOKEN=
 
-# ── the sandbox ──────────────────────────────────────────────────────────────
+# ── confinement ──────────────────────────────────────────────────────────────
 
 # These boxes are multi-tenant, and the root VPSes we sell hand a customer an
 # account rather than the root password. So every account that is not an admin
@@ -100,57 +100,57 @@
 #   pam limits        a fork bomb is stopped in the fork
 #   ssh forwarding    ssh -L to your own app yes, ssh -R relay no
 #
-# root and anyone in SANDBOX_EXEMPT_GROUPS are exempt -- explicitly, by uid,
+# root and anyone in CONFINE_EXEMPT_GROUPS are exempt -- explicitly, by uid,
 # because the account you fix a wedged box with must not be subject to the cap
-# that is wedging it. `root-ubuntu.sh sandbox` prints what is confined here and
+# that is wedging it. `root-ubuntu.sh confine` prints what is confined here and
 # what is not.
 #
 # It never takes sudo away from an account that already has it: demoting a live
-# sudoer unattended is how you lose a box. `sandbox` names them and leaves that
+# sudoer unattended is how you lose a box. `confine` names them and leaves that
 # to you (`root-ubuntu.sh groups rm <user> sudo`).
-#SANDBOX=1
+#CONFINE=1
 
 # Who counts as an admin, and so is not confined.
-#SANDBOX_EXEMPT_GROUPS=sudo,admin
+#CONFINE_EXEMPT_GROUPS=sudo,admin
 
 # The group that carries the confinement. Recomputed every run from the line
 # above, so a promotion or demotion converges without being told twice.
-#SANDBOX_GROUP=sandboxed
+#CONFINE_GROUP=confined
 
 # The mode every human home is set to, and the umask new accounts get. Setting
 # the home closes the path; the umask stops new files being born world-readable
 # behind it. Neither fixes the mode of a file that is already there.
-#SANDBOX_HOME_MODE=0700
-#SANDBOX_UMASK=027
+#CONFINE_HOME_MODE=0700
+#CONFINE_UMASK=027
 
 # hidepid needs a group whose members still see every process -- admins go in
-# it automatically. Add a monitoring agent's unit to SANDBOX_PROC_UNITS if it
+# it automatically. Add a monitoring agent's unit to CONFINE_PROC_UNITS if it
 # reads /proc as a non-root user; polkit already does and is handled.
-#SANDBOX_HIDEPID=1
-#SANDBOX_PROC_GROUP=proc
-#SANDBOX_PROC_UNITS=polkit.service
+#CONFINE_HIDEPID=1
+#CONFINE_PROC_GROUP=proc
+#CONFINE_PROC_UNITS=polkit.service
 
 # Per-account resource caps on the systemd user slice. Memory and tasks are
 # hard ceilings because their failure mode is the whole box. CPU is only a
 # weight -- it bites under contention and gets out of the way when the box is
-# idle -- so set SANDBOX_CPU_QUOTA (e.g. 200%) only if you want a real ceiling
+# idle -- so set CONFINE_CPU_QUOTA (e.g. 200%) only if you want a real ceiling
 # and are willing to throttle a build on an otherwise empty machine.
-#SANDBOX_MEMORY_HIGH=35%
-#SANDBOX_MEMORY_MAX=50%
-#SANDBOX_TASKS_MAX=4096
-#SANDBOX_CPU_WEIGHT=100
-#SANDBOX_CPU_QUOTA=
+#CONFINE_MEMORY_HIGH=35%
+#CONFINE_MEMORY_MAX=50%
+#CONFINE_TASKS_MAX=4096
+#CONFINE_CPU_WEIGHT=100
+#CONFINE_CPU_QUOTA=
 
 # PAM limits, which bite at login rather than in the cgroup.
-#SANDBOX_NPROC=4096
-#SANDBOX_NOFILE=16384
-#SANDBOX_MAXLOGINS=20
+#CONFINE_NPROC=4096
+#CONFINE_NOFILE=16384
+#CONFINE_MAXLOGINS=20
 
 # local -- ssh -L to their own app works, ssh -R relays do not. The relay is
 # the one that matters: it turns the box into an open proxy under our IP.
 # no -- no forwarding at all. yes -- off, this box is a jump host on purpose.
-#SANDBOX_SSH_FORWARDING=local
-#SANDBOX_SSH=1
+#CONFINE_SSH_FORWARDING=local
+#CONFINE_SSH=1
 
 # ── tailscale ────────────────────────────────────────────────────────────────
 
