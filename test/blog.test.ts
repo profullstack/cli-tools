@@ -26,6 +26,7 @@ const NOW = Date.parse('2026-08-16T11:00:00Z');
 /** A fully populated config, so the identity-bearing branches are exercised. */
 const CONFIGURED: BlogConfig = {
   siteTitle: "Someone's Blog",
+  siteUrl: 'https://example.com/blog',
   author: 'Some One',
   disclosure: 'How this was written: drafted with an AI assistant, then edited by me.',
   links: [
@@ -287,5 +288,78 @@ describe('createPost', () => {
 describe('isoSeconds', () => {
   it('trims milliseconds to match the format the posts use', () => {
     expect(isoSeconds(new Date('2026-08-16T10:04:00.123Z'))).toBe('2026-08-16T10:04:00Z');
+  });
+});
+
+describe('canonical URL', () => {
+  it('emits no canonical link when there is nothing to point at', () => {
+    const html = renderPost({ title: 'T', description: 'd', date: '2026-08-16T10:00:00Z' });
+    expect(html).not.toContain('rel="canonical"');
+  });
+
+  it('emits the canonical link when the post carries one', () => {
+    const html = renderPost({
+      title: 'T',
+      description: 'd',
+      date: '2026-08-16T10:00:00Z',
+      canonical: 'https://example.com/blog/007-post.html',
+    });
+    expect(html).toContain('<link rel="canonical" href="https://example.com/blog/007-post.html">');
+  });
+
+  it('escapes the canonical URL rather than trusting it', () => {
+    const html = renderPost({
+      title: 'T',
+      description: 'd',
+      date: '2026-08-16T10:00:00Z',
+      canonical: 'https://example.com/"><script>alert(1)</script>',
+    });
+    expect(html).not.toContain('<script>alert(1)</script>');
+    expect(html).toContain('&quot;');
+  });
+
+  it('gives a new post a self-referential canonical built from siteUrl', async () => {
+    const dir = await fixture();
+
+    const { file } = await createPost(
+      dir,
+      { title: 'Second', description: 'two', date: '2026-08-16T10:00:00Z' },
+      CONFIGURED,
+    );
+
+    const html = await readFile(join(dir, file), 'utf8');
+    expect(html).toContain('<link rel="canonical" href="https://example.com/blog/002-post.html">');
+  });
+
+  it('lets an explicit canonical win, for a post whose original is elsewhere', async () => {
+    const dir = await fixture();
+
+    const { file } = await createPost(
+      dir,
+      {
+        title: 'Second',
+        description: 'two',
+        date: '2026-08-16T10:00:00Z',
+        canonical: 'https://elsewhere.example/original',
+      },
+      CONFIGURED,
+    );
+
+    const html = await readFile(join(dir, file), 'utf8');
+    expect(html).toContain('<link rel="canonical" href="https://elsewhere.example/original">');
+    expect(html).not.toContain('example.com/blog/002-post.html');
+  });
+
+  it('claims no canonical when no siteUrl is configured', async () => {
+    const dir = await fixture();
+
+    const { file } = await createPost(
+      dir,
+      { title: 'Second', description: 'two', date: '2026-08-16T10:00:00Z' },
+      EMPTY_CONFIG,
+    );
+
+    const html = await readFile(join(dir, file), 'utf8');
+    expect(html).not.toContain('rel="canonical"');
   });
 });

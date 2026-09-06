@@ -32,6 +32,14 @@ export interface NewPost {
   date: string;
   /** HTML fragment: h2/p only, no document shell. */
   body?: string;
+  /**
+   * Absolute URL this post is the original of.
+   *
+   * Normally the post's own URL, which {@link createPost} fills in from
+   * `siteUrl` once it knows the file name. Set it by hand only when the
+   * original genuinely lives somewhere else.
+   */
+  canonical?: string;
 }
 
 export interface Problem {
@@ -168,7 +176,7 @@ function identity(links: readonly BlogLink[]): string {
  * meter traffic into an account it inherited from the repository.
  */
 export function renderPost(
-  { title, description, date, body = '' }: NewPost,
+  { title, description, date, body = '', canonical }: NewPost,
   config: BlogConfig = EMPTY_CONFIG,
 ): string {
   const day = date.slice(0, 10);
@@ -187,13 +195,16 @@ export function renderPost(
     ? `\n\n<p><small>${typogrify(config.disclosure)}</small></p>`
     : '';
   const footer = adUnit(config);
+  // Omitted entirely rather than emitted empty: a canonical pointing nowhere is
+  // worse than none.
+  const canonicalTag = canonical ? `\n<link rel="canonical" href="${esc(canonical)}">` : '';
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${heading}${site}</title>
+<title>${heading}${site}</title>${canonicalTag}
 <link rel="alternate" type="application/rss+xml"${feedTitle} href="feed.xml">
 <meta name="date" content="${esc(date)}">
 <meta name="description" content="${esc(description)}">
@@ -297,11 +308,16 @@ export async function createPost(
   const posts = await readPosts(dir);
   const file = `${nextNumber(posts)}-post.html`;
   const path = join(dir, file);
+  // The file name is only known here, so a self-canonical can only be built
+  // here. An explicit one wins: it means the original is somewhere else.
+  const canonical = post.canonical ?? (config.siteUrl ? `${config.siteUrl}/${file}` : undefined);
 
   // 'wx' rather than a plain write: two concurrent runs both read the directory
   // before either writes, so both pick the same number. Losing a post to that
   // race would be invisible until somebody noticed it missing.
-  await writeFile(path, renderPost(post, config), { flag: 'wx' });
+  await writeFile(path, renderPost({ ...post, ...(canonical ? { canonical } : {}) }, config), {
+    flag: 'wx',
+  });
 
   const indexPath = join(dir, 'index.html');
   const index = await readFile(indexPath, 'utf8');

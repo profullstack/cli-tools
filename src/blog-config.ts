@@ -25,6 +25,15 @@ export interface BlogLink {
 export interface BlogConfig {
   /** Site name, appended to each post's `<title>` and used as the feed link title. */
   siteTitle: string | null;
+  /**
+   * Where the blog is served, with no trailing slash.
+   *
+   * Only used to give each post a self-referential `rel="canonical"`. That
+   * matters because these posts get syndicated to dev.to and Hashnode, which
+   * point their own canonical back here: without this the original is the one
+   * page in the set making no claim about itself.
+   */
+  siteUrl: string | null;
   /** Byline name. Null omits the byline line entirely. */
   author: string | null;
   /** Identity links in the footer. Empty omits the paragraph. */
@@ -42,6 +51,7 @@ export interface BlogConfig {
 /** The zero config: a post with no identity and no third-party scripts. */
 export const EMPTY_CONFIG: BlogConfig = {
   siteTitle: null,
+  siteUrl: null,
   author: null,
   links: [],
   disclosure: null,
@@ -72,6 +82,25 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null;
 }
 
+/**
+ * A site URL, trailing slash trimmed, or null.
+ *
+ * Anything that is not an absolute http(s) URL is dropped rather than repaired:
+ * a canonical pointing somewhere wrong is worse than none, because search
+ * engines act on it.
+ */
+function asUrl(value: unknown): string | null {
+  const raw = asString(value);
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+  } catch {
+    return null;
+  }
+  return raw.replace(/\/+$/, '');
+}
+
 function asLinks(value: unknown): BlogLink[] {
   if (!Array.isArray(value)) return [];
   return value.flatMap((entry): BlogLink[] => {
@@ -89,6 +118,7 @@ export function normalizeConfig(raw: unknown): BlogConfig {
   const object = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
   return {
     siteTitle: asString(object.siteTitle),
+    siteUrl: asUrl(object.siteUrl),
     author: asString(object.author),
     links: asLinks(object.links),
     disclosure: asString(object.disclosure),
@@ -103,6 +133,7 @@ export function applyEnv(config: BlogConfig, env: NodeJS.ProcessEnv = process.en
   return {
     ...config,
     siteTitle: asString(env.BLOG_SITE_TITLE) ?? config.siteTitle,
+    siteUrl: asUrl(env.BLOG_SITE_URL) ?? config.siteUrl,
     author: asString(env.BLOG_AUTHOR) ?? config.author,
     disclosure: asString(env.BLOG_DISCLOSURE) ?? config.disclosure,
     trackerSiteId: asString(env.CRAWLPROOF_SITE_ID) ?? config.trackerSiteId,

@@ -135,3 +135,31 @@ describe('loadBlogConfig', () => {
     ).rejects.toThrow(path);
   });
 });
+
+describe('siteUrl', () => {
+  it('keeps an absolute http(s) URL and trims the trailing slash', () => {
+    expect(normalizeConfig({ siteUrl: 'https://example.com/blog/' }).siteUrl).toBe(
+      'https://example.com/blog',
+    );
+    expect(normalizeConfig({ siteUrl: 'http://example.com' }).siteUrl).toBe('http://example.com');
+  });
+
+  // A canonical pointing somewhere wrong is worse than none, because search
+  // engines act on it. So anything not clearly a site URL is dropped.
+  it('drops anything that is not an absolute http(s) URL', () => {
+    for (const bad of ['example.com/blog', '/blog', 'javascript:alert(1)', 'ftp://example.com', '', '   ', 42]) {
+      expect(normalizeConfig({ siteUrl: bad }).siteUrl).toBeNull();
+    }
+  });
+
+  it('defaults to null, so a post claims no canonical unless configured', () => {
+    expect(normalizeConfig({}).siteUrl).toBeNull();
+  });
+
+  it('is overridable by BLOG_SITE_URL', () => {
+    const config = applyEnv(normalizeConfig({ siteUrl: 'https://file.example' }), {
+      BLOG_SITE_URL: 'https://env.example/blog/',
+    } as NodeJS.ProcessEnv);
+    expect(config.siteUrl).toBe('https://env.example/blog');
+  });
+});
