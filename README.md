@@ -767,6 +767,7 @@ these suits, most specific first:
 ```json
 {
   "siteTitle": "Your Blog",
+  "siteUrl": "https://example.com/blog",
   "author": "Your Name",
   "disclosure": "<strong>How this was written:</strong> drafted with an AI assistant, then edited by me.",
   "links": [{ "label": "Mastodon", "href": "https://example.social/@you" }],
@@ -775,9 +776,17 @@ these suits, most specific first:
 }
 ```
 
-`BLOG_SITE_TITLE`, `BLOG_AUTHOR`, `BLOG_DISCLOSURE`, `CRAWLPROOF_SITE_ID`,
-`CRAWLPROOF_AD_SLOT` and `CRAWLPROOF_AD_FORMAT` override the file. `links` is
-the only field with no environment equivalent.
+`BLOG_SITE_TITLE`, `BLOG_SITE_URL`, `BLOG_AUTHOR`, `BLOG_DISCLOSURE`,
+`CRAWLPROOF_SITE_ID`, `CRAWLPROOF_AD_SLOT` and `CRAWLPROOF_AD_FORMAT` override
+the file. `links` is the only field with no environment equivalent.
+
+`siteUrl` is what gives each post a self-referential `rel="canonical"`. These
+posts get syndicated to dev.to and Hashnode, which point their canonical back
+here, so without it the original is the one page in the set making no claim
+about itself. Pass `--canonical` to `blog-post new` when the original genuinely
+lives somewhere else; anything that is not an absolute http(s) URL is dropped
+rather than repaired, because a canonical pointing somewhere wrong is worse
+than none.
 
 `trackerSiteId` and `adSlotId` are **accounts, not settings**: leave them null
 unless they are yours. A shared id would meter your readers' pageviews and your

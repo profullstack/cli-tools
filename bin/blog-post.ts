@@ -27,6 +27,7 @@ import { configPaths, loadBlogConfig } from '../src/blog-config.ts';
 
 const USAGE = `Usage:
   blog-post new <title> --description <text> [--body file.html] [--date ISO]
+                [--canonical URL]
   blog-post check
   blog-post list
   blog-post feed
@@ -43,6 +44,9 @@ Options:
   --description TEXT  Feed summary. Required by \`new\`.
   --body FILE         HTML fragment for the body (default: a stub)
   --date ISO          Publish date (default: now). Refuses the future.
+  --canonical URL     The original this post syndicates. Defaults to the post's
+                      own URL when siteUrl is configured, which is what lets a
+                      dev.to or Hashnode copy point back here.
   --dir PATH          Blog directory (default: $BLOG_DIR, else
                       ${DEFAULT_DIR})
   --allow-future      Permit a future date. You almost never want this.
@@ -51,7 +55,7 @@ Options:
 
 const SPEC = {
   boolean: ['--allow-future', '-h', '--help'],
-  string: ['--description', '--body', '--date', '--dir'],
+  string: ['--description', '--body', '--date', '--dir', '--canonical'],
 } as const;
 
 /**
@@ -137,9 +141,22 @@ export async function run(argv: readonly string[]): Promise<number> {
         );
       }
 
+      const canonical = values.get('--canonical');
+      if (canonical && !/^https?:\/\//.test(canonical)) {
+        process.stderr.write(`new: --canonical must be an absolute http(s) URL, got ${JSON.stringify(canonical)}\n`);
+        return 1;
+      }
+      if (!canonical && !config.siteUrl) {
+        process.stderr.write(
+          'note: no siteUrl configured, so this post claims no canonical URL.\n' +
+            '      A syndicated copy on dev.to or Hashnode can still point here, but the\n' +
+            '      original will not say so itself. See `blog-post config`.\n',
+        );
+      }
+
       const { file, path } = await createPost(
         dir,
-        { title, description, date: isoSeconds(when), body },
+        { title, description, date: isoSeconds(when), body, ...(canonical ? { canonical } : {}) },
         config,
       );
 
