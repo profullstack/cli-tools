@@ -503,7 +503,9 @@ describe('the groups subcommand', () => {
   });
 
   it('is peeled off before the root check, like the share subcommands', () => {
-    expect(SOURCE).toContain('mount|umount|mounts|share|groups|confine)');
+    // The alternation grows as subcommands are added, so match the verb
+    // inside it rather than pinning the whole list.
+    expect(SOURCE).toMatch(/^\tmount\|[a-z|]*\bgroups\b[a-z|]*\)/m);
     expect(SOURCE).toMatch(/groups\)\s+cmd_groups/);
   });
 
@@ -1286,7 +1288,7 @@ describe('the user confine', () => {
     });
 
     it('is peeled off before the root check, like the other subcommands', () => {
-      expect(SOURCE).toMatch(/mount\|umount\|mounts\|share\|groups\|confine\)/);
+      expect(SOURCE).toMatch(/^\tmount\|[a-z|]*\bconfine\b[a-z|]*\)/m);
     });
 
     it('is offered by the top-level help', () => {
