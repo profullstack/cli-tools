@@ -193,6 +193,25 @@ export function hasCoinpaySession(env: NodeJS.ProcessEnv = process.env): boolean
   return existsSync(join(env.HOME ?? homedir(), '.coinpay.json'));
 }
 
+/**
+ * The plain words this wrapper claims for itself.
+ *
+ * Everything else goes to the dashboard untouched. These are the exception,
+ * deliberately and narrowly: installing is the wrapper's job and can never come
+ * to mean something upstream, and `update` is the word `cli-tools update`
+ * already uses, so typing it here and getting the dashboard's usage back is the
+ * command being wrong rather than the person.
+ */
+export const UPDATE_WORDS = new Set(['update', 'upgrade', 'self-update']);
+
+/**
+ * Only the FIRST argument counts, so the word can never swallow some later
+ * subcommand's own argument (`crawlproof ads budget update` stays upstream's).
+ */
+export function wantsSelfUpdate(argv: readonly string[]): boolean {
+  return UPDATE_WORDS.has(argv[0] ?? '');
+}
+
 /** Whether a CrawlProof API token is reachable without the caller exporting one. */
 export function hasToken(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env.CRAWLPROOF_TOKEN?.trim()) return true;
