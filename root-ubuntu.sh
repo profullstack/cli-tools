@@ -54,6 +54,15 @@
 #   ./root-ubuntu.sh share /mnt/volume --group www-data -R
 #                                           # ...to a second group as well (acl)
 #
+# Sandboxed tenants -- an account that gets its own machine instead of a shell
+# on this one (see "sandboxes" below, or `sandbox --help`):
+#   ./root-ubuntu.sh alice --sandbox        # alice gets a container, no host shell
+#   ./root-ubuntu.sh bob --sandbox=vm       # ...and bob gets a real VM
+#   ./root-ubuntu.sh sandbox                # who the tenants are, and their ports
+#   ./root-ubuntu.sh sandbox create carol --vm
+#   ./root-ubuntu.sh sandbox enter alice    # a root shell inside her machine
+#   ./root-ubuntu.sh sandbox rm alice       # delete the instance, keep her home
+#
 # Accounts and groups (see "accounts" below, or `groups --help`):
 #   ./root-ubuntu.sh groups                 # every account, and the groups it is in
 #   ./root-ubuntu.sh groups add alice docker
@@ -79,6 +88,8 @@
 #   --force-dotfiles   overwrite user-edited dotfiles (a .bak is kept)
 #   --no-reboot        never reboot, whatever apt says
 #   --reboot           reboot at the end if the kernel/libc asked for one
+#   --sandbox[=container|vm]   accounts named on this run become tenants
+#   --no-sandbox / --skip-sandbox
 #   --skip-apt / --skip-web / --skip-tailscale / --skip-tools / --skip-dotfiles
 #   -h | --help
 #
@@ -117,6 +128,20 @@
 #   WEB_DOMAIN=... domain for the per-user pages
 #   DEV_APPS=0     turn off <app>.<user>.$WEB_DOMAIN hosting
 #   DOTFILES_REPO=... git URL of the dotfiles to install (optional)
+#   SANDBOX=1      every account named on the run becomes a tenant
+#   SANDBOX_KIND=container|vm       which tier they get (default container)
+#   SANDBOX_CPU=2 SANDBOX_MEMORY=2GiB SANDBOX_DISK=20GiB SANDBOX_PROCESSES=2048
+#                  per-tenant caps. The disk one is only enforced on a pool
+#                  driver that can (btrfs/zfs, not dir)
+#   SANDBOX_NESTING=0   allow docker inside a tenant container (weakens it;
+#                  sell a --vm instead)
+#   SANDBOX_SSH_PORT_BASE=2200      tenant N reaches their box on 2200+N
+#   SANDBOX_PORT_BASE=21000 SANDBOX_PORT_SPAN=100
+#                  the loopback band each tenant may publish dev apps on
+#   SANDBOX_IMAGE=images:ubuntu/24.04/cloud
+#   SANDBOX_POOL / SANDBOX_POOL_SIZE / SANDBOX_BRIDGE / SANDBOX_SUBNET
+#   SANDBOX_DENY_NETS=...  where a tenant may not send a packet (RFC1918, the
+#                  cloud metadata address, the tailnet)
 #   SPONSOR_AD_SLOT=... ad slot id; the ad is off until one is set
 #   PORKBUN_API_KEY=... PORKBUN_SECRET_API_KEY=...
 #                  DNS-01 credentials for the wildcard cert. Without them:
@@ -274,6 +299,78 @@ COPY_SSH_PRIVATE_KEYS="${COPY_SSH_PRIVATE_KEYS:-0}"
 # when ~/apps/<app>/.port holds a port number.
 DEV_APPS="${DEV_APPS:-1}"
 DEV_APPS_MAP=/etc/nginx/conf.d/profullstack-devapps.conf
+
+# --- sandboxed tenants ---------------------------------------------------
+#
+# See "sandboxes" further down for what this actually does. In one line: an
+# account with SANDBOX=1 gets its own container (or VM) and no shell on this
+# box at all.
+SANDBOX="${SANDBOX:-0}"
+# container = unprivileged LXC, shared kernel, instant. vm = KVM, own kernel.
+SANDBOX_KIND="${SANDBOX_KIND:-container}"
+SKIP_SANDBOX="${SKIP_SANDBOX:-0}"
+
+# Instance names are prefixed so `incus list` reads as a list of people rather
+# than a list of hostnames that happen to collide with ours.
+SANDBOX_PREFIX="${SANDBOX_PREFIX:-dev-}"
+# The tenant's group on the HOST. Deliberately not `users`: that group is what
+# `share` opens every mounted volume to, and a tenant is exactly who must not
+# be in it.
+SANDBOX_GROUP="${SANDBOX_GROUP:-tenants}"
+SANDBOX_NOLOGIN="${SANDBOX_NOLOGIN:-/usr/sbin/nologin}"
+SANDBOX_IMAGE="${SANDBOX_IMAGE:-images:ubuntu/24.04/cloud}"
+
+# Storage. The driver decides whether $SANDBOX_DISK is a quota or a wish: dir
+# cannot enforce one, btrfs and zfs can. Leave the driver empty to pick the
+# best one actually present on the box.
+SANDBOX_POOL="${SANDBOX_POOL:-tenants}"
+SANDBOX_POOL_DRIVER="${SANDBOX_POOL_DRIVER:-}"
+SANDBOX_POOL_SIZE="${SANDBOX_POOL_SIZE:-100GiB}"
+
+# Our own bridge rather than incusbr0, so a box that already runs incus for
+# something else keeps its network and its rules.
+SANDBOX_BRIDGE="${SANDBOX_BRIDGE:-tenantbr0}"
+SANDBOX_SUBNET="${SANDBOX_SUBNET:-10.171.0.1/24}"
+# Handed to tenants over DHCP. Not the bridge's own dnsmasq -- see _sandbox_network.
+SANDBOX_DNS="${SANDBOX_DNS:-1.1.1.1,9.9.9.9}"
+
+# Per-tenant caps. limits.processes is what makes a fork bomb somebody else's
+# problem only inside their own instance.
+SANDBOX_CPU="${SANDBOX_CPU:-2}"
+SANDBOX_MEMORY="${SANDBOX_MEMORY:-2GiB}"
+SANDBOX_DISK="${SANDBOX_DISK:-20GiB}"
+SANDBOX_PROCESSES="${SANDBOX_PROCESSES:-2048}"
+# Nested containers (docker inside the tenant's container) need this, and it
+# weakens the container boundary. Off by default: someone who needs docker
+# should be sold a --vm, where nesting costs nothing and risks nothing of ours.
+SANDBOX_NESTING="${SANDBOX_NESTING:-0}"
+
+# Where a tenant's ports come from. Slot 0 gets ssh on 2200 and 21000-21099;
+# slot 1 gets 2201 and 21100-21199, and so on. The last $SANDBOX_MOSH_PORTS of
+# each band are udp, for mosh.
+SANDBOX_SSH_PORT_BASE="${SANDBOX_SSH_PORT_BASE:-2200}"
+SANDBOX_PORT_BASE="${SANDBOX_PORT_BASE:-21000}"
+SANDBOX_PORT_SPAN="${SANDBOX_PORT_SPAN:-100}"
+SANDBOX_MOSH_PORTS="${SANDBOX_MOSH_PORTS:-10}"
+SANDBOX_MAX_SLOTS="${SANDBOX_MAX_SLOTS:-200}"
+
+# Where a tenant may NOT send a packet. Everything private, plus the cloud
+# metadata address (169.254.169.254, which hands out instance credentials) and
+# the tailnet range -- so a tenant cannot reach this box, its neighbours, the
+# LAN, or anything we have joined over tailscale.
+SANDBOX_DENY_NETS="${SANDBOX_DENY_NETS:-10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 100.64.0.0/10 fc00::/7 fe80::/10}"
+SANDBOX_ACL="${SANDBOX_ACL:-tenants}"
+
+SANDBOX_STATE="$STATE_DIR/sandbox"
+SANDBOX_TENANTS="$SANDBOX_STATE/tenants"
+# Bump to re-run the in-instance setup for every tenant on the next pass.
+SANDBOX_BOOTSTRAP_REV=1
+SANDBOX_REV_FILE=/var/lib/profullstack/tenant-rev
+SANDBOX_BOOT_TIMEOUT="${SANDBOX_BOOT_TIMEOUT:-120}"
+
+# Only used where the distro has no incus of its own (22.04, Debian 12).
+SANDBOX_INCUS_REPO="${SANDBOX_INCUS_REPO:-https://pkgs.zabbly.com/incus/stable}"
+SANDBOX_INCUS_KEY="${SANDBOX_INCUS_KEY:-https://pkgs.zabbly.com/key.asc}"
 
 # Block AI/LLM crawlers and aggressive scrapers by User-Agent.
 #
@@ -1665,6 +1762,902 @@ cmd_groups() {
 	esac
 }
 
+
+# --------------------------------------------------------------- sandboxes ---
+#
+# Tenants: accounts that get a whole machine of their own instead of a shell on
+# this one.
+#
+# The thing being avoided is the default UNIX answer to "let someone else use
+# the box", which is a normal account. That answer is only as strong as every
+# world-readable file, every setuid binary, every service listening on
+# localhost, and every kernel LPE published between now and whenever this box
+# is next patched. It is fine for colleagues and it is not fine for customers:
+# one account, one bad afternoon, and everybody's work is on the floor.
+#
+# So a tenant does not get a shell here at all. Their host account exists --
+# with $SANDBOX_NOLOGIN as its shell -- purely to own /home/<login>, which is
+# what nginx serves and what this script keeps dotfiles in. Everything they can
+# actually run happens inside their own instance:
+#
+#   container   an unprivileged system container (LXC, via incus). Shares the
+#               host kernel; boots in a second; they are root inside it and
+#               nothing at all outside it. This is the default and it is what
+#               almost everyone should get.
+#   vm          a real virtual machine (KVM, via the same incus). Its own
+#               kernel, so they can load modules, run docker without nesting
+#               tricks, and break things a container would refuse to break.
+#               Costs a few hundred MB of RAM and a slower boot. This is the
+#               tier to sell to someone who says "I need root".
+#
+# The word for either of them is an INSTANCE. "Sandbox" usually means something
+# smaller -- seccomp/bubblewrap/firejail around a single process -- and is the
+# wrong mental model here: these are full systems with their own init, their
+# own package manager and their own users.
+#
+# The manager is incus (https://linuxcontainers.org/incus), which is the LXD
+# fork the original LXC/LXD maintainers moved to when Canonical took LXD
+# in-house. Apache-2.0, in Ubuntu 24.04's own archive, one daemon, one CLI, and
+# the same CLI drives both containers and VMs -- which is the whole reason both
+# tiers above are ~20 lines apart rather than two separate implementations.
+#
+# --- what stops a tenant reaching anything of ours -------------------------
+#
+#   * no host shell             $SANDBOX_NOLOGIN, and never in sudo/admin
+#   * unprivileged container    root inside maps to a high, unprivileged uid
+#                               out here; a setuid file they make is setuid to
+#                               nobody-in-particular
+#   * no host-side execution    the tool installers (oh-my-zsh, mise, moshcode)
+#                               run INSIDE the instance for a tenant. Running
+#                               them on the host as the tenant would hand
+#                               anyone who edits their own ~/.gitconfig code
+#                               execution out here, which is the one thing this
+#                               whole section exists to prevent
+#   * a network ACL             egress to the internet, but RFC1918, link-local
+#                               (169.254.169.254 -- cloud metadata) and the
+#                               100.64/10 tailnet are rejected. That also stops
+#                               tenant reaching tenant, since a neighbour is
+#                               only ever an address inside our own bridge
+#   * caps on cpu/memory/procs  a fork bomb starves its own instance and
+#                               nothing else. Disk quotas need a pool driver
+#                               that can enforce them -- see $SANDBOX_POOL
+#   * one listening port each   $SANDBOX_SSH_PORT_BASE + slot, forwarded to the
+#                               instance's own sshd. The host's sshd is never
+#                               told about them
+#
+# --- how their work still shows up on the web ------------------------------
+#
+# /home/<login> is bind-mounted into the instance (idmapped, so the uids match
+# on both sides). That one device is what keeps the rest of this script
+# working unchanged: ~/public_html is still served by the host's nginx, and
+# ~/apps/<app>/.port is still compiled into the devapps map.
+#
+# The port in that file is a port on the tenant's OWN loopback. Each tenant is
+# allocated a band of $SANDBOX_PORT_SPAN ports (slot 0 gets 21000-21099) which
+# is forwarded 127.0.0.1:N <-> 127.0.0.1:N into their instance, so nginx's
+# existing `proxy_pass http://127.0.0.1:$devapp_port` reaches it with no idea
+# anything has changed. profullstack-devapps refuses a port outside the
+# tenant's own band, so nobody can publish a neighbour's service under their
+# own name.
+#
+# --- re-running -----------------------------------------------------------
+#
+# Everything here converges like the rest of the file: pools, networks, ACLs,
+# profiles and devices are compared before they are written, the in-instance
+# bootstrap is gated on a revision marker, and a tenant already holding slot 4
+# keeps slot 4 forever (their ports are in DNS, in people's ~/.ssh/config, and
+# in nginx). Deleting a tenant frees their slot for the next one.
+
+_sandbox_configured() { [[ "$SANDBOX" == 1 || -s "$SANDBOX_TENANTS" ]]; }
+
+# Same job as _groups_root, worded for this command. Reading "groups: init must
+# run as root" after typing `sandbox init` sends people to the wrong subcommand.
+_sandbox_root() {
+	[[ $EUID -eq 0 ]] || die "sandbox: $1 must run as root (try: sudo $0 sandbox $1 ...)"
+}
+
+# incus present AND answering. A daemon that is installed but not up is the
+# common case right after apt, and every command below would otherwise fail
+# one at a time with the same socket error.
+incus_ok() {
+	command -v incus >/dev/null 2>&1 || return 1
+	incus info >/dev/null 2>&1
+}
+
+# ufw rules, applied without the noise. ufw is already idempotent -- it says
+# "Skipping adding existing rule" and exits 0 -- so the only thing to add is
+# not announcing a change that did not happen.
+_ufw_rule() {
+	local out
+	command -v ufw >/dev/null 2>&1 || return 0
+	out="$(ufw "$@" 2>&1)" || { warn "ufw $*: $out"; return 1; }
+	[[ "$out" == *Skipping* ]] || note "ufw $*"
+	return 0
+}
+
+# ---------------------------------------------------------- tenant records ---
+#
+# $SANDBOX_TENANTS is the register: one line per tenant, "<login> <slot>
+# <kind>", tab separated. The slot is the only number that matters -- every
+# port a tenant owns is derived from it -- so it is allocated once and never
+# recomputed.
+
+_tenant_field() {
+	local login="$1" col="$2"
+	[[ -s "$SANDBOX_TENANTS" ]] || return 1
+	awk -F'\t' -v u="$login" -v c="$col" \
+		'$1==u { print $c; found=1 } END { exit !found }' "$SANDBOX_TENANTS"
+}
+_tenant_slot() { _tenant_field "$1" 2; }
+_tenant_kind() { _tenant_field "$1" 3; }
+_is_tenant()   { _tenant_field "$1" 1 >/dev/null 2>&1; }
+
+_sandbox_name() { printf '%s%s' "$SANDBOX_PREFIX" "$1"; }
+
+_tenant_logins() {
+	[[ -s "$SANDBOX_TENANTS" ]] || return 0
+	cut -f1 "$SANDBOX_TENANTS"
+}
+
+# Record a tenant, allocating the lowest free slot. The slot comes back in
+# $TENANT_SLOT rather than on stdout, because this function calls note() --
+# and note() both prints and appends to $CHANGED, so a caller reading it
+# through $(...) would splice the message into the slot number AND lose the
+# entry, the subshell's array being thrown away when it exits.
+#
+# Re-registering an existing tenant only ever updates the kind (container ->
+# vm), because moving someone's slot would move their ssh port, their app port
+# band and everything anybody has written down about them.
+TENANT_SLOT=""
+_tenant_register() {
+	local login="$1" kind="$2" slot tmp
+	install -d -m 0700 "$SANDBOX_STATE"
+	touch "$SANDBOX_TENANTS"
+
+	slot="$(_tenant_slot "$login" 2>/dev/null)" || slot=""
+	if [[ -n "$slot" ]]; then
+		if [[ "$(_tenant_kind "$login")" != "$kind" ]]; then
+			tmp="$(mktemp)" || return 1
+			awk -F'\t' -v OFS='\t' -v u="$login" -v k="$kind" \
+				'$1==u { $3=k } { print }' "$SANDBOX_TENANTS" >"$tmp" \
+				&& install -m 0600 "$tmp" "$SANDBOX_TENANTS"
+			rm -f "$tmp"
+			note "tenant $login is now a $kind"
+		fi
+		TENANT_SLOT="$slot"
+		return 0
+	fi
+
+	slot=0
+	while awk -F'\t' -v s="$slot" '$2==s { found=1 } END { exit !found }' \
+		"$SANDBOX_TENANTS"; do
+		slot=$((slot + 1))
+		[[ "$slot" -le "$SANDBOX_MAX_SLOTS" ]] || {
+			warn "no free tenant slot (max $SANDBOX_MAX_SLOTS)"; return 1; }
+	done
+	printf '%s\t%s\t%s\n' "$login" "$slot" "$kind" >>"$SANDBOX_TENANTS"
+	chmod 0600 "$SANDBOX_TENANTS"
+	note "tenant $login -> slot $slot ($kind)"
+	TENANT_SLOT="$slot"
+	return 0
+}
+
+_tenant_forget() {
+	local login="$1" tmp
+	[[ -s "$SANDBOX_TENANTS" ]] || return 0
+	tmp="$(mktemp)" || return 1
+	awk -F'\t' -v u="$login" '$1!=u' "$SANDBOX_TENANTS" >"$tmp" \
+		&& install -m 0600 "$tmp" "$SANDBOX_TENANTS"
+	rm -f "$tmp"
+}
+
+# The four numbers a slot owns. Printed as one line so a caller can read them
+# all at once and there is exactly one place the arithmetic lives.
+#
+#   ssh          the tcp port on the public interface -> instance :22
+#   app_lo..hi   tcp, LOOPBACK ONLY, for ~/apps/<app>/.port
+#   mosh_lo..hi  udp, public, for mosh-server inside the instance
+_tenant_ports() {
+	local slot="$1" lo hi mosh_lo
+	lo=$((SANDBOX_PORT_BASE + slot * SANDBOX_PORT_SPAN))
+	hi=$((lo + SANDBOX_PORT_SPAN - 1))
+	mosh_lo=$((hi - SANDBOX_MOSH_PORTS + 1))
+	printf '%s %s %s %s %s\n' \
+		$((SANDBOX_SSH_PORT_BASE + slot)) "$lo" $((mosh_lo - 1)) "$mosh_lo" "$hi"
+}
+
+# ------------------------------------------------------------ incus itself ---
+
+install_incus() {
+	if command -v incus >/dev/null 2>&1; then
+		systemctl is-active incus.socket >/dev/null 2>&1 \
+			|| systemctl enable --now incus.socket >/dev/null 2>&1 || true
+		return 0
+	fi
+
+	local cand
+	cand="$(apt-cache policy incus 2>/dev/null | awk '/Candidate:/{print $2}')"
+	if [[ -z "$cand" || "$cand" == "(none)" ]]; then
+		# 22.04 and Debian 12 have no incus of their own. The upstream
+		# maintainer's repo is the supported way to get one there.
+		_incus_add_repo || { warn "no incus package available for this release"; return 1; }
+	fi
+
+	info "installing incus"
+	# btrfs-progs is not incus' dependency but it decides whether per-tenant
+	# disk quotas can be enforced at all (see _sandbox_pool), so it goes in
+	# before the pool is created rather than after somebody notices.
+	DEBIAN_FRONTEND=noninteractive apt-get install -y \
+		incus incus-client btrfs-progs >/dev/null \
+		|| { warn "installing incus failed"; return 1; }
+	note "installed incus"
+
+	systemctl enable --now incus.socket >/dev/null 2>&1 || true
+	systemctl enable --now incus >/dev/null 2>&1 || true
+
+	local i
+	for i in $(seq 1 20); do
+		incus_ok && return 0
+		sleep 1
+	done
+	warn "incus is installed but not answering on its socket"
+	return 1
+}
+
+_incus_add_repo() {
+	local key=/etc/apt/keyrings/zabbly.asc
+	local list=/etc/apt/sources.list.d/zabbly-incus-stable.sources
+	local codename arch
+
+	command -v curl >/dev/null 2>&1 || return 1
+	codename="$( . /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-}" )"
+	[[ -n "$codename" ]] || return 1
+	arch="$(dpkg --print-architecture)"
+
+	install -d -m 0755 /etc/apt/keyrings
+	if [[ ! -s "$key" ]]; then
+		curl -fsSL "$SANDBOX_INCUS_KEY" -o "$key" \
+			|| { warn "could not fetch the incus signing key"; return 1; }
+		chmod 0644 "$key"
+		note "incus apt signing key"
+	fi
+
+	write_if_changed "$list" <<EOF && note "incus apt repo ($SANDBOX_INCUS_REPO)"
+Enabled: yes
+Types: deb
+URIs: $SANDBOX_INCUS_REPO
+Suites: $codename
+Components: main
+Architectures: $arch
+Signed-By: $key
+EOF
+	apt-get update -qq || warn "apt update after adding the incus repo failed"
+	return 0
+}
+
+# Set one key on an incus object, only when it is not already that. `incus
+# <kind> set` is cheap but it is not free -- on a network or a profile it
+# restarts every instance using it.
+_incus_set() {
+	local kind="$1" name="$2" key="$3" val="$4" cur
+	cur="$(incus "$kind" get "$name" "$key" 2>/dev/null)"
+	[[ "$cur" == "$val" ]] && return 0
+	incus "$kind" set "$name" "$key" "$val" \
+		|| { warn "incus $kind set $name $key=$val failed"; return 1; }
+	note "incus $kind $name: $key=$val"
+}
+
+# Apply a rendered YAML document through `incus ... edit`, but only when the
+# document has changed since the last run.
+#
+# incus has no "is this already the config" check of its own, and diffing what
+# `show` prints against what we meant is hopeless -- the server adds defaults,
+# reorders maps and echoes back computed fields. So the comparison is against
+# what WE last sent, which is the question actually being asked: has this
+# script's idea of the object changed?
+_sandbox_apply_yaml() {
+	local tag="$1"; shift
+	local state="$SANDBOX_STATE/$tag.sha" body sha
+	body="$(cat)"
+	sha="$(printf '%s\n' "$body" | sha256sum | cut -d' ' -f1)"
+	[[ "$(cat "$state" 2>/dev/null)" == "$sha" ]] && return 1
+	printf '%s\n' "$body" | "$@" || { warn "$tag: incus rejected the config"; return 2; }
+	install -d -m 0700 "$SANDBOX_STATE"
+	printf '%s\n' "$sha" >"$state"
+	return 0
+}
+
+# ------------------------------------------------- pool, bridge, acl, profile ---
+
+_sandbox_pool() {
+	incus storage show "$SANDBOX_POOL" >/dev/null 2>&1 && return 0
+
+	local driver="$SANDBOX_POOL_DRIVER"
+	if [[ -z "$driver" ]]; then
+		if command -v mkfs.btrfs >/dev/null 2>&1; then driver=btrfs
+		elif command -v zpool >/dev/null 2>&1; then driver=zfs
+		else driver=dir; fi
+	fi
+
+	if [[ "$driver" == dir ]]; then
+		# Worth saying out loud rather than discovering it when one tenant
+		# fills the disk: the dir driver has nowhere to record a quota, so
+		# $SANDBOX_DISK is accepted and then ignored.
+		warn "storage pool '$SANDBOX_POOL' will use the dir driver -- per-tenant DISK QUOTAS ARE NOT ENFORCED"
+		info "      to get them: apt install btrfs-progs, then re-run (the pool is created once)"
+		incus storage create "$SANDBOX_POOL" dir >/dev/null \
+			|| { warn "could not create storage pool $SANDBOX_POOL"; return 1; }
+	else
+		incus storage create "$SANDBOX_POOL" "$driver" size="$SANDBOX_POOL_SIZE" >/dev/null \
+			|| { warn "could not create storage pool $SANDBOX_POOL ($driver)"; return 1; }
+	fi
+	note "incus storage pool $SANDBOX_POOL ($driver)"
+	return 0
+}
+
+_sandbox_network() {
+	local dnsopt="dhcp-option=6,$SANDBOX_DNS"
+
+	if incus network show "$SANDBOX_BRIDGE" >/dev/null 2>&1; then
+		_incus_set network "$SANDBOX_BRIDGE" raw.dnsmasq "$dnsopt"
+	else
+		incus network create "$SANDBOX_BRIDGE" \
+			ipv4.address="$SANDBOX_SUBNET" ipv4.nat=true ipv6.address=none \
+			raw.dnsmasq="$dnsopt" >/dev/null \
+			|| { warn "could not create bridge $SANDBOX_BRIDGE"; return 1; }
+		note "incus bridge $SANDBOX_BRIDGE ($SANDBOX_SUBNET)"
+	fi
+
+	# Tenants resolve through $SANDBOX_DNS, NOT through the bridge's own
+	# dnsmasq, and that is not a preference: the ACL below rejects every
+	# RFC1918 destination, the bridge gateway is one, and incus orders ACL
+	# rules by action rather than by position -- so a reject on 10/8 would beat
+	# an allow for the resolver no matter which order they are written in.
+	# Handing out a public resolver over DHCP sidesteps the whole argument.
+
+	_sandbox_ufw_bridge
+	return 0
+}
+
+# ufw defaults to DROP on FORWARD, which breaks NAT egress from the bridge in a
+# way that looks exactly like "the internet is down inside the container".
+_sandbox_ufw_bridge() {
+	command -v ufw >/dev/null 2>&1 || return 0
+	ufw status 2>/dev/null | grep -q "Status: active" || return 0
+	_ufw_rule allow in on "$SANDBOX_BRIDGE"
+	_ufw_rule route allow in on "$SANDBOX_BRIDGE"
+	return 0
+}
+
+# The one rule that makes a tenant a tenant rather than a neighbour.
+#
+# Only rejects are listed. incus evaluates drop, then reject, then allow --
+# position in the list means nothing -- so a policy written as "reject these,
+# allow the rest" is expressed by leaving the default egress action alone
+# (allow) and naming only what must not happen.
+_sandbox_acl() {
+	[[ -n "$SANDBOX_ACL" ]] || return 0
+	incus network acl show "$SANDBOX_ACL" >/dev/null 2>&1 || {
+		incus network acl create "$SANDBOX_ACL" >/dev/null 2>&1 \
+			|| { warn "could not create network acl $SANDBOX_ACL (is the nftables firewall driver in use?)"; return 1; }
+		note "incus network acl $SANDBOX_ACL"
+	}
+
+	local dest
+	{
+		printf 'name: %s\n' "$SANDBOX_ACL"
+		printf 'description: "tenants may reach the internet and nothing on this side of it"\n'
+		printf 'config: {}\n'
+		printf 'ingress: []\n'
+		printf 'egress:\n'
+		for dest in $SANDBOX_DENY_NETS; do
+			printf -- '- action: reject\n  destination: %s\n  state: enabled\n' "$dest"
+		done
+	} | _sandbox_apply_yaml acl incus network acl edit "$SANDBOX_ACL"
+	case $? in
+		0) note "tenant network acl rules" ;;
+		2) return 1 ;;
+	esac
+	return 0
+}
+
+_sandbox_profile_name() { [[ "$1" == vm ]] && printf 'tenant-vm' || printf 'tenant'; }
+
+# The default shape of a tenant. Per-tenant overrides (a bigger disk for one
+# customer, say) go on the instance and win over this.
+_sandbox_profile_yaml() {
+	local kind="$1" name
+	name="$(_sandbox_profile_name "$kind")"
+	printf 'name: %s\n' "$name"
+	printf 'description: "profullstack tenant (%s)"\n' "$kind"
+	printf 'config:\n'
+	printf '  limits.cpu: "%s"\n' "$SANDBOX_CPU"
+	printf '  limits.memory: "%s"\n' "$SANDBOX_MEMORY"
+	printf '  boot.autostart: "true"\n'
+	if [[ "$kind" == container ]]; then
+		# A container shares the host kernel, so its limits are the host's
+		# cgroups and its risk surface is the host's syscall table.
+		printf '  limits.memory.swap: "false"\n'
+		printf '  limits.processes: "%s"\n' "$SANDBOX_PROCESSES"
+		printf '  security.privileged: "false"\n'
+		printf '  security.nesting: "%s"\n' \
+			"$([[ "$SANDBOX_NESTING" == 1 ]] && echo true || echo false)"
+		printf '  security.syscalls.intercept.mknod: "false"\n'
+		printf '  security.syscalls.intercept.setxattr: "false"\n'
+	fi
+	printf 'devices:\n'
+	printf '  eth0:\n'
+	printf '    type: nic\n'
+	printf '    network: %s\n' "$SANDBOX_BRIDGE"
+	[[ -n "$SANDBOX_ACL" ]] && printf '    security.acls: %s\n' "$SANDBOX_ACL"
+	printf '  root:\n'
+	printf '    type: disk\n'
+	printf '    path: /\n'
+	printf '    pool: %s\n' "$SANDBOX_POOL"
+	printf '    size: %s\n' "$SANDBOX_DISK"
+}
+
+_sandbox_profile() {
+	local kind="$1" name
+	name="$(_sandbox_profile_name "$kind")"
+	incus profile show "$name" >/dev/null 2>&1 || {
+		incus profile create "$name" >/dev/null \
+			|| { warn "could not create profile $name"; return 1; }
+		note "incus profile $name"
+	}
+	_sandbox_profile_yaml "$kind" \
+		| _sandbox_apply_yaml "profile-$name" incus profile edit "$name"
+	case $? in
+		0) note "incus profile $name updated" ;;
+		2) return 1 ;;
+	esac
+	return 0
+}
+
+# Everything that exists once per box rather than once per tenant.
+sandbox_init() {
+	incus_ok || { warn "incus is not answering -- skipping sandbox setup"; return 1; }
+	install -d -m 0700 "$SANDBOX_STATE"
+	_sandbox_pool     || return 1
+	_sandbox_network  || return 1
+	_sandbox_acl      || warn "continuing without a tenant network ACL"
+	_sandbox_profile container || return 1
+	_sandbox_profile vm        || warn "vm profile unavailable (no KVM on this box?)"
+	return 0
+}
+
+# ------------------------------------------------------------- an instance ---
+
+# Add a device if it is missing, or reconcile the keys we care about if it is
+# not. Devices are the part of an instance most likely to drift, because they
+# are also the part a human edits by hand when something is on fire.
+_incus_device() {
+	local inst="$1" dev="$2" type="$3"; shift 3
+	local kv key val changed=0
+
+	if ! incus config device list "$inst" 2>/dev/null | grep -qxF "$dev"; then
+		incus config device add "$inst" "$dev" "$type" "$@" >/dev/null \
+			|| { warn "$inst: could not add device $dev ($type)"; return 1; }
+		note "$inst: device $dev ($type)"
+		return 0
+	fi
+
+	for kv in "$@"; do
+		key="${kv%%=*}"; val="${kv#*=}"
+		[[ "$(incus config device get "$inst" "$dev" "$key" 2>/dev/null)" == "$val" ]] && continue
+		incus config device set "$inst" "$dev" "$key" "$val" \
+			|| { warn "$inst: could not set $dev.$key"; continue; }
+		changed=1
+	done
+	[[ "$changed" == 1 ]] && note "$inst: device $dev reconciled"
+	return 0
+}
+
+_sandbox_running() {
+	[[ "$(incus info "$1" 2>/dev/null | awk '/^Status:/ { print tolower($2) }')" == running ]]
+}
+
+# An instance is "up" when it is running AND will run a command -- which for a
+# VM means the incus agent inside it has started, several seconds after the
+# status says RUNNING.
+_sandbox_wait() {
+	local name="$1" i
+	for i in $(seq 1 "$SANDBOX_BOOT_TIMEOUT"); do
+		incus exec "$name" -- true >/dev/null 2>&1 && return 0
+		sleep 1
+	done
+	warn "$name did not become reachable within ${SANDBOX_BOOT_TIMEOUT}s"
+	return 1
+}
+
+_sandbox_devices() {
+	local login="$1" name="$2" kind="$3" slot="$4"
+	local ssh_port app_lo app_hi mosh_lo mosh_hi home
+	read -r ssh_port app_lo app_hi mosh_lo mosh_hi < <(_tenant_ports "$slot")
+	home="$(user_home "$login")"
+
+	# The shared home. shift=true is an idmapped mount: /home/alice is owned by
+	# alice's uid on both sides, so the host's nginx and the tenant's editor are
+	# looking at the same files with the same owner. VMs get the same directory
+	# over virtiofs, where the uid is passed through as-is -- which is why the
+	# account inside the instance is created with the host's uid, not with
+	# whatever useradd would have picked.
+	if [[ -n "$home" && -d "$home" ]]; then
+		if [[ "$kind" == container ]]; then
+			_incus_device "$name" home disk \
+				"source=$home" "path=$home" shift=true
+		else
+			_incus_device "$name" home disk "source=$home" "path=$home"
+		fi
+	fi
+
+	# Public: this is how the tenant gets in. 0.0.0.0 rather than a specific
+	# address so it keeps working when the box's IP changes.
+	_incus_device "$name" ssh proxy \
+		"listen=tcp:0.0.0.0:$ssh_port" connect=tcp:127.0.0.1:22
+
+	# Loopback only: nginx is the only thing that should ever reach a dev app,
+	# and binding these publicly would put every tenant's unfinished work on
+	# the internet on a guessable port.
+	_incus_device "$name" apps proxy \
+		"listen=tcp:127.0.0.1:$app_lo-$app_hi" \
+		"connect=tcp:127.0.0.1:$app_lo-$app_hi"
+
+	# mosh picks a udp port at connect time, so it needs a range rather than a
+	# port. The tenant passes it: mosh -p <lo>:<hi> --ssh="ssh -p <ssh>" ...
+	_incus_device "$name" mosh proxy \
+		"listen=udp:0.0.0.0:$mosh_lo-$mosh_hi" \
+		"connect=udp:127.0.0.1:$mosh_lo-$mosh_hi"
+
+	# Per-instance overrides of the profile, so one tenant can be given more
+	# without moving everyone else.
+	_incus_device "$name" root disk path=/ "pool=$SANDBOX_POOL" "size=$SANDBOX_DISK"
+	return 0
+}
+
+# What the tenant's own machine gets, once. Gated on a revision marker written
+# inside the instance -- bump $SANDBOX_BOOTSTRAP_REV to make every tenant pick
+# up a change on the next run.
+_sandbox_bootstrap() {
+	local login="$1" name="$2" slot="$3" have uid gid
+	local ssh_port app_lo app_hi mosh_lo mosh_hi
+	read -r ssh_port app_lo app_hi mosh_lo mosh_hi < <(_tenant_ports "$slot")
+
+	have="$(incus exec "$name" -- cat "$SANDBOX_REV_FILE" 2>/dev/null | tr -cd '0-9')"
+	[[ "$have" == "$SANDBOX_BOOTSTRAP_REV" ]] && return 0
+
+	uid="$(id -u "$login" 2>/dev/null)" || { warn "no host account for $login"; return 1; }
+	gid="$(id -g "$login")"
+
+	info "bootstrapping $name (rev $SANDBOX_BOOTSTRAP_REV)"
+	incus exec "$name" \
+		--env TENANT="$login" --env TENANT_UID="$uid" --env TENANT_GID="$gid" \
+		--env TENANT_REV="$SANDBOX_BOOTSTRAP_REV" --env TENANT_REV_FILE="$SANDBOX_REV_FILE" \
+		--env TENANT_APP_LO="$app_lo" --env TENANT_APP_HI="$app_hi" \
+		--env TENANT_MOSH_LO="$mosh_lo" --env TENANT_MOSH_HI="$mosh_hi" \
+		--env TENANT_SSH_PORT="$ssh_port" --env TENANT_DOMAIN="$WEB_DOMAIN" \
+		--env DEBIAN_FRONTEND=noninteractive \
+		-- bash -s <<'TENANT_BOOTSTRAP' || { warn "$name: bootstrap failed"; return 1; }
+set -uo pipefail
+
+apt-get update -qq
+apt-get install -y --no-install-recommends \
+	openssh-server mosh sudo zsh git curl ca-certificates rsync unzip \
+	tmux vim htop build-essential >/dev/null || exit 1
+
+# The uid is the host's, deliberately: /home/$TENANT is the same directory on
+# both sides of the mount, and a mismatch here shows up as a home directory the
+# tenant cannot write to.
+getent group "$TENANT" >/dev/null 2>&1 || groupadd -g "$TENANT_GID" "$TENANT" || true
+if ! id -u "$TENANT" >/dev/null 2>&1; then
+	# -M: the home is a mount, not ours to create or populate
+	useradd -u "$TENANT_UID" -g "$TENANT_GID" -M -d "/home/$TENANT" -s /bin/zsh "$TENANT"
+fi
+
+# Root inside their own machine is the entire point of giving them one.
+usermod -aG sudo "$TENANT" 2>/dev/null || true
+printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$TENANT" >/etc/sudoers.d/90-tenant
+chmod 0440 /etc/sudoers.d/90-tenant
+
+mkdir -p /etc/ssh/sshd_config.d
+cat >/etc/ssh/sshd_config.d/10-tenant.conf <<CFG
+# managed by root-ubuntu.sh -- edits are overwritten
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+AllowUsers $TENANT
+CFG
+
+# authorized_keys already exists: it is in the shared home, put there on the
+# host from ssh-keys/<login>.pub. Nothing to install, only permissions to
+# assert, because sshd silently ignores the file otherwise.
+if [ -d "/home/$TENANT/.ssh" ]; then
+	chmod 0700 "/home/$TENANT/.ssh"
+	[ -e "/home/$TENANT/.ssh/authorized_keys" ] && chmod 0600 "/home/$TENANT/.ssh/authorized_keys"
+fi
+
+systemctl enable ssh >/dev/null 2>&1 || systemctl enable sshd >/dev/null 2>&1 || true
+systemctl restart ssh >/dev/null 2>&1 || systemctl restart sshd >/dev/null 2>&1 || true
+
+cat >/etc/motd <<MOTD
+
+  This is ${TENANT}'s machine. You are root here and nowhere else.
+
+  Web        ~/public_html          -> https://${TENANT}.${TENANT_DOMAIN}
+  Dev apps   mkdir ~/apps/<name>    -> https://<name>.${TENANT}.${TENANT_DOMAIN}
+             echo <port> > ~/apps/<name>/.port, and listen on 127.0.0.1:<port>
+
+  Your ports are ${TENANT_APP_LO}-${TENANT_APP_HI}. A .port outside that range
+  is ignored -- it would be somebody else's service.
+
+  ssh        ssh -p ${TENANT_SSH_PORT} ${TENANT}@${TENANT_DOMAIN}
+  mosh       mosh -p ${TENANT_MOSH_LO}:${TENANT_MOSH_HI} --ssh="ssh -p ${TENANT_SSH_PORT}" ${TENANT}@${TENANT_DOMAIN}
+
+MOTD
+
+mkdir -p "$(dirname "$TENANT_REV_FILE")"
+printf '%s\n' "$TENANT_REV" >"$TENANT_REV_FILE"
+TENANT_BOOTSTRAP
+
+	note "$name bootstrapped (rev $SANDBOX_BOOTSTRAP_REV)"
+	return 0
+}
+
+# oh-my-zsh, mise and moshcode -- the same three the host installs for everyone
+# else, run INSIDE the instance as the tenant. This is the deliberate half of
+# the isolation: these are `curl | sh` installers reading the tenant's own
+# dotfiles, and running them on the host would be handing a customer code
+# execution outside their box.
+_sandbox_tools() {
+	local login="$1" name="$2"
+	[[ "$SKIP_TOOLS" == 1 ]] && return 0
+	incus exec "$name" --env HOME="/home/$login" -- \
+		runuser -u "$login" -- bash -lc '
+			ZSH="$HOME/.oh-my-zsh" ZDOTDIR="$HOME" RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
+				sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" >/dev/null 2>&1
+			curl -fsSL https://mise.run | sh >/dev/null 2>&1
+			curl -fsSL https://moshcode.sh/install.sh | sh >/dev/null 2>&1
+			true' >/dev/null 2>&1 \
+		|| warn "$name: one of the tool installers failed (not fatal)"
+	return 0
+}
+
+_sandbox_ufw() {
+	local slot="$1" ssh_port app_lo app_hi mosh_lo mosh_hi
+	read -r ssh_port app_lo app_hi mosh_lo mosh_hi < <(_tenant_ports "$slot")
+	# app_lo..app_hi is deliberately NOT opened: those listen on loopback for
+	# nginx and must not be reachable from outside.
+	_ufw_rule allow "$ssh_port/tcp"
+	_ufw_rule allow "$mosh_lo:$mosh_hi/udp"
+	return 0
+}
+
+create_sandbox() {
+	local login="$1" kind="${2:-$SANDBOX_KIND}" name slot
+	case "$kind" in
+		container|vm) ;;
+		*) warn "unknown sandbox kind '$kind' -- using container"; kind=container ;;
+	esac
+	incus_ok || { warn "incus is not available -- $login has no instance"; return 1; }
+	valid_login "$login" || return 1
+	id -u "$login" >/dev/null 2>&1 || { warn "no host account for $login"; return 1; }
+
+	name="$(_sandbox_name "$login")"
+	_tenant_register "$login" "$kind" || return 1
+	slot="$TENANT_SLOT"
+
+	if ! incus info "$name" >/dev/null 2>&1; then
+		info "launching $kind $name from $SANDBOX_IMAGE (this takes a minute the first time)"
+		local -a args=(launch "$SANDBOX_IMAGE" "$name"
+			--profile "$(_sandbox_profile_name "$kind")")
+		[[ "$kind" == vm ]] && args+=(--vm)
+		incus "${args[@]}" >/dev/null || {
+			warn "could not launch $name"
+			# Do not keep the slot for an instance that does not exist.
+			_tenant_forget "$login"
+			return 1
+		}
+		note "$kind $name created for $login"
+	fi
+
+	refresh_sandbox "$login"
+}
+
+# What a re-run does to a tenant that already exists: no launch, no image
+# fetch, no data touched -- start it if it is down, reconcile the devices, and
+# re-assert the firewall.
+refresh_sandbox() {
+	local login="$1" kind name slot
+	kind="$(_tenant_kind "$login" 2>/dev/null)" || return 0
+	slot="$(_tenant_slot "$login")"
+	name="$(_sandbox_name "$login")"
+
+	incus_ok || { warn "incus is not answering -- $login's instance not refreshed"; return 1; }
+	if ! incus info "$name" >/dev/null 2>&1; then
+		warn "$login is registered as a tenant but $name does not exist"
+		info "      create it: $0 sandbox create $login --$kind"
+		return 1
+	fi
+
+	_sandbox_running "$name" || {
+		incus start "$name" >/dev/null 2>&1 || { warn "could not start $name"; return 1; }
+		note "started $name"
+	}
+	_sandbox_wait "$name" || return 1
+
+	_sandbox_devices "$login" "$name" "$kind" "$slot"
+	_sandbox_bootstrap "$login" "$name" "$slot" || return 1
+	_sandbox_tools "$login" "$name"
+	_sandbox_ufw "$slot"
+	return 0
+}
+
+delete_sandbox() {
+	local login="$1" name slot ssh_port app_lo app_hi mosh_lo mosh_hi
+	name="$(_sandbox_name "$login")"
+	slot="$(_tenant_slot "$login" 2>/dev/null)" || slot=""
+
+	if incus_ok && incus info "$name" >/dev/null 2>&1; then
+		incus delete --force "$name" >/dev/null \
+			|| { warn "could not delete $name"; return 1; }
+		note "deleted instance $name"
+	fi
+
+	if [[ -n "$slot" ]]; then
+		read -r ssh_port app_lo app_hi mosh_lo mosh_hi < <(_tenant_ports "$slot")
+		command -v ufw >/dev/null 2>&1 && {
+			ufw delete allow "$ssh_port/tcp" >/dev/null 2>&1
+			ufw delete allow "$mosh_lo:$mosh_hi/udp" >/dev/null 2>&1
+		}
+	fi
+	_tenant_forget "$login"
+	note "$login is no longer a tenant (their home is untouched)"
+	return 0
+}
+
+# ------------------------------------------------------- the sandbox command ---
+
+sandbox_usage() {
+	cat <<EOF
+$0 sandbox -- give an account its own machine instead of a shell on this one
+
+  sandbox                       list the tenants on this box
+  sandbox init                  install incus and create the pool/bridge/profiles
+  sandbox create <user> [--vm]  give an existing account an instance
+  sandbox refresh [<user>...]   reconcile instances with this script (default: all)
+  sandbox info <user>           incus' own view of one instance
+  sandbox enter <user>          a root shell inside their machine
+  sandbox exec <user> -- <cmd>  run one command inside it
+  sandbox start|stop|restart <user>
+  sandbox rm <user>             delete the instance; the host home is KEPT
+
+Kinds:
+  --container   (default) an unprivileged system container: shared kernel,
+                instant boot, root inside and nothing outside
+  --vm          a real KVM virtual machine: its own kernel, so nested
+                containers and kernel modules work. This is the "I need root"
+                tier, and it costs RAM
+
+A tenant's account has $SANDBOX_NOLOGIN as its shell and is NOT in sudo or
+admin. They reach their machine on its own port:
+
+  ssh -p <${SANDBOX_SSH_PORT_BASE}+slot> <user>@$WEB_DOMAIN
+
+Their /home is shared with this box, so ~/public_html and ~/apps keep working
+exactly as they do for a normal account.
+EOF
+}
+
+_sandbox_list() {
+	local login slot kind name status ssh_port app_lo app_hi _x _y
+	if [[ ! -s "$SANDBOX_TENANTS" ]]; then
+		info "no tenants on this box"
+		info "make one: $0 <user> --sandbox    (or: $0 sandbox create <user>)"
+		return 0
+	fi
+	printf '    %-14s %-5s %-10s %-9s %-7s %s\n' USER SLOT KIND STATUS SSH APPS
+	while IFS=$'\t' read -r login slot kind; do
+		[[ -n "$login" ]] || continue
+		name="$(_sandbox_name "$login")"
+		status=absent
+		incus_ok && status="$(incus info "$name" 2>/dev/null \
+			| awk '/^Status:/ { print tolower($2) }')"
+		read -r ssh_port app_lo app_hi _x _y < <(_tenant_ports "$slot")
+		printf '    %-14s %-5s %-10s %-9s %-7s %s\n' \
+			"$login" "$slot" "$kind" "${status:-absent}" "$ssh_port" "$app_lo-$app_hi"
+	done <"$SANDBOX_TENANTS"
+	return 0
+}
+
+cmd_sandbox() {
+	local verb="" kind="" login
+	local -a rest=()
+	while [[ $# -gt 0 ]]; do
+		case "$1" in
+			-h|--help)   sandbox_usage; return 0 ;;
+			--vm)        kind=vm ;;
+			--container) kind=container ;;
+			# `sandbox rm` asks before it deletes; this is how a script says
+			# yes, and it is the same spelling as everywhere else in the file.
+			-y|--yes)    ASSUME_YES=1 ;;
+			--)          shift; rest+=("$@"); break ;;
+			-*)          die "sandbox: unknown option: $1  (try: $0 sandbox --help)" ;;
+			*)           rest+=("$1") ;;
+		esac
+		shift
+	done
+
+	if [[ ${#rest[@]} -gt 0 ]]; then
+		case "${rest[0]}" in
+			list|init|create|refresh|info|enter|exec|start|stop|restart|rm)
+				verb="${rest[0]}"; rest=("${rest[@]:1}") ;;
+		esac
+	fi
+
+	case "${verb:-list}" in
+		list) _sandbox_list ;;
+		init)
+			_sandbox_root init
+			install_incus || return 1
+			sandbox_init
+			;;
+		create)
+			_sandbox_root create
+			[[ ${#rest[@]} -gt 0 ]] || die "sandbox create: which user?"
+			install_incus || return 1
+			sandbox_init  || return 1
+			for login in "${rest[@]}"; do
+				create_sandbox "$login" "${kind:-$SANDBOX_KIND}"
+			done
+			;;
+		refresh)
+			_sandbox_root refresh
+			incus_ok || die "sandbox refresh: incus is not available"
+			if [[ ${#rest[@]} -gt 0 ]]; then
+				for login in "${rest[@]}"; do refresh_sandbox "$login"; done
+			else
+				while read -r login; do
+					[[ -n "$login" ]] && refresh_sandbox "$login"
+				done < <(_tenant_logins)
+			fi
+			;;
+		info)
+			[[ ${#rest[@]} -gt 0 ]] || die "sandbox info: which user?"
+			incus info "$(_sandbox_name "${rest[0]}")"
+			;;
+		enter)
+			_sandbox_root enter
+			[[ ${#rest[@]} -gt 0 ]] || die "sandbox enter: which user?"
+			incus exec "$(_sandbox_name "${rest[0]}")" -- \
+				login -f "${SANDBOX_ENTER_AS:-root}"
+			;;
+		exec)
+			_sandbox_root exec
+			[[ ${#rest[@]} -gt 1 ]] || die "sandbox exec: $0 sandbox exec <user> -- <command>"
+			login="${rest[0]}"
+			incus exec "$(_sandbox_name "$login")" -- "${rest[@]:1}"
+			;;
+		start|stop|restart)
+			_sandbox_root "$verb"
+			[[ ${#rest[@]} -gt 0 ]] || die "sandbox $verb: which user?"
+			for login in "${rest[@]}"; do
+				incus "$verb" "$(_sandbox_name "$login")" \
+					&& info "$login: $verb ok" || warn "$login: $verb failed"
+			done
+			;;
+		rm)
+			_sandbox_root rm
+			[[ ${#rest[@]} -gt 0 ]] || die "sandbox rm: which user?"
+			for login in "${rest[@]}"; do
+				_is_tenant "$login" || { warn "$login is not a tenant"; continue; }
+				confirm "Delete $(_sandbox_name "$login") and everything in it (their /home is kept)? [y/N]" n \
+					|| { info "$login left alone"; continue; }
+				delete_sandbox "$login"
+			done
+			;;
+	esac
+}
+
 usage() {
 	sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
 	exit "${1:-0}"
@@ -1675,7 +2668,8 @@ usage() {
 SUBCMD=""
 SUBARGS=()
 case "${1:-}" in
-	mount|umount|mounts|share|groups) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
+	mount|umount|mounts|share|groups|sandbox)
+		SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
 esac
 
 ARGS=()
@@ -1691,6 +2685,14 @@ while [[ $# -gt 0 ]]; do
 		--skip-tailscale) SKIP_TAILSCALE=1 ;;
 		--skip-tools)     SKIP_TOOLS=1 ;;
 		--skip-dotfiles)  SKIP_DOTFILES=1 ;;
+		# Accounts named on THIS run get their own machine instead of a shell
+		# here. --sandbox=vm for the tier with its own kernel.
+		--sandbox)        SANDBOX=1 ;;
+		--sandbox=*)      SANDBOX=1; SANDBOX_KIND="${1#*=}" ;;
+		--no-sandbox)     SANDBOX=0 ;;
+		# Leave existing tenants alone this run (they are slow to reconcile and
+		# an apt/nginx pass has no reason to wait for them).
+		--skip-sandbox)   SKIP_SANDBOX=1 ;;
 		# Groups for every account named on this run. Without it an interactive
 		# run asks per account and an unattended one takes $DEFAULT_GROUPS --
 		# which left no way at all to say "these two, in these groups" from a
@@ -1709,6 +2711,11 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 [[ "${NO_REBOOT:-0}" == 1 ]] && REBOOT_POLICY=0
 
+case "$SANDBOX_KIND" in
+	container|vm) ;;
+	*) die "--sandbox: unknown kind '$SANDBOX_KIND' (container or vm)" ;;
+esac
+
 # The share and groups helpers are self-contained: no apt, no lock, no dotfiles
 # checkout needed. They come before the root check so that --help, --dry-run and
 # a plain `groups` listing work as a normal user; each asks for root only when
@@ -1719,6 +2726,7 @@ case "$SUBCMD" in
 	mounts) cmd_mounts; exit $? ;;
 	share)  cmd_share  ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 	groups) cmd_groups ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
+	sandbox) cmd_sandbox ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 esac
 
 # Root, not sudo-capable: this writes to /etc, creates accounts and drives
@@ -1933,6 +2941,14 @@ add_user_spec() {
 	login="$(user_login "$spec")"
 	valid_login "$login" || { warn "invalid username derived from '$spec' -- skipped"; return 1; }
 	USERS+=("$spec")
+	# A tenant's groups are not a question. The whole arrangement rests on
+	# them having no privilege out here, and "sudo,admin" is what both the
+	# default and the interactive prompt would otherwise hand them.
+	if [[ "$SANDBOX" == 1 ]]; then
+		USER_GROUPS+=("$SANDBOX_GROUP")
+		info "queued ${login} -> $SANDBOX_KIND, groups: $SANDBOX_GROUP (no shell on this box)"
+		return 0
+	fi
 	USER_GROUPS+=("$(ask_groups "$login")")
 	info "queued ${login} -> groups: ${USER_GROUPS[-1]}"
 }
@@ -2722,6 +3738,12 @@ install_ssh() {
 install_tmux() {
 	local home="$1" owner="$2"
 
+	# This clones two repos AS the owner and then runs tpm's installer. For a
+	# tenant that is host-side code execution under their own uid, off the back
+	# of files they control -- exactly what they are in a container to avoid.
+	# oh-my-tmux is installed inside their instance instead.
+	_is_tenant "$owner" && return 0
+
 	# a ~/.tmux that is not our checkout is the user's own tmux setup; leave
 	# the whole thing alone rather than half-converting it to oh-my-tmux
 	if [[ -d "$home/.tmux" && ! -d "$home/.tmux/.git" ]]; then
@@ -3334,7 +4356,39 @@ write_devapps_generator() {
 # Generated by cli-tools/root-ubuntu.sh -- edits here are overwritten.
 set -uo pipefail
 map_file='${DEV_APPS_MAP}'
+tenants='${SANDBOX_TENANTS}'
+port_base=${SANDBOX_PORT_BASE}
+port_span=${SANDBOX_PORT_SPAN}
 tmp="\$(mktemp)" || exit 1
+
+# Who may publish which port.
+#
+# A tenant's app runs on their own loopback, inside their own instance, and is
+# forwarded onto this box's loopback on the same number -- so from nginx's side
+# every tenant's port looks like one of ours. The band is therefore the only
+# thing separating them: without this check alice could put bob's port in her
+# own ~/apps/x/.port and serve his unreleased work under her name.
+#
+#   a tenant  -> only the band their own slot owns
+#   anyone else -> anything except a band that is ALLOCATED to a tenant
+#
+# Allocated, not merely reserved. Reserving the whole region would quietly
+# stop an existing account that already listens on, say, 30000 -- and turning
+# sandboxes on is not allowed to break the people who were here first.
+port_allowed() {
+	_user="\$1"; _port="\$2"; _slot=""
+	[ -s "\$tenants" ] || return 0
+	_slot="\$(awk -F'\t' -v u="\$_user" '\$1==u { print \$2 }' "\$tenants")"
+	if [ -n "\$_slot" ]; then
+		_lo=\$(( port_base + _slot * port_span ))
+		_hi=\$(( _lo + port_span - 1 ))
+		[ "\$_port" -ge "\$_lo" ] && [ "\$_port" -le "\$_hi" ]
+		return \$?
+	fi
+	[ "\$_port" -lt "\$port_base" ] && return 0
+	_owner=\$(( (_port - port_base) / port_span ))
+	! awk -F'\t' -v s="\$_owner" '\$2==s { found=1 } END { exit !found }' "\$tenants"
+}
 
 {
 	echo "# generated by profullstack-devapps -- do not edit"
@@ -3353,6 +4407,7 @@ tmp="\$(mktemp)" || exit 1
 		[ "\$port" -le 65535 ] 2>/dev/null || continue
 		case "\$app" in *[!a-z0-9-]*|-*|'') continue ;; esac
 		case "\$user" in *[!a-z0-9_-]*|'') continue ;; esac
+		port_allowed "\$user" "\$port" || continue
 		printf '\t"%s/%s" %s;\n' "\$user" "\$app" "\$port"
 	done
 	echo '}'
@@ -4704,15 +5759,22 @@ EOF
 # ------------------------------------------------------------------ users ---
 
 create_user() {
-	local spec="$1" groups="$2" login home pass g
+	local spec="$1" groups="$2" login home pass g shell=/bin/zsh
 	login="$(user_login "$spec")"
+
+	# A tenant's shell on THIS box is nologin, and their password is locked.
+	# Their real shell is inside their own instance, reached on their own port;
+	# there is deliberately no path from here into anything of ours.
+	[[ "$SANDBOX" == 1 ]] && shell="$SANDBOX_NOLOGIN"
 
 	if id -u "$login" >/dev/null 2>&1; then
 		info "user $login already exists"
 	else
 		info "creating user $login"
-		useradd -m -s /bin/zsh -c "$spec" "$login" || { warn "useradd $login failed"; return 1; }
-		if interactive; then
+		useradd -m -s "$shell" -c "$spec" "$login" || { warn "useradd $login failed"; return 1; }
+		if [[ "$SANDBOX" == 1 ]]; then
+			passwd -l "$login" >/dev/null
+		elif interactive; then
 			read -r -s -p "    password for ${login} (blank = key-only login): " pass; echo
 			if [[ -n "$pass" ]]; then
 				printf '%s:%s\n' "$login" "$pass" | chpasswd
@@ -4743,7 +5805,8 @@ create_user() {
 		unset pubkey
 	fi
 
-	ensure_zsh_shell "$login" || warn "$login may still be on bash"
+	[[ "$SANDBOX" == 1 ]] || ensure_zsh_shell "$login" \
+		|| warn "$login may still be on bash"
 
 	for g in ${groups//,/ }; do
 		getent group "$g" >/dev/null || groupadd "$g" || { warn "cannot create group $g"; continue; }
@@ -4753,6 +5816,14 @@ create_user() {
 
 	refresh_user "$login"
 	remember_user "$login"
+
+	# Last, because the instance mounts the home this run has just finished
+	# writing into -- dotfiles, and above all ~/.ssh/authorized_keys, which is
+	# how the tenant gets into their own machine.
+	if [[ "$SANDBOX" == 1 ]]; then
+		create_sandbox "$login" "$SANDBOX_KIND" \
+			|| warn "$login has an account but no instance yet (try: $0 sandbox create $login)"
+	fi
 	return 0
 }
 
@@ -4768,19 +5839,43 @@ refresh_user() {
 	# /home/ubuntu is the usual one. Without this a refresh left them on bash
 	# forever while installing a zsh setup around them. ensure_zsh_shell only
 	# converts from bash/sh, so a deliberate choice of anything else stands.
-	ensure_zsh_shell "$login" || warn "$login may still be on bash"
+	# Not for a tenant: their login shell here is nologin on purpose, and
+	# ensure_zsh_shell would leave a "chose nologin -- left alone" line on every
+	# run for something that is not a choice at all.
+	_is_tenant "$login" || ensure_zsh_shell "$login" \
+		|| warn "$login may still be on bash"
 
 	install_dotfiles "$home" "$login"
 	install_public_html "$home" "$login"
 	install_dev_apps_dir "$home" "$login"
-	enable_ssh_agent_for "$login"
+	# An ssh-agent for an account that cannot open a session is a unit that
+	# will never start.
+	_is_tenant "$login" || enable_ssh_agent_for "$login"
 	# last word on permissions, after everything has written into the home
 	fix_home_permissions "$home" "$login" || warn "$login home permissions need attention"
+
+	# The instance last: it mounts this home, so everything above has to have
+	# landed first.
+	if [[ "$SKIP_SANDBOX" != 1 ]] && _is_tenant "$login"; then
+		refresh_sandbox "$login" || warn "$login's instance needs attention"
+	fi
 	return 0
 }
 
 # Before the accounts, so that the unit is already in place by the time
 # refresh_user turns on lingering for each of them.
+# Before the accounts too: creating a tenant needs a pool, a bridge and a
+# profile to exist, and reconciling one needs the daemon up. A box with no
+# tenants and SANDBOX=0 does none of this and never installs incus.
+if [[ "$SKIP_SANDBOX" == 1 ]]; then
+	log "skipping sandboxes (--skip-sandbox)"
+elif _sandbox_configured; then
+	log "configuring sandboxed tenants"
+	if try "incus" install_incus; then
+		try "sandbox init" sandbox_init
+	fi
+fi
+
 log "installing the ssh-agent user service"
 try "ssh-agent" install_ssh_agent
 
@@ -4816,6 +5911,15 @@ else
 	while read -r login; do
 		[[ -n "$login" ]] || continue
 		id -u "$login" >/dev/null 2>&1 || continue
+		# These are curl|sh installers that read the account's own dotfiles.
+		# For a tenant they run inside their instance (_sandbox_tools), never
+		# out here -- running them here would give a customer host-side code
+		# execution under their own uid, which is the one thing the container
+		# is for.
+		if _is_tenant "$login"; then
+			info "$login is a tenant -- tools installed inside their instance"
+			continue
+		fi
 		try "oh-my-zsh ($login)" install_omz "$login"
 		try "mise ($login)"      install_mise "$login"
 		try "moshcode ($login)"  install_moshcode "$login"
@@ -4917,6 +6021,13 @@ while read -r login; do
 		"$(getent passwd "$login" | cut -d: -f7)"
 done < <(printf 'root\n'; all_logins)
 
+if [[ -s "$SANDBOX_TENANTS" ]]; then
+	echo
+	log "sandboxed tenants"
+	_sandbox_list
+	info "their shell is inside their own instance -- none of them can run anything out here"
+fi
+
 # Flag anyone who cannot actually get in. With sshd refusing passwords, a
 # locked password plus no personal key means no login at all -- which otherwise
 # only shows up when they try and get "Permission denied".
@@ -4943,6 +6054,11 @@ while read -r l; do
 		fi
 		info "      fix: put their public key in ssh-keys/$l.pub and re-run, or"
 		info "           echo '<their key>' >> $h/.ssh/authorized_keys"
+	elif _is_tenant "$l"; then
+		# Same file, read by the sshd inside their instance: the home is shared,
+		# so authorising a key here authorises it there.
+		read -r _sp _al _ah _ml _mh < <(_tenant_ports "$(_tenant_slot "$l")")
+		info "$l: $_nkeys key(s) authorised -- ssh -p $_sp $l@$WEB_DOMAIN (tenant)"
 	else
 		info "$l: $_nkeys key(s) authorised"
 	fi
@@ -4970,7 +6086,15 @@ else
 fi
 while read -r l; do
 	info "    https://$WEB_DOMAIN/~$l  |  https://$l.$WEB_DOMAIN"
-	[[ "$DEV_APPS" == 1 ]] && info "        dev apps: mkdir ~/apps/<name>  ->  https://<name>.$l.$WEB_DOMAIN"
+	if [[ "$DEV_APPS" == 1 ]]; then
+		info "        dev apps: mkdir ~/apps/<name>  ->  https://<name>.$l.$WEB_DOMAIN"
+		# A tenant's .port is only honoured inside their own band, so the band
+		# belongs next to the instruction rather than in a manual somewhere.
+		if _is_tenant "$l"; then
+			read -r _sp _al _ah _ml _mh < <(_tenant_ports "$(_tenant_slot "$l")")
+			info "        ...on a port in $_al-$_ah (theirs); anything else is ignored"
+		fi
+	fi
 done < <(all_logins)
 
 # ---------------------------------------------------------------- reboot ---
