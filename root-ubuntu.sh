@@ -39,6 +39,9 @@
 #   9. a per-user ssh-agent as a systemd user service
 #  10. motd from $MOTD_URL
 #  11. nginx per-user pages, per-user dev apps, TLS
+#  12. the sandbox: every non-admin account confined (home, /proc, memory,
+#      tasks, ssh forwarding). Runs after the accounts exist, since which
+#      side of the line someone is on is decided by their groups.
 #
 # Usage, as root:
 #   ./root-ubuntu.sh                        # first run, or a refresh
@@ -53,6 +56,18 @@
 #   ./root-ubuntu.sh share /mnt/volume -R   # open an existing volume
 #   ./root-ubuntu.sh share /mnt/volume --group www-data -R
 #                                           # ...to a second group as well (acl)
+#
+# The sandbox (see "the sandbox" below, or `sandbox --help`):
+#   ./root-ubuntu.sh sandbox            # what is confined on this box, and what is not
+#   ./root-ubuntu.sh sandbox apply      # re-apply it without a full run
+#
+# Every account that is not an admin is confined, by default, with nothing to
+# remember: its home is 0700, it sees only its own processes, its memory and
+# task count are capped, and it cannot relay out over ssh. root and anyone in
+# sudo/admin are exempt -- explicitly, by uid, because the account you fix a
+# wedged box with must not be subject to the cap that is wedging it. It never
+# takes sudo away from an account that already has it; `sandbox` names those
+# and leaves the decision to you. SANDBOX=0 turns the whole thing off.
 #
 # Accounts and groups (see "accounts" below, or `groups --help`):
 #   ./root-ubuntu.sh groups                 # every account, and the groups it is in
@@ -107,9 +122,22 @@
 #   EARLYOOM_MEM=10,5 / EARLYOOM_SWAP=10,5   SIGTERM% , SIGKILL%
 #   EARLYOOM_AVOID=... / EARLYOOM_PREFER=    unquoted regexes (see the note)
 #   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
-#   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed
-#                  (default sudo,admin). An unattended run never prompts, so
-#                  this is what every account it creates gets.
+#   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed.
+#                  An unattended run never prompts, so this is what every
+#                  account it creates gets. Default: users when the sandbox is
+#                  on, sudo,admin when it is not.
+#   SANDBOX=0      do not confine accounts at all (default: 1)
+#   SANDBOX_EXEMPT_GROUPS=sudo,admin   who counts as an admin, and is exempt
+#   SANDBOX_HOME_MODE=0700  mode every human home is set to
+#   SANDBOX_UMASK=027       umask for accounts created from here on
+#   SANDBOX_HIDEPID=0       leave /proc world-readable (default: hidepid)
+#   SANDBOX_MEMORY_MAX=50% / SANDBOX_MEMORY_HIGH=35% / SANDBOX_TASKS_MAX=4096
+#                  per-account caps on the systemd user slice
+#   SANDBOX_CPU_QUOTA=200%  a hard CPU ceiling; by default CPU is a weight,
+#                  so a build gets the whole box when the box is idle
+#   SANDBOX_NPROC=4096 / SANDBOX_NOFILE=16384 / SANDBOX_MAXLOGINS=20
+#   SANDBOX_SSH_FORWARDING=local|no|yes   ssh -L yes, ssh -R no (default local)
+#   SANDBOX_PROC_UNITS=polkit.service     units that must still read /proc
 #   NO_REBOOT=1    skip the reboot at the end
 #   MOTD_URL=...   override the motd endpoint
 #   TS_AUTHKEY=... tailscale auth key, to join the tailnet unattended
@@ -387,7 +415,97 @@ GROUP_CHOICES=(sudo admin docker adm www-data users)
 # unattended run takes it verbatim for every account it creates. Assigning it
 # unconditionally (as this line used to) meant a box that had configured, say,
 # www-data,users,docker still got its new accounts put in sudo,admin.
+# Was it said out loud, or is it just the default? The sandbox turns the
+# default from sudo,admin into users, and the difference between "nobody chose
+# this" and "the config file chose this" is the whole basis for being allowed
+# to change it underneath them.
+DEFAULT_GROUPS_EXPLICIT="${DEFAULT_GROUPS+1}"
 DEFAULT_GROUPS="${DEFAULT_GROUPS:-sudo,admin}"
+
+# --------------------------------------------------------- the sandbox ---
+#
+# These boxes are multi-tenant. Several people share one dev server, and the
+# root VPSes we sell hand a customer an ACCOUNT, never the root password. So
+# the default has to be that an account is confined and an admin is let out,
+# rather than the other way round -- a model where you have to remember to
+# lock someone down is a model that eventually forgets.
+#
+# Three tiers, and the boundary is group membership:
+#
+#   root       untouched, always. Never capped, never blinded, never denied.
+#              Every limit below is explicitly lifted for uid 0, because the
+#              account you use to fix a wedged box must not be the account the
+#              wedge applies to.
+#   admin      anyone in $SANDBOX_EXEMPT_GROUPS. Us. Exempt from the resource
+#              caps, and kept able to see every process on the box.
+#   sandboxed  everybody else, by default, with nothing to remember. Confined
+#              home, own processes only, capped memory and tasks, no relay out
+#              over ssh.
+#
+# What each mechanism is actually worth is written up at configure_user_sandbox
+# below. SANDBOX=0 turns all of it off and gives back the older behaviour.
+SANDBOX="${SANDBOX:-1}"
+
+# The group that carries the confinement. Membership is recomputed on every run
+# from "is this account in an exempt group", so it converges rather than
+# drifting: promote someone and the next run takes them back out of it.
+SANDBOX_GROUP="${SANDBOX_GROUP:-sandboxed}"
+SANDBOX_EXEMPT_GROUPS="${SANDBOX_EXEMPT_GROUPS:-sudo,admin}"
+
+# Members still see every process once /proc is mounted hidepid. Admins go in
+# here; a monitoring agent that reads /proc should too.
+SANDBOX_PROC_GROUP="${SANDBOX_PROC_GROUP:-proc}"
+SANDBOX_HIDEPID="${SANDBOX_HIDEPID:-1}"
+
+# Units that must keep seeing other people's processes. polkit runs as polkitd
+# rather than as root and reads /proc/<pid> of whoever is asking it for
+# authorisation, so it goes blind under hidepid without this. Anything else you
+# run that reads /proc as a non-root user belongs on this list.
+SANDBOX_PROC_UNITS="${SANDBOX_PROC_UNITS:-polkit.service}"
+
+# 0700, so a home is the account's own business. This is the single biggest
+# item in here: useradd on Ubuntu makes a home 0750 and this script then
+# chmod o+x'd it, which is enough for anyone with a shell on the box to walk
+# into someone else's ~/.config and read whatever is world-readable in there.
+SANDBOX_HOME_MODE="${SANDBOX_HOME_MODE:-0700}"
+
+# ...and 027, so what gets CREATED in there from now on is not world-readable
+# either. Fixing the mode of the home does not fix the mode of the files
+# already inside it, but it does close the path to them.
+SANDBOX_UMASK="${SANDBOX_UMASK:-027}"
+
+SANDBOX_SYSCTL="${SANDBOX_SYSCTL:-1}"
+
+# Resource caps on the per-user systemd slice. Memory and tasks are HARD caps,
+# because their failure mode is the whole box going down with one account. CPU
+# is a weight rather than a quota, because ITS failure mode is only slowness,
+# and throttling a build while the box is otherwise idle is a bad trade. Set
+# SANDBOX_CPU_QUOTA (e.g. 200%) when you would rather have the ceiling.
+SANDBOX_MEMORY_HIGH="${SANDBOX_MEMORY_HIGH:-35%}"
+SANDBOX_MEMORY_MAX="${SANDBOX_MEMORY_MAX:-50%}"
+SANDBOX_TASKS_MAX="${SANDBOX_TASKS_MAX:-4096}"
+SANDBOX_CPU_WEIGHT="${SANDBOX_CPU_WEIGHT:-100}"
+SANDBOX_CPU_QUOTA="${SANDBOX_CPU_QUOTA:-}"
+
+# PAM limits, which bite at login rather than in the cgroup: a fork bomb is
+# stopped by nproc long before MemoryMax notices it happening.
+SANDBOX_NPROC="${SANDBOX_NPROC:-4096}"
+SANDBOX_NOFILE="${SANDBOX_NOFILE:-16384}"
+SANDBOX_MAXLOGINS="${SANDBOX_MAXLOGINS:-20}"
+
+# local  -- ssh -L to their own app still works, ssh -R relays do not
+# no     -- no forwarding at all, for a box whose tenants only need a shell
+# yes    -- off; this box is a jump host on purpose
+SANDBOX_SSH_FORWARDING="${SANDBOX_SSH_FORWARDING:-local}"
+SANDBOX_SSH="${SANDBOX_SSH:-1}"
+
+# An unattended run creates accounts with $DEFAULT_GROUPS, and that default was
+# sudo,admin -- which on a sandboxed box would hand every new tenant the way
+# out of the sandbox on the first --refresh. Only the default moves: a
+# DEFAULT_GROUPS in the environment or in server.conf is an answer, and stands.
+if [[ "$SANDBOX" == 1 && -z "$DEFAULT_GROUPS_EXPLICIT" ]]; then
+	DEFAULT_GROUPS="users"
+fi
 
 USERS=()         # alice@example -- new this run, get the full treatment
 USER_GROUPS=()   # sudo,admin           -- index-matched to USERS
@@ -1665,6 +1783,694 @@ cmd_groups() {
 	esac
 }
 
+# --------------------------------------------------------- user sandbox ---
+#
+# Confine every account that is not an admin. See the tier model up at the
+# SANDBOX knobs; this is what each tier actually costs the tenant.
+#
+# The threat is not a stranger -- it is the account we just created. Someone
+# with a shell on a shared box, or the customer of a VPS we sold, who should be
+# able to do their own work and nothing else. Five things they could do before:
+#
+#   1. read other people's homes. A home is 0750 and this script chmod o+x'd
+#      it, so ~/.config was walkable and anything world-readable in there --
+#      session tokens, api keys people leave in dotfiles -- was readable by
+#      every account on the box. This is the one that has actually leaked.
+#   2. watch other people work. /proc is world-readable, so `ps -ef` hands over
+#      every command line on the machine, and command lines carry tokens.
+#   3. take the box down. No per-account memory or task cap, so one runaway
+#      build or fork bomb is everybody's outage. earlyoom (above) picks up the
+#      pieces; this stops the pieces.
+#   4. relay through us. ssh -R turns the box into an open proxy under our IP,
+#      which is how a dev box ends up on a blocklist.
+#   5. read the kernel back. kptr/dmesg/perf leak the addresses and traces that
+#      turn a local bug into a local root.
+#
+# What it deliberately does NOT do is take sudo away from an account that
+# already has it. Demoting a live sudoer unattended is how you lose a box --
+# maybe it is a colleague, maybe it is the only other admin, maybe it is the
+# account your own automation logs in as. `sandbox status` names them and
+# `groups rm <user> sudo` demotes them, both with a human present.
+
+_sandbox_on() { [[ "$SANDBOX" == 1 ]]; }
+
+# Is this account exempt -- root, or an admin? The safe direction on every
+# unknown is "no": an account we cannot classify is confined, not let out.
+_sandbox_exempt() {
+	local login="$1" g uid
+	uid="$(id -u "$login" 2>/dev/null)" || return 1
+	[[ "$uid" == 0 ]] && return 0
+	for g in ${SANDBOX_EXEMPT_GROUPS//,/ }; do
+		[[ -n "${g// }" ]] || continue
+		_groups_in "$login" "$g" && return 0
+	done
+	return 1
+}
+
+# Every human account on the box. Not $KNOWN_USERS: an account this script
+# never created still shares the machine, and a sandbox with a hole in it the
+# shape of the cloud image's default user is not a sandbox.
+_sandbox_humans() {
+	getent passwd | awk -F: -v floor="${GROUPS_SYSTEM_FLOOR:-1000}" \
+		'$3 >= floor && $3 < 65534 && $7 !~ /(nologin|\/false|sync)$/ { print $1 }'
+}
+
+_sandbox_group_ensure() {
+	local g="$1"
+	getent group "$g" >/dev/null && return 0
+	valid_group "$g" || { warn "sandbox: '$g' is not a valid group name"; return 1; }
+	groupadd "$g" >/dev/null 2>&1 || { warn "sandbox: could not create group $g"; return 1; }
+	note "created group $g"
+	return 0
+}
+
+# Recompute who is in which tier. Convergent in both directions: a promotion
+# takes someone out of the sandbox group on the next run, a demotion puts them
+# back, and neither needs the flag that was passed when the account was made.
+sync_sandbox_membership() {
+	local login rc=0
+	_sandbox_group_ensure "$SANDBOX_GROUP" || return 1
+	if [[ "$SANDBOX_HIDEPID" == 1 ]]; then
+		_sandbox_group_ensure "$SANDBOX_PROC_GROUP" || rc=1
+	fi
+
+	while read -r login; do
+		[[ -n "$login" ]] || continue
+		if _sandbox_exempt "$login"; then
+			if _groups_in "$login" "$SANDBOX_GROUP"; then
+				gpasswd -d "$login" "$SANDBOX_GROUP" >/dev/null 2>&1 \
+					&& note "sandbox: $login is an admin -- released from $SANDBOX_GROUP"
+			fi
+			if [[ "$SANDBOX_HIDEPID" == 1 ]] && getent group "$SANDBOX_PROC_GROUP" >/dev/null \
+				&& ! _groups_in "$login" "$SANDBOX_PROC_GROUP"; then
+				usermod -aG "$SANDBOX_PROC_GROUP" "$login" \
+					&& note "sandbox: $login -> $SANDBOX_PROC_GROUP (keeps seeing every process)"
+			fi
+		else
+			if ! _groups_in "$login" "$SANDBOX_GROUP"; then
+				usermod -aG "$SANDBOX_GROUP" "$login" \
+					&& note "sandbox: confined $login" \
+					|| { warn "sandbox: could not confine $login"; rc=1; }
+			fi
+		fi
+	done < <(_sandbox_humans)
+	return $rc
+}
+
+# Emit "key = value", but only when the running kernel is BELOW it.
+#
+# Every key here is "higher is stricter", and Ubuntu already ships two of them
+# stricter than the floor we ask for -- kernel.perf_event_paranoid=4 against
+# our 3, kernel.unprivileged_bpf_disabled=2 against our 1. Writing the file
+# unconditionally would therefore LOOSEN the box in the name of hardening it,
+# quietly, on exactly the distribution we run everywhere. So each line is a
+# floor rather than a setting, and a key the kernel does not have at all
+# (yama on a kernel built without it) is skipped rather than guessed at.
+_sandbox_sysctl_floor() {
+	local key="$1" want="$2" have
+	have="$(sysctl -n "$key" 2>/dev/null)" || return 1
+	[[ "$have" =~ ^-?[0-9]+$ ]] || return 1
+	(( have >= want )) && return 1
+	printf '%s = %s\n' "$key" "$want"
+	return 0
+}
+
+configure_sandbox_sysctl() {
+	local conf=/etc/sysctl.d/62-profullstack-sandbox.conf body="" dumpable
+
+	if [[ "$SANDBOX_SYSCTL" != 1 ]]; then
+		info "sandbox: sysctl hardening off (SANDBOX_SYSCTL=0)"
+		return 0
+	fi
+
+	# kptr/dmesg/perf: stop handing out the kernel addresses and traces that
+	# turn a local bug into local root. ptrace_scope 1 keeps a debugger working
+	# on your own children while stopping it from attaching to anything else.
+	# protected_*: the /tmp symlink and hardlink games, which only matter on a
+	# box where someone else is also writing to /tmp. suid_dumpable 0: a core
+	# from a setuid binary is a memory image nobody should be handed.
+	body+="$(_sandbox_sysctl_floor kernel.kptr_restrict 2)"$'\n'
+	body+="$(_sandbox_sysctl_floor kernel.dmesg_restrict 1)"$'\n'
+	body+="$(_sandbox_sysctl_floor kernel.perf_event_paranoid 3)"$'\n'
+	body+="$(_sandbox_sysctl_floor kernel.yama.ptrace_scope 1)"$'\n'
+	body+="$(_sandbox_sysctl_floor kernel.unprivileged_bpf_disabled 1)"$'\n'
+	body+="$(_sandbox_sysctl_floor net.core.bpf_jit_harden 2)"$'\n'
+	body+="$(_sandbox_sysctl_floor fs.protected_symlinks 1)"$'\n'
+	body+="$(_sandbox_sysctl_floor fs.protected_hardlinks 1)"$'\n'
+	body+="$(_sandbox_sysctl_floor fs.protected_fifos 2)"$'\n'
+	body+="$(_sandbox_sysctl_floor fs.protected_regular 2)"$'\n'
+
+	# fs.suid_dumpable is the one key here that does NOT run in one direction,
+	# so it cannot be a floor: 0 (never dump) is safest, 2 (dump, readable only
+	# by root) is safe, and 1 -- dump like any other process, into a file the
+	# account can read back -- is the dangerous one in the middle. Ordering
+	# them numerically and taking the larger, which is what a floor does, would
+	# have left a box sitting on 2 alone and called it hardened. It is an exact
+	# value instead, and 0 can never be a loosening of anything.
+	dumpable="$(sysctl -n fs.suid_dumpable 2>/dev/null)"
+	[[ "$dumpable" =~ ^[0-9]+$ && "$dumpable" != 0 ]] && body+='fs.suid_dumpable = 0'$'\n'
+
+	body="$(printf '%s' "$body" | grep -v '^$')"
+
+	if [[ -z "$body" ]]; then
+		# Nothing to raise. Leave no file behind claiming otherwise.
+		if [[ -f "$conf" ]]; then
+			rm -f "$conf" && note "sandbox: kernel already at or above every floor -- removed $conf"
+		else
+			info "sandbox: kernel already at or above every hardening floor"
+		fi
+		return 0
+	fi
+
+	if write_if_changed "$conf" 0644 <<EOF
+# Written by root-ubuntu.sh -- floors for a box with tenants on it.
+# Only keys whose running value was BELOW the floor appear here; anything the
+# kernel already sets stricter is left alone rather than written back down.
+$body
+EOF
+	then
+		sysctl -q -p "$conf" 2>/dev/null || true
+		note "sandbox: kernel hardening ($(printf '%s' "$body" | wc -l) floor(s) raised)"
+	fi
+	return 0
+}
+
+# /proc mounted hidepid, so an account sees its own processes and nothing else.
+#
+# Order matters and is the whole difficulty. The live remount is attempted
+# FIRST and /etc/fstab is only written once it has actually worked: a kernel
+# that rejects the option would otherwise fail the mount at boot, and finding
+# that out at boot is finding it out in the worst place. hidepid=invisible is
+# the modern spelling; older kernels want the numeric 2, so both are tried.
+#
+# root is not affected by any of this -- it sees everything regardless, which
+# is why earlyoom (running as root) can still find the hog to kill.
+configure_sandbox_proc() {
+	local gid opts="" want spelling ok=0
+
+	[[ "$SANDBOX_HIDEPID" == 1 ]] || { info "sandbox: hidepid off (SANDBOX_HIDEPID=0)"; return 0; }
+
+	# A container is handed its /proc by the runtime and cannot remount it.
+	if [[ "$(systemd-detect-virt --container 2>/dev/null)" != "none" ]]; then
+		info "sandbox: inside a container -- /proc is the runtime's to mount, skipping hidepid"
+		return 0
+	fi
+
+	getent group "$SANDBOX_PROC_GROUP" >/dev/null || _sandbox_group_ensure "$SANDBOX_PROC_GROUP" || return 1
+	gid="$(getent group "$SANDBOX_PROC_GROUP" | cut -d: -f3)"
+	[[ -n "$gid" ]] || { warn "sandbox: no gid for group $SANDBOX_PROC_GROUP"; return 1; }
+
+	# The units that read other people's /proc as a non-root user, before the
+	# mount that would blind them rather than after.
+	_sandbox_proc_units "$gid"
+
+	for spelling in invisible 2; do
+		want="hidepid=$spelling,gid=$gid"
+		if mount -o "remount,$want" /proc 2>/dev/null \
+			&& grep -q ' /proc ' /proc/mounts && grep ' /proc ' /proc/mounts | grep -q hidepid; then
+			opts="rw,nosuid,nodev,noexec,relatime,$want"
+			ok=1
+			break
+		fi
+	done
+
+	if [[ "$ok" != 1 ]]; then
+		warn "sandbox: this kernel would not remount /proc with hidepid -- processes stay visible"
+		return 1
+	fi
+
+	if _sandbox_fstab_proc "$opts" "$gid"; then
+		note "sandbox: /proc hidepid -- an account sees only its own processes"
+	else
+		info "sandbox: /proc already hidepid ($opts)"
+	fi
+	return 0
+}
+
+# SupplementaryGroups for the units that would otherwise go blind. Written per
+# unit, and only for units this box actually has.
+_sandbox_proc_units() {
+	local u dir
+	for u in ${SANDBOX_PROC_UNITS//,/ }; do
+		[[ -n "${u// }" ]] || continue
+		systemctl list-unit-files "$u" >/dev/null 2>&1 || continue
+		[[ -n "$(systemctl list-unit-files --no-legend "$u" 2>/dev/null)" ]] || continue
+		dir="/etc/systemd/system/$u.d"
+		install -d -m 0755 "$dir"
+		if write_if_changed "$dir/50-profullstack-sandbox.conf" 0644 <<EOF
+# /proc is mounted hidepid: this unit runs as a non-root user and reads
+# /proc/<pid> of processes belonging to other people, so it needs the group
+# that is still allowed to see them.
+[Service]
+SupplementaryGroups=$SANDBOX_PROC_GROUP
+EOF
+		then
+			systemctl daemon-reload 2>/dev/null || true
+			systemctl try-restart "$u" 2>/dev/null || true
+			note "sandbox: $u keeps /proc visibility"
+		fi
+	done
+	return 0
+}
+
+# Rewrite the /proc line in /etc/fstab. Our own comment lines carry a marker so
+# that they are stripped and re-added rather than accumulating a fresh pair on
+# every single run.
+_sandbox_fstab_proc() {
+	local opts="$1" gid="$2" tmp
+	tmp="$(mktemp)" || return 1
+	grep -vE '^#root-ubuntu:proc|^[^#]*[[:space:]]/proc[[:space:]]' /etc/fstab >"$tmp" 2>/dev/null
+	{
+		printf '#root-ubuntu:proc hidepid -- an account sees only its own processes.\n'
+		printf '#root-ubuntu:proc gid %s is the "%s" group; its members still see them all.\n' \
+			"$gid" "$SANDBOX_PROC_GROUP"
+		printf 'proc /proc proc %s 0 0\n' "$opts"
+	} >>"$tmp"
+	if cmp -s "$tmp" /etc/fstab; then
+		rm -f "$tmp"
+		return 1
+	fi
+	install -m 0644 "$tmp" /etc/fstab
+	rm -f "$tmp"
+	return 0
+}
+
+# Resource caps, in two places because they catch two different things.
+#
+# PAM limits bite at login: nproc stops a fork bomb in the fork, before there
+# is anything for a cgroup to account. The systemd slice bites afterwards, and
+# is the only one of the two that can cap memory.
+#
+# Then both are LIFTED for root and for every admin, explicitly, by name. That
+# is the point of the exercise: the account you fix the box with must not be
+# subject to the cap that is wedging it.
+configure_sandbox_limits() {
+	local dir=/etc/systemd/system/user-.slice.d changed=0 quota=""
+
+	if write_if_changed /etc/security/limits.d/60-profullstack-sandbox.conf 0644 <<EOF
+# Written by root-ubuntu.sh. Applies to @$SANDBOX_GROUP only -- root and
+# admins are not in that group and so are not named here at all.
+@$SANDBOX_GROUP  soft  nproc      $SANDBOX_NPROC
+@$SANDBOX_GROUP  hard  nproc      $SANDBOX_NPROC
+@$SANDBOX_GROUP  soft  nofile     $SANDBOX_NOFILE
+@$SANDBOX_GROUP  hard  nofile     $SANDBOX_NOFILE
+@$SANDBOX_GROUP  hard  maxlogins  $SANDBOX_MAXLOGINS
+# A core dump is a memory image, written where the account can read it back.
+@$SANDBOX_GROUP  hard  core       0
+EOF
+	then
+		note "sandbox: pam limits for @$SANDBOX_GROUP (nproc=$SANDBOX_NPROC, nofile=$SANDBOX_NOFILE)"
+	fi
+
+	if [[ -n "$SANDBOX_CPU_QUOTA" ]]; then
+		quota="CPUQuota=$SANDBOX_CPU_QUOTA"
+	else
+		quota="# CPUQuota: deliberately unset -- see above. SANDBOX_CPU_QUOTA sets it."
+	fi
+
+	# user-.slice.d is systemd's prefix drop-in: it applies to user-1000.slice,
+	# user-1001.slice and every other instance -- including user-0.slice, which
+	# is root's, which is why the exemption below is not optional.
+	install -d -m 0755 "$dir"
+	if write_if_changed "$dir/50-profullstack-sandbox.conf" 0644 <<EOF
+# Written by root-ubuntu.sh. Per-account resource caps.
+#
+# Memory and tasks are hard ceilings: their failure mode is the whole box
+# going down with one account. CPU is a weight, not a quota -- it only bites
+# under contention, so a build gets the whole machine when the machine is idle
+# and a fair share when it is not. Set SANDBOX_CPU_QUOTA for a real ceiling.
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=$SANDBOX_MEMORY_HIGH
+MemoryMax=$SANDBOX_MEMORY_MAX
+TasksAccounting=yes
+TasksMax=$SANDBOX_TASKS_MAX
+CPUAccounting=yes
+CPUWeight=$SANDBOX_CPU_WEIGHT
+IOAccounting=yes
+IOWeight=100
+$quota
+EOF
+	then
+		changed=1
+		note "sandbox: slice caps (MemoryMax=$SANDBOX_MEMORY_MAX, TasksMax=$SANDBOX_TASKS_MAX)"
+	fi
+
+	_sandbox_slice_exemptions && changed=1
+	[[ "$changed" == 1 ]] && systemctl daemon-reload 2>/dev/null
+	return 0
+}
+
+# Lift the caps back off root and every admin, and take the lifting away again
+# from anyone who is no longer one. Written per uid because that is the only
+# way to override a prefix drop-in for one instance of it.
+_sandbox_slice_exemptions() {
+	local login uid want=() u f changed=0
+
+	want=(0)
+	while read -r login; do
+		[[ -n "$login" ]] || continue
+		_sandbox_exempt "$login" || continue
+		uid="$(id -u "$login" 2>/dev/null)" || continue
+		want+=("$uid")
+	done < <(_sandbox_humans)
+
+	for uid in "${want[@]}"; do
+		install -d -m 0755 "/etc/systemd/system/user-$uid.slice.d"
+		if write_if_changed "/etc/systemd/system/user-$uid.slice.d/60-profullstack-exempt.conf" 0644 <<EOF
+# uid $uid is root or an admin. The caps in the user-.slice.d drop-in apply to
+# every user slice including this one, so they are lifted again here. An
+# unbounded admin session is the point: this is the account that fixes the box.
+[Slice]
+MemoryHigh=infinity
+MemoryMax=infinity
+TasksMax=infinity
+CPUQuota=
+EOF
+		then
+			changed=1
+			note "sandbox: uid $uid exempt from the resource caps"
+		fi
+	done
+
+	# Someone demoted since the last run still has their exemption on disk.
+	for f in /etc/systemd/system/user-*.slice.d/60-profullstack-exempt.conf; do
+		[[ -e "$f" ]] || continue
+		u="${f#/etc/systemd/system/user-}"; u="${u%%.slice.d/*}"
+		printf '%s\n' "${want[@]}" | grep -qxF "$u" && continue
+		rm -f "$f"
+		rmdir "$(dirname "$f")" 2>/dev/null || true
+		changed=1
+		note "sandbox: uid $u is no longer an admin -- resource caps now apply"
+	done
+
+	[[ "$changed" == 1 ]]
+}
+
+# UMASK and HOME_MODE in login.defs, so that what is created from here on is
+# born private. Neither fixes a file that already exists -- that is what
+# fix_home_permissions does to the home itself -- but together they stop the
+# box from generating the problem again with every new account.
+configure_sandbox_login() {
+	local changed=0
+	_set_login_def UMASK "$SANDBOX_UMASK" && { changed=1; note "sandbox: login.defs UMASK $SANDBOX_UMASK"; }
+	_set_login_def HOME_MODE "$SANDBOX_HOME_MODE" && { changed=1; note "sandbox: login.defs HOME_MODE $SANDBOX_HOME_MODE"; }
+	return 0
+}
+
+# Set one key in /etc/login.defs. Not a file we own, so the existing line is
+# edited in place -- commented or not -- and only appended when there is none.
+_set_login_def() {
+	local key="$1" val="$2" file=/etc/login.defs tmp
+	[[ -w "$file" ]] || return 1
+	grep -qE "^[[:space:]]*${key}[[:space:]]+${val}[[:space:]]*$" "$file" && return 1
+	tmp="$(mktemp)" || return 1
+	if grep -qE "^[[:space:]]*#?[[:space:]]*${key}[[:space:]]" "$file"; then
+		sed -E "0,/^[[:space:]]*#?[[:space:]]*${key}[[:space:]].*$/s##${key}\t${val}#" "$file" >"$tmp"
+	else
+		{ cat "$file"; printf '\n# root-ubuntu.sh: born-private defaults for new accounts\n%s\t%s\n' "$key" "$val"; } >"$tmp"
+	fi
+	if cmp -s "$tmp" "$file"; then rm -f "$tmp"; return 1; fi
+	install -m 0644 "$tmp" "$file"
+	rm -f "$tmp"
+	return 0
+}
+
+# What a sandboxed account may do over ssh.
+#
+# Forwarding is the interesting one, and the interesting direction is OUT. A
+# tenant with -L can reach a service on localhost -- but so can any shell on
+# the box, so -L costs nothing they did not already have. -R is different: it
+# turns the machine into an open relay under our IP, and that is how a dev box
+# ends up on a blocklist. Hence "local" by default: keep ssh -L for previewing
+# your own app, drop the relay.
+configure_sandbox_ssh() {
+	local conf=/etc/ssh/sshd_config.d/60-profullstack-sandbox.conf backup fwd
+
+	[[ "$SANDBOX_SSH" == 1 ]] || { info "sandbox: sshd policy off (SANDBOX_SSH=0)"; return 0; }
+	[[ -d /etc/ssh/sshd_config.d ]] || { info "sandbox: no sshd_config.d on this box -- skipping"; return 0; }
+
+	# A drop-in in a directory nothing includes is a policy that does not exist.
+	if ! grep -qE '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/' /etc/ssh/sshd_config 2>/dev/null; then
+		warn "sandbox: /etc/ssh/sshd_config has no Include for sshd_config.d -- ssh policy NOT applied"
+		return 1
+	fi
+
+	case "$SANDBOX_SSH_FORWARDING" in
+		local|no|yes) fwd="$SANDBOX_SSH_FORWARDING" ;;
+		*) warn "sandbox: SANDBOX_SSH_FORWARDING='$SANDBOX_SSH_FORWARDING' is not local|no|yes -- using local"; fwd=local ;;
+	esac
+
+	backup="$(mktemp)"
+	[[ -f "$conf" ]] && cp -f "$conf" "$backup"
+
+	write_if_changed "$conf" 0644 <<EOF || { rm -f "$backup"; return 0; }
+# Written by root-ubuntu.sh. What an account in @$SANDBOX_GROUP may do.
+#
+# The closing 'Match all' is deliberate. On Ubuntu this directory is included
+# from the FIRST line of /etc/ssh/sshd_config, so everything in the main file
+# comes AFTER whatever is opened here. OpenSSH scopes a Match to the file it
+# appears in -- measured on 10.2p1: with and without the closing line, the
+# effective config for a non-matching user is identical -- so this is belt and
+# braces rather than a fix for a live bug. It costs one line, it makes the file
+# safe to concatenate or move, and 'Match Group' as the last thing in an
+# included file is a footgun waiting for the version where that changes.
+Match Group $SANDBOX_GROUP
+	AllowTcpForwarding $fwd
+	AllowStreamLocalForwarding no
+	GatewayPorts no
+	PermitTunnel no
+	X11Forwarding no
+	AllowAgentForwarding no
+	PermitUserRC no
+Match all
+EOF
+
+	# A bad sshd config locks everyone out of the box, so it is validated before
+	# anything is reloaded, and put back the way it was if it does not hold.
+	if ! sshd -t 2>/dev/null; then
+		if [[ -s "$backup" ]]; then
+			install -m 0644 "$backup" "$conf"
+		else
+			rm -f "$conf"
+		fi
+		rm -f "$backup"
+		warn "sandbox: sshd rejected the policy drop-in -- rolled back, sshd untouched"
+		return 1
+	fi
+	rm -f "$backup"
+
+	systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+	note "sandbox: sshd policy for @$SANDBOX_GROUP (forwarding=$fwd)"
+	return 0
+}
+
+# A home is the account's own business: $SANDBOX_HOME_MODE, and an ACL for
+# nginx where nginx actually has something to serve.
+#
+# The mode alone would break the per-user web pages, because www-data has to
+# walk through the home to reach ~/public_html. The old answer was chmod o+x,
+# which opens that path to every account on the box as well. An ACL says the
+# same thing to one user instead of to everyone -- and it is EXECUTE only, so
+# www-data can traverse the home without being able to list it.
+#
+# Granted only where there is something published, so a home with no web
+# content grants nothing at all.
+_sandbox_home_mode() {
+	local home="$1" login="$2"
+
+	chmod "$SANDBOX_HOME_MODE" "$home" 2>/dev/null || {
+		warn "sandbox: could not chmod $SANDBOX_HOME_MODE $home"
+		return 1
+	}
+
+	if [[ -d "$home/public_html" || -d "$home/apps" ]] && getent group "$WEB_GROUP" >/dev/null; then
+		if command -v setfacl >/dev/null 2>&1; then
+			setfacl -m "u:$WEB_GROUP:--x" "$home" 2>/dev/null \
+				|| warn "sandbox: could not grant $WEB_GROUP traverse on $home"
+		else
+			# No acl package yet (it arrives in the apt stage). Fall back to the
+			# old behaviour rather than silently breaking the user's web page --
+			# less private, but a working box, and the next run fixes it.
+			chmod o+x "$home"
+			warn "sandbox: setfacl missing -- $home left traversable; re-run after apt installs acl"
+		fi
+	fi
+	return 0
+}
+
+# Every human home, not only the accounts this script provisioned. The cloud
+# image's own `ubuntu` was never created by us and so never had its permissions
+# touched -- and it is on every box.
+configure_sandbox_homes() {
+	local login home before
+	while read -r login; do
+		[[ -n "$login" ]] || continue
+		home="$(user_home "$login")"
+		[[ -n "$home" && -d "$home" ]] || continue
+		before="$(stat -c '%a' "$home" 2>/dev/null)"
+		_sandbox_home_mode "$home" "$login" || continue
+		[[ "$(stat -c '%a' "$home" 2>/dev/null)" != "$before" ]] \
+			&& note "sandbox: $home $before -> $(stat -c '%a' "$home" 2>/dev/null)"
+	done < <(_sandbox_humans)
+	return 0
+}
+
+configure_user_sandbox() {
+	local rc=0
+	sync_sandbox_membership   || rc=1
+	configure_sandbox_homes   || rc=1
+	configure_sandbox_sysctl  || rc=1
+	configure_sandbox_login   || rc=1
+	configure_sandbox_limits  || rc=1
+	configure_sandbox_proc    || rc=1
+	configure_sandbox_ssh     || rc=1
+	_sandbox_report_sudoers
+	return $rc
+}
+
+# The one thing this will not do by itself. Naming them is the whole point:
+# an account with sudo is outside the sandbox no matter what else is set.
+_sandbox_report_sudoers() {
+	local login extra=()
+	while read -r login; do
+		[[ -n "$login" ]] || continue
+		_sandbox_exempt "$login" || continue
+		extra+=("$login")
+	done < <(_sandbox_humans)
+	[[ ${#extra[@]} -gt 0 ]] || return 0
+	info "sandbox: NOT confined (admins): ${extra[*]}"
+	info "sandbox: each of those can leave the sandbox at will -- \`groups rm <user> sudo\` to demote"
+	return 0
+}
+
+sandbox_usage() {
+	cat <<EOF
+usage: $0 sandbox [status|apply]
+
+  status    what is confined on this box right now, and what is not (default).
+            Reads only, and needs no root.
+  apply     (re)apply the sandbox. Root. This is also done by every ordinary
+            run, so you only need it to pick up a changed setting without
+            doing the rest of the provisioning.
+
+The model, in one line: root and admins are never confined, everybody else is
+confined by default. Admins are whoever is in $SANDBOX_EXEMPT_GROUPS.
+
+Turning it off:      SANDBOX=0 $0 --refresh
+Letting someone out: $0 groups add <user> sudo
+Putting them back:   $0 groups rm <user> sudo
+EOF
+	exit "${1:-0}"
+}
+
+# A read-only report on the posture. The point is to be able to answer "is this
+# box actually tight?" without reading five config files -- and to be honest
+# about the parts that are not, rather than printing a row of ticks.
+_sandbox_status() {
+	local login home mode tier admins=() confined=() leaky=() key want have
+
+	printf '\n\033[1msandbox\033[0m: %s\n' \
+		"$([[ "$SANDBOX" == 1 ]] && echo "on" || echo "OFF (SANDBOX=0)")"
+	printf '  admin groups : %s\n' "$SANDBOX_EXEMPT_GROUPS"
+	printf '  sandbox group: %s\n' "$SANDBOX_GROUP"
+
+	printf '\n\033[1maccounts\033[0m\n'
+	while read -r login; do
+		[[ -n "$login" ]] || continue
+		home="$(user_home "$login")"
+		mode="$(stat -c '%a' "$home" 2>/dev/null || echo '?')"
+		if _sandbox_exempt "$login"; then
+			tier="admin    "; admins+=("$login")
+		else
+			tier="sandboxed"; confined+=("$login")
+		fi
+		# 'other' with any bit set means every account on the box can at least
+		# walk in. That is the leak this whole thing exists to close.
+		if [[ "$mode" =~ ^[0-7]?[0-7][0-7][1-7]$ ]]; then
+			leaky+=("$login")
+			printf '  %s  %-16s %s  \033[1;33m<- other can traverse/read\033[0m\n' "$tier" "$login" "$mode"
+		else
+			printf '  %s  %-16s %s\n' "$tier" "$login" "$mode"
+		fi
+	done < <(_sandbox_humans)
+
+	printf '\n\033[1mmechanisms\033[0m\n'
+	if grep ' /proc ' /proc/mounts 2>/dev/null | grep -q hidepid; then
+		printf '  hidepid      yes  (an account sees only its own processes)\n'
+	else
+		printf '  hidepid      \033[1;33mno\033[0m   (ps -ef shows every command line on the box)\n'
+	fi
+	if [[ -f /etc/systemd/system/user-.slice.d/50-profullstack-sandbox.conf ]]; then
+		printf '  slice caps   yes  MemoryMax=%s TasksMax=%s\n' "$SANDBOX_MEMORY_MAX" "$SANDBOX_TASKS_MAX"
+		printf '  exempt uids  %s\n' \
+			"$(ls -d /etc/systemd/system/user-*.slice.d 2>/dev/null \
+				| sed 's#.*/user-##; s#\.slice\.d##' | tr '\n' ' ')"
+	else
+		printf '  slice caps   \033[1;33mno\033[0m   (one account can take the box down)\n'
+	fi
+	if [[ -f /etc/security/limits.d/60-profullstack-sandbox.conf ]]; then
+		printf '  pam limits   yes  nproc=%s nofile=%s\n' "$SANDBOX_NPROC" "$SANDBOX_NOFILE"
+	else
+		printf '  pam limits   \033[1;33mno\033[0m\n'
+	fi
+	if [[ -f /etc/ssh/sshd_config.d/60-profullstack-sandbox.conf ]]; then
+		printf '  ssh policy   yes  forwarding=%s\n' "$SANDBOX_SSH_FORWARDING"
+	else
+		printf '  ssh policy   \033[1;33mno\033[0m   (ssh -R can relay through this box)\n'
+	fi
+
+	printf '\n\033[1mkernel floors\033[0m\n'
+	for key in kernel.kptr_restrict:2 kernel.dmesg_restrict:1 kernel.perf_event_paranoid:3 \
+		kernel.yama.ptrace_scope:1 fs.protected_fifos:2 fs.protected_regular:2; do
+		want="${key#*:}"; key="${key%%:*}"
+		have="$(sysctl -n "$key" 2>/dev/null)" || { printf '  %-32s absent on this kernel\n' "$key"; continue; }
+		if [[ "$have" =~ ^-?[0-9]+$ ]] && (( have >= want )); then
+			printf '  %-32s %s\n' "$key" "$have"
+		else
+			printf '  %-32s \033[1;33m%s\033[0m (floor %s)\n' "$key" "$have" "$want"
+		fi
+	done
+	# Reported separately for the same reason it is set separately: 0 is safest
+	# and 1 is the dangerous one, so "bigger is better" does not hold here.
+	have="$(sysctl -n fs.suid_dumpable 2>/dev/null)"
+	if [[ "$have" == 0 ]]; then
+		printf '  %-32s %s\n' fs.suid_dumpable "$have"
+	else
+		printf '  %-32s \033[1;33m%s\033[0m (wanted 0)\n' fs.suid_dumpable "${have:-?}"
+	fi
+
+	printf '\n'
+	if [[ ${#admins[@]} -gt 0 ]]; then
+		printf '%d account(s) are NOT confined, because they are admins: %s\n' \
+			"${#admins[@]}" "${admins[*]}"
+		printf 'An admin can leave the sandbox at will. Demote with: %s groups rm <user> sudo\n' "$0"
+	fi
+	[[ ${#confined[@]} -gt 0 ]] && printf '%d account(s) confined: %s\n' "${#confined[@]}" "${confined[*]}"
+	if [[ ${#leaky[@]} -gt 0 ]]; then
+		printf '\n\033[1;33m%d home(s) are still reachable by other accounts: %s\033[0m\n' \
+			"${#leaky[@]}" "${leaky[*]}"
+		printf 'Fix with: sudo %s sandbox apply\n' "$0"
+	fi
+	return 0
+}
+
+cmd_sandbox() {
+	local action="${1:-status}"
+	case "$action" in
+		-h|--help|help) sandbox_usage 0 ;;
+		status|"")      _sandbox_status ;;
+		apply)
+			[[ $EUID -eq 0 ]] || die "sandbox apply: must run as root (try: sudo $0 sandbox apply)"
+			[[ "$SANDBOX" == 1 ]] || die "sandbox apply: SANDBOX=0 -- nothing to apply"
+			configure_user_sandbox
+			printf '\n'
+			_sandbox_status
+			;;
+		*) die "sandbox: unknown action '$action' (try: status, apply)" ;;
+	esac
+}
+
 usage() {
 	sed -n '2,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
 	exit "${1:-0}"
@@ -1675,7 +2481,7 @@ usage() {
 SUBCMD=""
 SUBARGS=()
 case "${1:-}" in
-	mount|umount|mounts|share|groups) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
+	mount|umount|mounts|share|groups|sandbox) SUBCMD="$1"; shift; SUBARGS=("$@"); set -- ;;
 esac
 
 ARGS=()
@@ -1719,6 +2525,7 @@ case "$SUBCMD" in
 	mounts) cmd_mounts; exit $? ;;
 	share)  cmd_share  ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 	groups) cmd_groups ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
+	sandbox) cmd_sandbox ${SUBARGS[@]+"${SUBARGS[@]}"}; exit $? ;;
 esac
 
 # Root, not sudo-capable: this writes to /etc, creates accounts and drives
@@ -2943,8 +3750,12 @@ fix_home_permissions() {
 	[[ -d "$home" ]] || { warn "no home dir $home"; return 1; }
 
 	chown "$login:$login" "$home"
-	chmod g-w,o-w "$home"
-	chmod o+x "$home"
+	if _sandbox_on; then
+		_sandbox_home_mode "$home" "$login"
+	else
+		chmod g-w,o-w "$home"
+		chmod o+x "$home"
+	fi
 
 	if [[ -d "$home/.ssh" ]]; then
 		chown -R "$login:$login" "$home/.ssh"
@@ -4798,6 +5609,16 @@ if [[ ${#KNOWN_USERS[@]} -gt 0 ]]; then
 		remember_user "$_l"
 	done
 	unset _l
+fi
+
+# After every account exists and has its groups, because who is confined is
+# decided by group membership -- and before the tools, so that anything the
+# rest of the run installs into a home lands under the new umask.
+if [[ "$SANDBOX" == 1 ]]; then
+	log "confining accounts (sandbox)"
+	try "sandbox" configure_user_sandbox
+else
+	log "sandbox is OFF (SANDBOX=0) -- accounts are not confined"
 fi
 
 log "installing dotfiles for root"

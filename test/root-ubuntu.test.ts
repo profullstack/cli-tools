@@ -503,7 +503,7 @@ describe('the groups subcommand', () => {
   });
 
   it('is peeled off before the root check, like the share subcommands', () => {
-    expect(SOURCE).toContain('mount|umount|mounts|share|groups)');
+    expect(SOURCE).toContain('mount|umount|mounts|share|groups|sandbox)');
     expect(SOURCE).toMatch(/groups\)\s+cmd_groups/);
   });
 
@@ -880,5 +880,458 @@ describe('configure_sensors', () => {
     // package is dead weight if nothing ever probes for the chips.
     expect(SOURCE).toMatch(/^\tlm-sensors i2c-tools/m);
     expect(SOURCE).toContain('try "sensors" configure_sensors');
+  });
+});
+
+describe('the user sandbox', () => {
+  /**
+   * The model is "root and admins are never confined, everybody else is
+   * confined by default", so most of what is worth testing is the boundary:
+   * who ends up on which side of it, and whether any of the mechanisms can
+   * quietly do the opposite of what it claims.
+   */
+
+  const SANDBOX_DECLS = [
+    ...SOURCE.matchAll(/^(?:SANDBOX|SANDBOX_[A-Z_]+)=.*$/gm),
+  ]
+    .map((m) => m[0])
+    .join('\n');
+
+  describe('_sandbox_exempt', () => {
+    const FNS = ['_sandbox_exempt'];
+    const stubs = `
+      SANDBOX_EXEMPT_GROUPS=sudo,admin
+      id() { [[ "\${2:-}" == root ]] && { echo 0; return 0; }
+             [[ "\${2:-}" == ghost ]] && return 1
+             echo 1000; }
+      _groups_in() { [[ " \$FAKE_GROUPS " == *" \$2 "* ]]; }
+    `;
+    const exempt = (login: string, groups = '') =>
+      status(FNS, `${stubs}\nFAKE_GROUPS="${groups}" _sandbox_exempt ${login}`);
+
+    it('always exempts root, whatever groups say', () => {
+      expect(exempt('root')).toBe(0);
+    });
+
+    it('exempts an admin', () => {
+      expect(exempt('alice', 'sudo users')).toBe(0);
+      expect(exempt('alice', 'admin')).toBe(0);
+    });
+
+    it('confines an ordinary account', () => {
+      expect(exempt('alice', 'users')).toBe(1);
+    });
+
+    it('confines an account it cannot classify, rather than letting it out', () => {
+      // The safe direction on an unknown. An account that does not resolve is
+      // not evidence of an admin, and treating it as one is how a sandbox
+      // grows a hole shaped like whatever the lookup failed on.
+      expect(exempt('ghost', 'sudo')).toBe(1);
+    });
+  });
+
+  describe('_sandbox_humans', () => {
+    const FNS = ['_sandbox_humans'];
+    const passwd = [
+      'root:x:0:0:root:/root:/bin/bash',
+      'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin',
+      'www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin',
+      'sync:x:4:65534:sync:/bin:/bin/sync',
+      'alice:x:1000:1000::/home/alice:/bin/zsh',
+      'bob:x:1001:1001::/home/bob:/bin/bash',
+      'locked:x:1002:1002::/home/locked:/bin/false',
+      'nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin',
+    ].join('\n');
+    // %b, not %s: JSON.stringify turns the newlines into two-character \n
+    // escapes, and printf %s hands awk one very long single record.
+    const humans = () =>
+      shell(FNS, `getent() { printf '%b\\n' ${JSON.stringify(passwd)}; }\n_sandbox_humans`);
+
+    it('is every human account, not only the ones this script created', () => {
+      // The cloud image's own `ubuntu` was never created by us and still
+      // shares the box. A sandbox with a hole shaped like the default user
+      // is not a sandbox.
+      expect(humans().split('\n')).toEqual(['alice', 'bob']);
+    });
+
+    it('leaves system accounts and locked shells out of it', () => {
+      const out = humans();
+      expect(out).not.toContain('www-data');
+      expect(out).not.toContain('nobody');
+      expect(out).not.toContain('locked');
+      expect(out).not.toContain('sync');
+    });
+  });
+
+  describe('_sandbox_sysctl_floor', () => {
+    const FNS = ['_sandbox_sysctl_floor'];
+    const floor = (have: string, want: number) =>
+      shell(
+        FNS,
+        `sysctl() { [[ "\${2:-}" == missing ]] && return 1; printf '%s\\n' ${JSON.stringify(
+          have,
+        )}; }\n_sandbox_sysctl_floor a.key ${want} || true`,
+      );
+
+    it('raises a key the kernel sets lower', () => {
+      expect(floor('1', 2)).toBe('a.key = 2');
+    });
+
+    it('NEVER writes a key the kernel already sets stricter', () => {
+      // This is the one that matters. Ubuntu ships perf_event_paranoid=4 and
+      // unprivileged_bpf_disabled=2, both stricter than the floor asked for,
+      // so a file written unconditionally would loosen the box in the name of
+      // hardening it — silently, on the distribution we run everywhere.
+      expect(floor('4', 3)).toBe('');
+      expect(floor('2', 1)).toBe('');
+    });
+
+    it('leaves a key alone when it is already exactly at the floor', () => {
+      expect(floor('2', 2)).toBe('');
+    });
+
+    it('skips a key this kernel does not have rather than guessing', () => {
+      expect(
+        shell(FNS, `sysctl() { return 1; }\n_sandbox_sysctl_floor a.key 2 || true`),
+      ).toBe('');
+    });
+
+    it('skips a value it cannot read as a number', () => {
+      expect(floor('unknown', 2)).toBe('');
+    });
+  });
+
+  describe('fs.suid_dumpable', () => {
+    /**
+     * The one key in the set that does not run in one direction: 0 (never
+     * dump) is safest, 2 (dump, root-readable only) is safe, and 1 — dump
+     * like anything else, into a file the account can read back — is the
+     * dangerous one, in the middle. Treating it as a floor and taking the
+     * larger number leaves a box on 2 and calls it hardened, and leaves a
+     * box on 1 alone entirely.
+     */
+    const FNS = [
+      '_sandbox_sysctl_floor',
+      'configure_sandbox_sysctl',
+      'write_if_changed',
+      'file_sha',
+    ];
+
+    function generated(dumpable: string): string {
+      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-suid-'));
+      shell(
+        FNS,
+        `SANDBOX_SYSCTL=1
+         note() { :; }; info() { :; }; warn() { :; }
+         sysctl() {
+           case "\${2:-}" in
+             fs.suid_dumpable) printf '%s\\n' ${JSON.stringify(dumpable)} ;;
+             -p|*) return 0 ;;
+           esac
+         }
+         eval "$(declare -f configure_sandbox_sysctl | sed 's#/etc/sysctl.d/62-profullstack-sandbox.conf#${dir}/out.conf#g')"
+         configure_sandbox_sysctl`,
+      );
+      try {
+        return readFileSync(join(dir, 'out.conf'), 'utf8');
+      } catch {
+        return '';
+      }
+    }
+
+    it('sets it to 0 from Ubuntu’s default of 2', () => {
+      expect(generated('2')).toContain('fs.suid_dumpable = 0');
+    });
+
+    it('sets it to 0 from the dangerous 1', () => {
+      expect(generated('1')).toContain('fs.suid_dumpable = 0');
+    });
+
+    it('leaves a box that is already at 0 alone', () => {
+      expect(generated('0')).not.toContain('fs.suid_dumpable');
+    });
+  });
+
+  describe('_sandbox_fstab_proc', () => {
+    const FNS = ['_sandbox_fstab_proc'];
+
+    function box(fstab: string): string {
+      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-sandbox-'));
+      writeFileSync(join(dir, 'fstab'), fstab);
+      return dir;
+    }
+
+    const run = (dir: string, opts = 'rw,hidepid=invisible,gid=1001') =>
+      shell(
+        FNS,
+        `SANDBOX_PROC_GROUP=proc
+         eval "$(declare -f _sandbox_fstab_proc | sed 's#/etc/fstab#${dir}/fstab#g')"
+         _sandbox_fstab_proc '${opts}' 1001 && echo CHANGED || echo SAME`,
+      );
+
+    const fstabOf = (dir: string) => readFileSync(join(dir, 'fstab'), 'utf8');
+
+    it('adds the hidepid mount so it survives a reboot', () => {
+      const dir = box('/dev/sda1 / ext4 defaults 0 1\n');
+      expect(run(dir)).toBe('CHANGED');
+      expect(fstabOf(dir)).toMatch(/^proc \/proc proc rw,hidepid=invisible,gid=1001 0 0$/m);
+      expect(fstabOf(dir)).toContain('/dev/sda1 / ext4');
+    });
+
+    it('is safe to run twice: no second line, and no second pair of comments', () => {
+      // The comments carry a marker precisely so they can be stripped and
+      // rewritten. Without it every run appends another two lines and the
+      // file grows forever while cmp keeps reporting a change.
+      const dir = box('/dev/sda1 / ext4 defaults 0 1\n');
+      run(dir);
+      const first = fstabOf(dir);
+      expect(run(dir)).toBe('SAME');
+      expect(fstabOf(dir)).toBe(first);
+      expect(first.match(/hidepid --/g) ?? []).toHaveLength(1);
+    });
+
+    it('replaces an existing /proc line instead of adding a rival to it', () => {
+      const dir = box('proc /proc proc defaults 0 0\n/dev/sda1 / ext4 defaults 0 1\n');
+      expect(run(dir)).toBe('CHANGED');
+      expect(fstabOf(dir).match(/^proc /gm) ?? []).toHaveLength(1);
+      expect(fstabOf(dir)).not.toContain('proc /proc proc defaults');
+    });
+
+    it('keeps unrelated comments', () => {
+      const dir = box('# my own note\n/dev/sda1 / ext4 defaults 0 1\n');
+      run(dir);
+      expect(fstabOf(dir)).toContain('# my own note');
+    });
+  });
+
+  describe('_set_login_def', () => {
+    const FNS = ['_set_login_def'];
+
+    function box(contents: string): string {
+      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-logindefs-'));
+      writeFileSync(join(dir, 'login.defs'), contents);
+      return dir;
+    }
+
+    const run = (dir: string, key: string, val: string) =>
+      shell(
+        FNS,
+        `eval "$(declare -f _set_login_def | sed 's#/etc/login.defs#${dir}/login.defs#g')"
+         _set_login_def ${key} ${val} && echo CHANGED || echo SAME`,
+      );
+
+    const defsOf = (dir: string) => readFileSync(join(dir, 'login.defs'), 'utf8');
+
+    it('sets a key that is not there at all', () => {
+      const dir = box('UID_MIN 1000\n');
+      expect(run(dir, 'UMASK', '027')).toBe('CHANGED');
+      expect(defsOf(dir)).toMatch(/^UMASK\t027$/m);
+      expect(defsOf(dir)).toContain('UID_MIN 1000');
+    });
+
+    it('edits the line in place rather than appending a second one', () => {
+      const dir = box('HOME_MODE\t0750\nUID_MIN 1000\n');
+      expect(run(dir, 'HOME_MODE', '0700')).toBe('CHANGED');
+      expect(defsOf(dir).match(/^HOME_MODE/gm) ?? []).toHaveLength(1);
+      expect(defsOf(dir)).toMatch(/^HOME_MODE\t0700$/m);
+    });
+
+    it('uncomments a commented-out key, which is how Ubuntu ships UMASK', () => {
+      const dir = box('#UMASK\t022\n');
+      expect(run(dir, 'UMASK', '027')).toBe('CHANGED');
+      expect(defsOf(dir)).toMatch(/^UMASK\t027$/m);
+      expect(defsOf(dir)).not.toMatch(/^#UMASK/m);
+    });
+
+    it('reports no change when the value is already right', () => {
+      const dir = box('UMASK\t027\n');
+      expect(run(dir, 'UMASK', '027')).toBe('SAME');
+    });
+  });
+
+  describe('what the sandbox will not do on its own', () => {
+    it('never removes sudo from an account that already has it', () => {
+      // Demoting a live sudoer unattended is how you lose a box: it might be
+      // a colleague, the only other admin, or the account your automation
+      // logs in as. The script names them and stops.
+      expect(SOURCE).toContain('_sandbox_report_sudoers');
+      const fn = SOURCE.slice(SOURCE.indexOf('sync_sandbox_membership() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body).not.toMatch(/gpasswd -d[^\n]*sudo/);
+      expect(body).not.toMatch(/deluser[^\n]*sudo/);
+    });
+
+    it('lifts every cap back off root, by uid, explicitly', () => {
+      // user-.slice.d is a prefix drop-in: it applies to user-0.slice too.
+      // Without the exemption the account you fix a wedged box with is
+      // subject to the cap that is wedging it.
+      expect(SOURCE).toMatch(/want=\(0\)/);
+      expect(SOURCE).toContain('MemoryMax=infinity');
+      expect(SOURCE).toContain('TasksMax=infinity');
+    });
+
+    it('takes the exemption away again from someone who is no longer an admin', () => {
+      expect(SOURCE).toContain('is no longer an admin -- resource caps now apply');
+    });
+  });
+
+  describe('the sshd policy', () => {
+    it('closes its own Match block', () => {
+      // Not because it currently has to: OpenSSH scopes a Match to the file it
+      // appears in, and 10.2p1 gives a byte-identical effective config with
+      // and without the closing line. It is here because this directory is
+      // included from the first line of sshd_config, so everything in the main
+      // file comes after this block — and leaving a Match open as the last
+      // thing in an included file is a footgun waiting for the version where
+      // that scoping changes.
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_ssh() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      // Anchored to the start of a line: both phrases also appear in the
+      // comment above the block explaining why this matters, and matching
+      // those instead would pass while the directive itself was missing.
+      const opened = body.match(/^Match Group /m);
+      const closed = body.match(/^Match all$/m);
+      expect(opened?.index).toBeDefined();
+      expect(closed?.index).toBeDefined();
+      expect(closed!.index!).toBeGreaterThan(opened!.index!);
+    });
+
+    it('validates with sshd -t and rolls back rather than locking the box', () => {
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_ssh() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body).toContain('sshd -t');
+      expect(body).toContain('rolled back');
+      // the reload only happens after the check
+      expect(body.indexOf('sshd -t')).toBeLessThan(body.indexOf('systemctl reload'));
+    });
+
+    it('refuses to write a drop-in that nothing includes', () => {
+      // A policy file in a directory no config includes is a policy that does
+      // not exist, and looks applied from every angle except the running sshd.
+      expect(SOURCE).toContain('has no Include for sshd_config.d');
+    });
+  });
+
+  describe('hidepid', () => {
+    it('proves the option works on the running kernel before trusting fstab to it', () => {
+      // An fstab entry the kernel rejects fails the mount at boot, which is
+      // the worst possible place to discover it. So: remount first, write the
+      // file only once that has actually worked.
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_proc() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body.indexOf('mount -o "remount,$want" /proc')).toBeLessThan(
+        body.indexOf('_sandbox_fstab_proc'),
+      );
+    });
+
+    it('gives the units that read other people’s /proc the group first', () => {
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_proc() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body.indexOf('_sandbox_proc_units')).toBeLessThan(
+        body.indexOf('mount -o "remount,$want" /proc'),
+      );
+      expect(SOURCE).toContain('SupplementaryGroups=$SANDBOX_PROC_GROUP');
+    });
+
+    it('does not try to remount /proc inside a container', () => {
+      expect(SOURCE).toContain("systemd-detect-virt --container");
+    });
+  });
+
+  describe('the default groups a new account lands in', () => {
+    const decls = SANDBOX_DECLS;
+    const explicit = SOURCE.slice(
+      SOURCE.indexOf('DEFAULT_GROUPS_EXPLICIT='),
+      SOURCE.indexOf('USERS=()'),
+    );
+
+    const groupsFor = (env: string) =>
+      execFileSync('bash', ['-c', `set -uo pipefail\n${env}\n${decls}\n${explicit}\nprintf '%s' "$DEFAULT_GROUPS"`], {
+        encoding: 'utf8',
+      });
+
+    it('is users, not sudo, once the box is sandboxed', () => {
+      // Otherwise the first unattended --refresh hands every new tenant the
+      // way straight out of the sandbox.
+      expect(groupsFor('')).toBe('users');
+    });
+
+    it('is still sudo,admin when the sandbox is off', () => {
+      expect(groupsFor('SANDBOX=0')).toBe('sudo,admin');
+    });
+
+    it('never overrides a DEFAULT_GROUPS somebody actually set', () => {
+      // The environment and server.conf both win over a default, everywhere
+      // else in this script. This is no different.
+      expect(groupsFor('DEFAULT_GROUPS=sudo,docker')).toBe('sudo,docker');
+      expect(groupsFor('SANDBOX=1 DEFAULT_GROUPS=admin')).toBe('admin');
+    });
+  });
+
+  describe('the sandbox subcommand', () => {
+    it('reports without root, since reading a posture is not a privileged act', () => {
+      const out = execFileSync('bash', [SCRIPT, 'sandbox', 'status'], { encoding: 'utf8' });
+      expect(out).toContain('sandbox');
+      expect(out).toMatch(/admin groups/);
+    });
+
+    it('refuses to apply without root, and names what to run instead', () => {
+      let out = '';
+      try {
+        execFileSync('bash', [SCRIPT, 'sandbox', 'apply'], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (error) {
+        out = String((error as { stderr?: Buffer }).stderr ?? '');
+      }
+      expect(out).toContain('must run as root');
+    });
+
+    it('is peeled off before the root check, like the other subcommands', () => {
+      expect(SOURCE).toMatch(/mount\|umount\|mounts\|share\|groups\|sandbox\)/);
+    });
+
+    it('is offered by the top-level help', () => {
+      const out = execFileSync('bash', [SCRIPT, '--help'], { encoding: 'utf8' });
+      expect(out).toContain('sandbox');
+    });
+  });
+
+  describe('homes', () => {
+    it('grants nginx traverse with an ACL rather than opening the home to everyone', () => {
+      // chmod o+x is what this script used to do, and it hands the path to
+      // every account on the box. u:www-data:--x says the same thing to one
+      // user — and execute only, so it can walk through without listing.
+      expect(SOURCE).toContain('setfacl -m "u:$WEB_GROUP:--x"');
+    });
+
+    it('only grants it where there is something published', () => {
+      const fn = SOURCE.slice(SOURCE.indexOf('_sandbox_home_mode() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body).toMatch(/-d "\$home\/public_html" \|\| -d "\$home\/apps"/);
+    });
+
+    it('falls back to the old behaviour when acl is not installed yet', () => {
+      // setfacl arrives with the apt stage. Failing closed here would break
+      // the user's web page on a first run instead of on no run at all.
+      const fn = SOURCE.slice(SOURCE.indexOf('_sandbox_home_mode() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body).toContain('command -v setfacl');
+      expect(body).toContain('chmod o+x');
+    });
+
+    it('covers accounts this script never created', () => {
+      const fn = SOURCE.slice(SOURCE.indexOf('configure_sandbox_homes() {'));
+      const body = fn.slice(0, fn.indexOf('\n}\n'));
+      expect(body).toContain('_sandbox_humans');
+      expect(body).not.toContain('KNOWN_USERS');
+    });
+  });
+
+  it('is wired into an ordinary run, not only into the subcommand', () => {
+    expect(SOURCE).toContain('try "sandbox" configure_user_sandbox');
+  });
+
+  it('can be turned off in one place, and says so when it is', () => {
+    expect(SOURCE).toContain('SANDBOX="${SANDBOX:-1}"');
+    expect(SOURCE).toContain('sandbox is OFF (SANDBOX=0)');
   });
 });
