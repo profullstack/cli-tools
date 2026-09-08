@@ -157,6 +157,28 @@ export const COMPANIONS: readonly Companion[] = [
     home: 'https://github.com/profullstack/kali',
   },
   {
+    name: 'telnyx',
+    // Phone numbers, messages and calls from the terminal, which is the point:
+    // the alternative is the Mission Control portal, and a number bought by
+    // clicking is a number nobody can reproduce. `telnyx number search
+    // --type toll_free`, `telnyx number order`, `telnyx call dial` -- the
+    // things you actually do to stand a phone number up.
+    //
+    // `@telnyx/api-cli`, not `@telnyx/cli`, and they are both Telnyx's. The
+    // latter is Stainless-generated over the whole API surface and its own
+    // repository documents `go install` as the way to get it; this one is the
+    // curated Node CLI, published to npm as a first-class artifact, and it is
+    // the one whose commands read like a person's. Both put `telnyx` on PATH,
+    // so this is a choice about which, not a chance to have both.
+    //
+    // A front door like `myna` and `eas`: `telnyx auth setup` writes the key
+    // to ~/.config/telnyx, and TELNYX_API_KEY works for a box where an
+    // interactive prompt is not on offer. Nothing about the account lives here.
+    install: { kind: 'npm', package: '@telnyx/api-cli' },
+    summary: 'Buy and wire phone numbers, send messages and drive calls on Telnyx',
+    home: 'https://github.com/team-telnyx/telnyx-api-cli',
+  },
+  {
     name: 'adb',
     // The Android Debug Bridge, and `fastboot` out of the same archive: one
     // download, two commands. Neither is on npm. What is published under those
