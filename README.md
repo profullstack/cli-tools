@@ -100,6 +100,7 @@ implement, because they are distributed in their own right:
 | `myna` | [mynaposter.com](https://mynaposter.com) — post, schedule and read across 25 social networks from a TUI |
 | `devdb` | [terrablue/devdb](https://github.com/terrablue/devdb) — spin up a throwaway local database for development or testing |
 | `kali` | [`@profullstack/kali`](https://github.com/profullstack/kali) — install a Kali-style web pentesting toolbelt on Debian/Ubuntu |
+| `telnyx` | [`@telnyx/api-cli`](https://github.com/team-telnyx/telnyx-api-cli) — buy and wire phone numbers, send messages and drive calls |
 
 And one group that is installed only when you ask for it, with
 `cli-tools companions --install mobile`:
@@ -118,8 +119,8 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-Six come from npm. `bw` was the first companion that is nobody's but its
-vendor's — `adb`, `expo` and `eas` are the others — and it earns the place on
+Seven come from npm. `bw` was the first companion that is nobody's but its
+vendor's — `adb`, `expo`, `eas` and `telnyx` are the others — and it earns the place on
 the same terms as the rest: published, self-installing, useful on a box with no
 checkout. It covers the secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
 team vault of shared API keys, which is a different thing from one person's
@@ -156,6 +157,20 @@ Debian/Ubuntu box, choosing apt, `go install`, gem, snap or a release binary per
 tool, so there is no need to run Kali itself. The tools are dual-use, which is
 the point of keeping it a front door: it equips a box you are authorized to
 test, and nothing about a target lives in this repository.
+
+`telnyx` is here because the alternative is a web portal, and a phone number
+bought by clicking is a number nobody can reproduce. `telnyx number search
+--type toll_free`, `telnyx number order`, `telnyx call dial` — standing a
+number up, and wiring it to something, as commands you can put in a script.
+Note which package it is: Telnyx publishes two CLIs and both put `telnyx` on
+PATH, so this is a choice about which rather than a chance to have both.
+`@telnyx/cli` is generated from their OpenAPI spec over the whole API surface
+and its own repository documents `go install` as the way to get it;
+`@telnyx/api-cli` is the curated Node one, published to npm as a first-class
+artifact, and its commands read like a person's. Like `myna` and `eas` it stays
+a front door: `telnyx auth setup` writes the key to `~/.config/telnyx`,
+`TELNYX_API_KEY` covers a box where an interactive prompt is not on offer, and
+nothing about the account lives here.
 
 `adb` is the odd one, and the reason there is a fourth kind of install. It is
 not on npm — what is published under those names is either a Node

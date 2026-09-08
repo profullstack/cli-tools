@@ -32,6 +32,7 @@ describe('the companion list', () => {
       'myna',
       'devdb',
       'kali',
+      'telnyx',
       'adb',
       'expo',
       'eas',
@@ -167,6 +168,7 @@ describe('statuses', () => {
       ['myna', 'missing'],
       ['devdb', 'missing'],
       ['kali', 'missing'],
+      ['telnyx', 'missing'],
       ['adb', 'missing'],
       ['expo', 'missing'],
       ['eas', 'missing'],
@@ -182,7 +184,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -194,7 +196,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb', 'kali']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -209,7 +211,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -226,6 +228,7 @@ describe('ensure', () => {
       // Same reason, one step further: `go install` has no bare form to add to.
       'go install github.com/terrablue/devdb@latest',
       'npm install -g @profullstack/kali@latest',
+      'npm install -g @telnyx/api-cli@latest',
     ]);
   });
 
