@@ -18,6 +18,8 @@
  * what lets install, re-install and update all be the same command.
  */
 
+import { fileURLToPath } from 'node:url';
+
 /**
  * How a companion gets onto the machine.
  *
@@ -29,13 +31,32 @@
  * registry: `go install` fetches, builds and places it in one step, which is
  * how that ecosystem distributes a command.
  *
- * All three are idempotent, which is what lets install, re-install and update
+ * `archive` is the last resort, for a vendor who publishes a binary and no
+ * installer at all: download the release, unpack it under `vendor/`, link what
+ * it contains. Google's platform-tools is the case that forced it -- `adb` is
+ * not on npm, has no install script, and the packages that claim to be it are
+ * either a Node reimplementation of the protocol or somebody's mirror of the
+ * zip. Vendoring it here is the same arrangement `install.sh` already has with
+ * the Stripe CLI, moved somewhere `cli-tools update` can reach.
+ *
+ * All four are idempotent, which is what lets install, re-install and update
  * stay the same command.
  */
 export type InstallMethod =
   | { kind: 'npm'; package: string }
   | { kind: 'script'; url: string; args?: readonly string[] }
-  | { kind: 'go'; module: string };
+  | { kind: 'go'; module: string }
+  | {
+      kind: 'archive';
+      /** What to print as the source: a url with the platform left as `<os>`. */
+      source: string;
+      /** The download, per `process.platform`. Absent means no build for that box. */
+      urls: Readonly<Partial<Record<NodeJS.Platform, string>>>;
+      /** The directory the archive unpacks into, and the name it keeps under `vendor/`. */
+      dir: string;
+      /** The binaries inside it to link onto PATH. The first one is `name`. */
+      bins: readonly string[];
+    };
 
 export interface Companion {
   /** The binary the package puts on PATH. */
@@ -44,6 +65,18 @@ export interface Companion {
   summary: string;
   /** Where to read about it, for the message printed when installing fails. */
   home: string;
+  /**
+   * A set this companion belongs to, and is installed only when asked for.
+   *
+   * No group means the default set: small, useful on any box, installed by
+   * `link` and by the installer. A group is for the ones that are neither --
+   * `mobile` puts half a gigabyte of Expo on a machine, which a web server has
+   * no use for. It is the same judgement `diskpush` gets with `--cli-only`:
+   * a command-line toolbelt does not quietly place things this size.
+   *
+   * `cli-tools companions --install mobile` is how you say yes to one.
+   */
+  group?: string;
 }
 
 export const COMPANIONS: readonly Companion[] = [
@@ -123,11 +156,174 @@ export const COMPANIONS: readonly Companion[] = [
     summary: 'Install a Kali-style web pentesting toolbelt on Debian/Ubuntu',
     home: 'https://github.com/profullstack/kali',
   },
+  {
+    name: 'adb',
+    // The Android Debug Bridge, and `fastboot` out of the same archive: one
+    // download, two commands. Neither is on npm. What is published under those
+    // names is either a Node reimplementation of the wire protocol (adbkit) or
+    // somebody's mirror of this very zip, and a debugging bridge with root on
+    // every attached device is the last thing to take from a mirror. Google
+    // publishes no installer either, only the archive -- which is what the
+    // `archive` kind exists for.
+    //
+    // Vendored under `vendor/platform-tools` for the reason the Stripe CLI is:
+    // the name should exist once. An `adb` already on PATH -- apt's, or the one
+    // inside an Android Studio SDK -- is left alone rather than shadowed, and
+    // `--force` is what says otherwise.
+    //
+    // platform-tools deliberately, not the whole SDK. `adb` and `fastboot` are
+    // what a command line needs against a device; the emulator, `sdkmanager`
+    // and the build tools want a JDK and a licence-acceptance flow, which is
+    // Android Studio's job rather than a toolbelt's.
+    install: {
+      kind: 'archive',
+      source: 'https://dl.google.com/android/repository/platform-tools-latest-<os>.zip',
+      // Windows is missing on purpose rather than for want of a build: Google
+      // publishes that zip too, but this install is symlinks into a vendor
+      // directory, which is not how a command gets onto PATH there. On Windows
+      // it is Android Studio's SDK Manager.
+      urls: {
+        linux: 'https://dl.google.com/android/repository/platform-tools-latest-linux.zip',
+        darwin: 'https://dl.google.com/android/repository/platform-tools-latest-darwin.zip',
+      },
+      dir: 'platform-tools',
+      bins: ['adb', 'fastboot'],
+    },
+    summary: 'Talk to Android devices and emulators — install, log, shell, port-forward (brings fastboot)',
+    home: 'https://developer.android.com/tools/adb',
+    group: 'mobile',
+  },
+  {
+    name: 'expo',
+    // The Expo CLI has no package of its own: it ships inside `expo`, and
+    // Expo's own advice is `npx expo` from inside a project so the CLI always
+    // matches that project's SDK. This global copy is for the other half —
+    // creating an app before a project exists, and `expo` meaning something on
+    // a box you have just sat down at. The two do not fight: `npx expo` still
+    // prefers the project's own copy when there is one.
+    //
+    // Unscoped, unlike everything above it. That was an accident of every
+    // companion having been ours or Bitwarden's, never a rule.
+    //
+    // It puts `fingerprint` and `expo-modules-autolinking` on PATH beside
+    // `expo`. Only `expo` is checked here, because the package is one thing.
+    install: { kind: 'npm', package: 'expo' },
+    summary: 'Create and run Expo apps — the CLI that npx would fetch, with no project to hand',
+    home: 'https://docs.expo.dev/more/expo-cli/',
+    group: 'mobile',
+  },
+  {
+    name: 'eas',
+    // The half of Expo that is meant to be global: builds, signing, store
+    // submission and OTA updates all happen on their infrastructure rather
+    // than in a project, and Expo documents `npm install -g eas-cli` for
+    // exactly that reason. It holds credentials for the App Store and Play
+    // Console once authenticated, so like `myna` this is a front door and
+    // nothing about the account lives here: `eas login` does that.
+    install: { kind: 'npm', package: 'eas-cli' },
+    summary: 'Build, sign and submit iOS and Android apps in the cloud, and ship OTA updates',
+    home: 'https://docs.expo.dev/eas/',
+    group: 'mobile',
+  },
 ];
+
+/**
+ * The script that installs an `archive` companion.
+ *
+ * Resolved from this file rather than passed in by the caller. Every caller
+ * would have to know the checkout root otherwise, and they would all compute
+ * it from somewhere near here anyway -- while this module already knows
+ * exactly which checkout it is part of, which is the one whose `vendor/` the
+ * download belongs in.
+ */
+export const ARCHIVE_INSTALLER = fileURLToPath(
+  new URL('../scripts/install-archive.ts', import.meta.url),
+);
+
+/**
+ * The download for this box, or null when the vendor publishes nothing for it.
+ *
+ * Null is an answer, not a failure to find one: it is what makes an install on
+ * an unsupported platform say so instead of downloading a Linux binary onto a
+ * Mac.
+ */
+export function archiveUrl(
+  companion: Companion,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
+  if (companion.install.kind !== 'archive') return null;
+  return companion.install.urls[platform] ?? null;
+}
 
 export function findCompanion(name: string): Companion | null {
   const key = String(name ?? '').trim().toLowerCase();
   return COMPANIONS.find((entry) => entry.name === key) ?? null;
+}
+
+/** Every group named by the list, in the order they first appear. */
+export function groups(list: readonly Companion[] = COMPANIONS): string[] {
+  const seen: string[] = [];
+  for (const companion of list) {
+    if (companion.group && !seen.includes(companion.group)) seen.push(companion.group);
+  }
+  return seen;
+}
+
+/** The companions installed by default: the ones in no group. */
+export function core(list: readonly Companion[] = COMPANIONS): Companion[] {
+  return list.filter((companion) => !companion.group);
+}
+
+/**
+ * Which companions a request names.
+ *
+ * Nothing named is the default set, because that is what `link` and the
+ * installer ask for and neither should adopt half a gigabyte of Expo on the
+ * strength of running an installer. A group name takes that group, a companion
+ * name takes that one, and `all` takes everything -- and anything else comes
+ * back in `unknown` rather than being quietly ignored, which is how a typo
+ * ends up looking like a group that installed nothing.
+ */
+export function select(
+  selectors: readonly string[],
+  list: readonly Companion[] = COMPANIONS,
+): { list: Companion[]; unknown: string[] } {
+  if (selectors.length === 0) return { list: core(list), unknown: [] };
+
+  const chosen: Companion[] = [];
+  const unknown: string[] = [];
+  for (const raw of selectors) {
+    const key = String(raw ?? '').trim().toLowerCase();
+    if (key === 'all') {
+      for (const companion of list) if (!chosen.includes(companion)) chosen.push(companion);
+      continue;
+    }
+    const matches = list.filter(
+      (companion) => companion.name === key || companion.group === key,
+    );
+    if (matches.length === 0) {
+      unknown.push(raw);
+      continue;
+    }
+    for (const companion of matches) if (!chosen.includes(companion)) chosen.push(companion);
+  }
+  // Back into list order, so the output does not depend on how it was asked for.
+  return { list: list.filter((companion) => chosen.includes(companion)), unknown };
+}
+
+/**
+ * What an update should touch: the default set, plus whatever grouped
+ * companions this box actually has.
+ *
+ * Update means update, not adopt. Someone who never asked for the mobile set
+ * should not find `eas` installed because they ran `cli-tools update`, and
+ * someone who did ask should not have to ask again every time.
+ */
+export function forUpdate(
+  onPath: (name: string) => string | null,
+  list: readonly Companion[] = COMPANIONS,
+): Companion[] {
+  return list.filter((companion) => !companion.group || onPath(companion.name));
 }
 
 export interface InstallCommand {
@@ -160,6 +356,17 @@ export function installCommand(companion: Companion, { latest = false } = {}): I
     return { command: 'go', args: ['install', spec], display: `go install ${spec}` };
   }
 
+  if (companion.install.kind === 'archive') {
+    // The only companion kind whose installer is ours. There is no upstream
+    // command to run: something has to fetch the archive, unpack it under
+    // `vendor/` and link what it contains, and that something is
+    // `scripts/install-archive.ts`. `--force` is this kind's `@latest` --
+    // without it the script leaves an existing install, or somebody else's
+    // binary of that name, exactly where it is.
+    const args = latest ? [ARCHIVE_INSTALLER, companion.name, '--force'] : [ARCHIVE_INSTALLER, companion.name];
+    return { command: 'node', args, display: `node ${args.join(' ')}` };
+  }
+
   const { url, args = [] } = companion.install;
   // Piped into sh the same way the project documents it, so this and a manual
   // install take the same path and cannot drift apart.
@@ -174,6 +381,8 @@ export function source(companion: Companion): string {
       return companion.install.package;
     case 'go':
       return companion.install.module;
+    case 'archive':
+      return companion.install.source;
     default:
       return companion.install.url;
   }
@@ -228,7 +437,10 @@ export function ensure(
     onPath,
     run,
     latest = false,
-    list = COMPANIONS,
+    // The default set, not every companion. A caller that forgets to say which
+    // ones it wants should get the small, universally useful ones -- never half
+    // a gigabyte of Expo on a box that asked for a link.
+    list = core(),
   }: {
     onPath: (name: string) => string | null;
     run: (command: InstallCommand) => { status: number | null; stderr?: string };

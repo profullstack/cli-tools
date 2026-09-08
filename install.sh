@@ -105,9 +105,9 @@ CLI_TOOLS_PREFIX="$PREFIX" node "$HOME_DIR/scripts/install-links.mjs" $LINK_ARGS
 
 # ── Companions ───────────────────────────────────────────────────────────────
 #
-# Commands this set ships but does not implement: published npm packages that
-# bring their own binary. The list lives in src/companions.ts and is read from
-# there rather than repeated here, so adding one is a single-file change.
+# Commands this set ships but does not implement: published packages that bring
+# their own binary. The list lives in src/companions.ts and is read from there
+# rather than repeated here, so adding one is a single-file change.
 #
 # Run through the checkout's own dispatcher rather than $PREFIX/cli-tools: the
 # link above is refused when another checkout already owns that name, and this
@@ -118,7 +118,10 @@ CLI_TOOLS_PREFIX="$PREFIX" node "$HOME_DIR/scripts/install-links.mjs" $LINK_ARGS
 # succeeded — and CLI_TOOLS_NO_COMPANIONS=1 skips it entirely for anyone who
 # would rather manage those packages themselves.
 if [ "${CLI_TOOLS_NO_COMPANIONS:-0}" != "1" ]; then
-	say "Installing npm companions (timer, billing)"
+	say "Installing companions (timer, billing, bw, …)"
+	# The default set only. The grouped ones -- `mobile`, which is adb plus half
+	# a gigabyte of Expo -- are installed when somebody asks for them and not
+	# because they ran an installer. `cli-tools companions` names them.
 	"$HOME_DIR/bin/cli-tools.ts" companions --install ||
 		printf 'cli-tools: companions skipped. Install them later with: cli-tools companions --install\n' >&2
 fi

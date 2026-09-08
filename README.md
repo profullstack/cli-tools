@@ -57,6 +57,8 @@ One thing here is not a `PATH` command and does not need Node:
   [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
+- **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
+  it: the archive Google publishes is a zip, and Node cannot read one
 - **Network on first use** — `favicon` only: the generation is
   [`@profullstack/favicon-generator`](https://github.com/profullstack/favicon-generator),
   fetched by `npx` rather than installed here (about seven seconds the first
@@ -99,16 +101,27 @@ implement, because they are distributed in their own right:
 | `devdb` | [terrablue/devdb](https://github.com/terrablue/devdb) — spin up a throwaway local database for development or testing |
 | `kali` | [`@profullstack/kali`](https://github.com/profullstack/kali) — install a Kali-style web pentesting toolbelt on Debian/Ubuntu |
 
+And one group that is installed only when you ask for it, with
+`cli-tools companions --install mobile`:
+
+| | |
+| --- | --- |
+| `adb` | [platform-tools](https://developer.android.com/tools/adb) — talk to Android devices and emulators: install, log, shell, port-forward. Brings `fastboot` |
+| `expo` | [Expo CLI](https://docs.expo.dev/more/expo-cli/) — create and run Expo apps, with no project to hand |
+| `eas` | [EAS CLI](https://docs.expo.dev/eas/) — build, sign and submit iOS and Android apps in the cloud, and ship OTA updates |
+
 They are not `bin/*.ts` like everything else here for a reason: they run on
 Windows, which this install cannot (it is symlinks into a git checkout executed
-through an `npx tsx` shebang), and they are useful with no checkout at all —
+through an `npx tsx` shebang — `adb` is the one exception, and says so below),
+and they are useful with no checkout at all —
 under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-Four come from npm. `bw` is the only companion that is nobody's but its
-vendor's; it earns the place on the same terms as the rest, and covers the
-secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
+Six come from npm. `bw` was the first companion that is nobody's but its
+vendor's — `adb`, `expo` and `eas` are the others — and it earns the place on
+the same terms as the rest: published, self-installing, useful on a box with no
+checkout. It covers the secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
 team vault of shared API keys, which is a different thing from one person's
 passwords. Note that its binary is `bw` while its package is `@bitwarden/cli`:
 the two need not match, which is why the binary name is stated rather than
@@ -144,7 +157,45 @@ tool, so there is no need to run Kali itself. The tools are dual-use, which is
 the point of keeping it a front door: it equips a box you are authorized to
 test, and nothing about a target lives in this repository.
 
-All three kinds are idempotent, which is what lets install, re-install and update be
+`adb` is the odd one, and the reason there is a fourth kind of install. It is
+not on npm — what is published under those names is either a Node
+reimplementation of the wire protocol or somebody's mirror of Google's zip, and
+a debugging bridge that gets a root shell on every attached device is the last
+thing to take from a mirror. Google publishes no installer either, only
+`platform-tools-latest-<os>.zip`. So `scripts/install-archive.ts` fetches it,
+unpacks it under `vendor/platform-tools` and links `adb` and `fastboot` — the
+same arrangement `install.sh` already has with the Stripe CLI, moved somewhere
+`cli-tools update` can reach. An `adb` already on PATH, apt's or an Android
+Studio SDK's, is left alone rather than shadowed; `--force` is how you say
+otherwise, and it names what it is now competing with. There is no checksum to
+check, which is worth saying rather than quietly skipping: Google publishes none
+beside that alias, so the guarantee is TLS to dl.google.com and the sha256 of
+what landed is printed. It needs `unzip` (or `bsdtar`) on the box, and there is
+no Windows entry on purpose — this install is symlinks into a vendor directory,
+which is not how a command reaches PATH there. Use Android Studio's SDK Manager.
+
+`expo` and `eas` are why groups exist at all. The Expo CLI has no package of its
+own: it ships inside `expo`, and Expo's own advice is `npx expo` from inside a
+project so the CLI matches that project's SDK — this global copy is for the
+other half, creating an app before a project exists. `eas` is the half that is
+meant to be global, since builds, signing, store submission and OTA updates all
+happen on their infrastructure; like `myna` it is a front door and `eas login`
+does the credential handling. Between them they are about half a gigabyte, which
+a web server has no use for, so they are installed on request rather than by
+`link` — the same judgement `diskpush --cli-only` gets. `cli-tools update`
+follows the same rule: it updates the mobile commands you have and never adopts
+the ones you do not.
+
+Deliberately not here, for native mobile work: `scrcpy` (mirror and control an
+Android screen) is a distro package — `apt install scrcpy` or `snap install
+scrcpy`; the Android `cmdline-tools` that carry `sdkmanager`, `avdmanager` and
+the emulator want a JDK and a licence-acceptance flow, which is Android
+Studio's job; and [Maestro](https://maestro.mobile.dev)'s installer is a bash
+script that appends to your shell rc files and needs Java, which is not a thing
+this should do to a box on your behalf — `curl -Ls https://get.maestro.mobile.dev
+| bash` if you want it.
+
+All four kinds are idempotent, which is what lets install, re-install and update be
 the same command. `CLI_TOOLS_NO_COMPANIONS=1` skips them, and a failure warns
 rather than failing the install.
 
