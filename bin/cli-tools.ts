@@ -54,10 +54,15 @@ import {
 } from '../src/registry.ts';
 import {
   COMPANIONS,
+  core as coreCompanions,
   ensure as ensureCompanions,
+  forUpdate as companionsToUpdate,
+  groups as companionGroups,
   installCommand,
+  select as selectCompanions,
   source as companionSource,
   statuses as companionStatuses,
+  type Companion,
 } from '../src/companions.ts';
 
 export const USAGE = `Usage:
@@ -66,7 +71,7 @@ export const USAGE = `Usage:
   cli-tools autoupdate [--install [--hours N] | --remove]
   cli-tools link [--force]
   cli-tools unlink
-  cli-tools companions [--install [--force]]
+  cli-tools companions [<name|group>…] [--install [--force]]
   cli-tools aliases [--install]
   cli-tools config [pull | set <key> [value] | unset <key>]
   cli-tools <command> [args…]
@@ -79,8 +84,11 @@ Commands:
   autoupdate  A systemd user timer that runs "update --auto" for you
   link      Symlink the commands into ~/.local/bin, and install the companions
   unlink    Remove the symlinks we own (companions are left installed)
-  companions  The commands that come from npm rather than this checkout
+  companions  The commands that come from elsewhere rather than this checkout
             "--install" installs the missing ones, "--force" updates them all
+            Name a companion or a group to reach past the default set:
+            "companions --install mobile" adds adb, expo and eas; "all" adds
+            every one of them
   aliases   Print the moshcode pit aliases, or write them with --install
   config    API keys: what is set, where it came from, and how to change it
             "config pull" imports them from the logicsrc team vault
@@ -137,7 +145,13 @@ function runLinks(root: string, args: readonly string[]): number {
  * for `cli-tools link` to report that the linking did not happen. The line is
  * printed to stderr so it stays out of anything reading stdout.
  */
-function installCompanions({ latest = false, quiet = false } = {}): ReturnType<typeof ensureCompanions> {
+function installCompanions(
+  { latest = false, quiet = false, list = coreCompanions() }: {
+    latest?: boolean;
+    quiet?: boolean;
+    list?: readonly Companion[];
+  } = {},
+): ReturnType<typeof ensureCompanions> {
   const results = ensureCompanions({
     onPath: (name) => whichOnPath(name),
     run: ({ command, args }) => {
@@ -146,6 +160,7 @@ function installCompanions({ latest = false, quiet = false } = {}): ReturnType<t
       return { status: out.status, stderr: out.stderr };
     },
     latest,
+    list,
   });
 
   if (quiet) return results;
@@ -162,6 +177,27 @@ function installCompanions({ latest = false, quiet = false } = {}): ReturnType<t
     );
   }
   return results;
+}
+
+/**
+ * One line about a set this box has not asked for.
+ *
+ * Printed rather than acted on. A group exists because installing it by
+ * default would be a surprise -- the mobile one is half a gigabyte of Expo --
+ * and a toolbelt that then nags about it every run has only moved the
+ * surprise. So: named once, where someone is already reading companion output.
+ */
+function groupHint(): string {
+  const lines: string[] = [];
+  for (const group of companionGroups()) {
+    const members = COMPANIONS.filter((entry) => entry.group === group);
+    if (members.every((entry) => whichOnPath(entry.name))) continue;
+    lines.push(
+      `${group}: ${members.map((entry) => entry.name).join(', ')} — ` +
+        `\`cli-tools companions --install ${group}\``,
+    );
+  }
+  return lines.join('\n');
 }
 
 /** Pull and relink. Dependencies come first so a new one is present before use. */
@@ -190,7 +226,11 @@ function update(root: string): number {
   // After the links, so a failed npm never hides a failed relink. `--latest`
   // here is what makes `update` mean update for the companions too: a bare
   // `npm install -g <pkg>` leaves an already-satisfied version in place.
-  installCompanions({ latest: true });
+  //
+  // Only what this box actually has, though: update means update, not adopt.
+  // Someone who never asked for the mobile set should not find `eas` on their
+  // machine because they ran `cli-tools update`.
+  installCompanions({ latest: true, list: companionsToUpdate((name) => whichOnPath(name)) });
   return linked;
 }
 
@@ -625,15 +665,20 @@ export async function run(argv: readonly string[]): Promise<number> {
       // A separate block, because they are a different kind of thing: these
       // come from npm and run with no checkout, so the *-ours / !-shadowed
       // marks above would be answering a question that does not apply.
-      process.stdout.write('\nFrom npm:\n');
+      process.stdout.write('\nCompanions:\n');
       for (const entry of companions) {
         const mark = entry.state === 'installed' ? '*' : ' ';
-        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
+        const tag = entry.group ? ` [${entry.group}]` : '';
+        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}${tag}\n`);
       }
 
       const other = all.filter((entry) => entry.status === 'other');
       const missing = all.filter((entry) => entry.status === 'missing');
-      const absent = companions.filter((entry) => entry.state === 'missing');
+      // Only the default set counts as missing. A grouped companion nobody
+      // asked for is not a gap in the install, and `--install` would not
+      // install it anyway -- saying "3 not installed" and then not installing
+      // them is the kind of lie a status line only gets to tell once.
+      const absent = companions.filter((entry) => entry.state === 'missing' && !entry.group);
 
       process.stdout.write('\n');
       if (absent.length > 0) {
@@ -681,6 +726,8 @@ export async function run(argv: readonly string[]): Promise<number> {
     case 'link': {
       const linked = runLinks(root, options.flags.has('--force') ? ['--force'] : []);
       installCompanions();
+      const hint = groupHint();
+      if (hint) process.stdout.write(`\nInstalled only when asked for:\n  ${hint}\n`);
       return linked;
     }
 
@@ -692,24 +739,39 @@ export async function run(argv: readonly string[]): Promise<number> {
       return runLinks(root, ['--remove']);
 
     case 'companions': {
+      // Positional, so `cli-tools companions --install mobile` reads as the
+      // sentence it is. Nothing named is the default set, which is what the
+      // installer and `link` ask for.
+      const { list: selected, unknown } = selectCompanions(options.positional);
+      if (unknown.length > 0) {
+        process.stderr.write(
+          `companions: no companion or group called ${unknown.join(', ')}.\n` +
+            `            groups: ${companionGroups().join(', ')}, or "all"\n`,
+        );
+        return 1;
+      }
+
       if (options.flags.has('--json')) {
         const rows = options.flags.has('--install')
-          ? installCompanions({ latest: options.flags.has('--force'), quiet: true })
+          ? installCompanions({ latest: options.flags.has('--force'), quiet: true, list: selected })
           : companionStatuses((name) => whichOnPath(name));
         process.stdout.write(`${JSON.stringify({ companions: rows }, null, 2)}\n`);
         return 0;
       }
       if (options.flags.has('--install')) {
-        installCompanions({ latest: options.flags.has('--force') });
+        installCompanions({ latest: options.flags.has('--force'), list: selected });
         return 0;
       }
-      process.stdout.write('Published separately, installed from npm:\n\n');
+      process.stdout.write('Published separately, installed alongside the commands here:\n\n');
       for (const entry of companionStatuses((name) => whichOnPath(name))) {
         const mark = entry.state === 'installed' ? '*' : ' ';
-        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}\n`);
+        const tag = entry.group ? ` [${entry.group}]` : '';
+        process.stdout.write(`${mark} ${entry.name.padEnd(16)} ${entry.summary}${tag}\n`);
         process.stdout.write(`${' '.repeat(19)}${companionSource(entry)}\n`);
       }
       process.stdout.write('\nInstall or update them with `cli-tools companions --install`.\n');
+      const hint = groupHint();
+      if (hint) process.stdout.write(`Installed only when asked for:\n  ${hint}\n`);
       return 0;
     }
 
