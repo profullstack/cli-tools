@@ -13,6 +13,7 @@ and what failed.
 | `/myna:feed` | Read a timeline, the history of what was sent, and the engagement. |
 | `/myna:draft` | Draft copy from a topic or a link. It never posts on its own. |
 | `/myna:infographic` | Render a graphic whose text is exactly the copy chosen for it. |
+| `/myna:directory` | List the product itself in a software directory, over its MCP server. |
 | `/myna:mcp` | Give an agent the same vault over MCP, without a login tool. |
 
 ## Install
