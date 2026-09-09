@@ -24,6 +24,7 @@ TypeScript, installed as executables on `PATH`.
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
+| [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 
@@ -66,6 +67,9 @@ One thing here is not a `PATH` command and does not need Node:
 - **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
   npm package, installed on first use, and upstream's engine floor is higher
   than this repo's
+- **Node 24+ and `pnpm` or `npm`** — `agenticjobs` only, for the same reason:
+  the board is an npm package installed on first use, and it asks for a newer
+  Node than anything else here
 
 ## Install
 
@@ -1292,6 +1296,59 @@ Installed rather than `pnpm dlx`-ed each time because dlx checks the registry
 before every launch, which is fine for a one-shot and wrong for a dashboard you
 open twenty times a day. Upstream wants **Node 22.13+**; on an older one it says
 so and tries anyway, since that floor is theirs to move.
+
+### `agenticjobs`
+
+The job board where the applying is done by agents, from the terminal:
+[@profullstack/agenticjobs](https://www.npmjs.com/package/@profullstack/agenticjobs),
+the same board that runs at [agenticjobs.work](https://agenticjobs.work).
+
+```sh
+agenticjobs signup                      # an account, and this box signed in
+agenticjobs search rust --remote        # the board you are on
+agenticjobs search go --network         # every board in the directory
+agenticjobs apply <slug> --resume cv.md
+agenticjobs post job.md                 # then `publish <slug>` to go live
+agenticjobs tui                         # the full-screen client
+agenticjobs mcp                         # stdio MCP server for the board
+agenticjobs --help                      # it is upstream's CLI: upstream's flags
+```
+
+Everything is handed through untouched, so upstream's docs are the docs. Two
+flags are ours, spelled `--self-*` because every plain word belongs to them:
+
+```sh
+agenticjobs --self-update               # reinstall the latest release
+agenticjobs --self-where                # which copy runs, and from where
+```
+
+**The first run installs it**, into
+`~/.local/share/cli-tools/vendor/agenticjobs` rather than globally. That matters
+more here than for the other wrapped packages, because upstream's own executable
+is *also* called `agenticjobs`: a global install would put two of that name on
+`PATH` and the winner would come down to the order of two directories, and if
+ours won and it followed `PATH` it would exec itself. A private prefix means the
+name exists once. `AGENTICJOBS_BIN` points at a copy you would rather run, and
+`AGENTICJOBS_SPEC` pins a version.
+
+**Three plain words are intercepted, and only for the copy we installed.**
+`update`, `uninstall` and `where` are upstream's, and upstream answers them from
+a `manifest.json` that its own `curl` installer writes. A copy npm puts in our
+prefix has no manifest, so upstream would answer "not installed by the
+installer" on a box where this command plainly did install it and works. So
+those three are answered here when the board that would run is ours, and handed
+straight through when it is not: a board from upstream's installer, or one
+pointed at with `AGENTICJOBS_BIN`, keeps upstream's behaviour exactly.
+
+That last case is not hypothetical. Upstream's installer writes a real shell
+script to `~/.local/bin/agenticjobs`, which is the same directory this repo
+links into, and `install-links.mjs` never takes over a real file even with
+`--force`. On a box that already ran `curl -fsSL https://agenticjobs.work/install.sh | sh`
+you will see `SKIP … is a real file` and keep the board you already had. Remove
+that script first if you want this wrapper to own the name.
+
+Upstream wants **Node 24+**, which is higher than this repo's own floor of 22.18;
+on an older one it says so and tries anyway, since that floor is theirs to move.
 
 ### `shorten`
 
