@@ -25,6 +25,7 @@ TypeScript, installed as executables on `PATH`.
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
+| [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 
@@ -67,9 +68,10 @@ One thing here is not a `PATH` command and does not need Node:
 - **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
   npm package, installed on first use, and upstream's engine floor is higher
   than this repo's
-- **Node 24+ and `pnpm` or `npm`** — `agenticjobs` only, for the same reason:
-  the board is an npm package installed on first use, and it asks for a newer
-  Node than anything else here
+- **Node 24+ and `pnpm` or `npm`** — `agenticjobs` and `openmcp` only, for the
+  same reason: each is an npm package installed on first use, and both ask for
+  a newer Node than anything else here (`openmcp` keeps its catalog in
+  `node:sqlite`)
 
 ## Install
 
@@ -1349,6 +1351,57 @@ that script first if you want this wrapper to own the name.
 
 Upstream wants **Node 24+**, which is higher than this repo's own floor of 22.18;
 on an older one it says so and tries anyway, since that floor is theirs to move.
+
+### `openmcp`
+
+The OpenMCP catalog of MCP relays, from the terminal:
+[@logicsrc/openmcp](https://www.npmjs.com/package/@logicsrc/openmcp), the
+reference client and server for the [OpenMCP](https://logicsrc.com/openmcp)
+spec, pointed by default at the live catalog at
+[openmcp.logicsrc.com](https://openmcp.logicsrc.com).
+
+```sh
+openmcp relays                          # what the catalog lists, online and verified
+openmcp find "fetch a page"             # search every relay's tools
+openmcp call obscura.openmcp.logicsrc.com fetch_page '{"url":"https://example.com"}'
+openmcp add https://your.site           # register a relay you operate (probed, then listed)
+openmcp probe https://your.site         # what a catalog would find, without one
+openmcp serve                           # run a catalog of your own
+openmcp --help                          # it is upstream's CLI: upstream's flags
+```
+
+Everything is handed through untouched, so upstream's docs are the docs. Two
+flags are ours, spelled `--self-*` because every plain word belongs to them:
+
+```sh
+openmcp --self-update                   # reinstall the latest release
+openmcp --self-where                    # which copy runs, and from where
+```
+
+**The first run installs it**, into `~/.local/share/cli-tools/vendor/openmcp`
+rather than globally, for the reason [`agenticjobs`](#agenticjobs) spells out:
+upstream's executable is also called `openmcp`, and a private prefix means the
+name exists once. `OPENMCP_BIN` points at a copy you would rather run, and
+`OPENMCP_SPEC` pins a version.
+
+**Three plain words are intercepted, and only for the copy we installed.**
+`update`, `uninstall` and `where` are upstream's, answered from the
+`manifest.json` its own installer writes; a copy npm puts in our prefix has
+none, so those three are answered here when the copy that would run is ours
+and handed through when it is not.
+
+Upstream's own installer is one line and brings its own Node 24 when the box
+has none:
+
+```sh
+curl -fsSL https://openmcp.logicsrc.com/install.sh | sh
+```
+
+It writes a real script to `~/.local/bin/openmcp`, the directory this repo
+links into, and `install-links.mjs` never takes over a real file even with
+`--force`: on a box that ran it you will see `SKIP … is a real file` and keep
+the copy you already had, which is the right outcome. Remove that script first
+if you want this wrapper to own the name.
 
 ### `shorten`
 
