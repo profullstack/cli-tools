@@ -199,6 +199,8 @@ export interface RunOptions {
   hours: number;
   dataDir: string;
   from: string;
+  /** Fine-grained progress (every few repos) for a spinner; the coarse lines still go to `deps.log`. */
+  progress?: (line: string) => void;
 }
 
 export interface RunDeps {
@@ -1087,13 +1089,17 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
   deps.log(`${repos.length} repos`);
 
   // 2. traffic for all of them: the bulk of the calls
+  const tick = opt.progress ?? (() => {});
+  const counter = (what: string, total: number) => { let done = 0; return () => { done += 1; if (done % 10 === 0 || done === total) tick(`${what} ${done}/${total}`); }; };
   const R = new Map<string, RepoState>();
+  const trafficDone = counter('traffic', repos.length);
   await Promise.all(repos.map((r) => gh.limit(async () => {
     const [v, c] = await Promise.all([
       gh.get<{ views: Bucket[] }>(`/repos/${r.full_name}/traffic/views`, { allow: [403, 404] }),
       gh.get<{ clones: Bucket[] }>(`/repos/${r.full_name}/traffic/clones`, { allow: [403, 404] }),
     ]);
     R.set(r.full_name, { repo: r, views: v.data?.views ?? null, clones: c.data?.clones ?? null, trafficOk: !!(v.data && c.data), m: emptyMovement() });
+    trafficDone();
   })));
 
   // 3. movement per repo
@@ -1118,10 +1124,12 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
 
   // 4. detail for candidates
   const budget = pageBudget('daily');
+  const detailDone = counter('events', R.size);
   await Promise.all([...R.values()].map((x) => gh.limit(async () => {
     const n = x.repo.full_name;
     const m = x.m;
     const hasBaseline = prevRepos.has(n);
+    detailDone();
     if (needStars.has(n)) {
       const { logins } = await collectStars(gh, n, cutoffMs, budget.stars);
       m.newStargazers = logins;
@@ -1274,6 +1282,8 @@ export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()
   // The ledger: every snapshot, plus today's live fourteen days on top.
   const ledger = buildLedger(listSnapshots(opt.dataDir).flatMap((f) => { try { return [readSnapshot(f)]; } catch { return []; } }));
   const R = new Map<string, RepoState>();
+  const counter = (what: string, total: number) => { let done = 0; return () => { done += 1; if (done % 10 === 0 || done === total) say(`${what} ${done}/${total}`); }; };
+  const trafficDone = counter('traffic', repos.length);
   await Promise.all(repos.map((r) => gh.limit(async () => {
     const [v, c] = await Promise.all([
       gh.get<{ views: Bucket[] }>(`/repos/${r.full_name}/traffic/views`, { allow: [403, 404] }),
@@ -1283,6 +1293,7 @@ export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()
     const clones = c.data?.clones ?? null;
     mergeBuckets(ledger, r.full_name, views, clones);
     R.set(r.full_name, { repo: r, views, clones, trafficOk: !!(v.data && c.data), m: emptyMovement() });
+    trafficDone();
   })));
   say(`${repos.length} repos, traffic merged into the ledger`);
 
@@ -1299,10 +1310,12 @@ export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()
 
   const cap = commitCapFor(days);
   let partialRepos = 0;
+  const eventsDone = counter('events', R.size);
   await Promise.all([...R.values()].map((x) => gh.limit(async () => {
     const r = x.repo;
     const n = r.full_name;
     const m = x.m;
+    eventsDone();
     const dv = ledgerSum(ledger.views.get(n), fromDay, toDay);
     const dc = ledgerSum(ledger.clones.get(n), fromDay, toDay);
     m.views = dv.count; m.uniques = dv.uniques; m.clones = dc.count; m.cloners = dc.uniques;

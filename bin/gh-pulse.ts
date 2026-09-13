@@ -68,6 +68,28 @@ export const USAGE = `Usage:
   gh-pulse json [--range KEY]
   gh-pulse --help`;
 
+/**
+ * A busy line on stderr while a scan runs, when stderr is a terminal. Progress
+ * lines replace each other on one row; the last one is left standing when the
+ * scan ends. Without a terminal (cron, a pipe) every line is printed plainly.
+ */
+export function ttySpinner(label: string, stream: NodeJS.WriteStream = process.stderr): { progress: (line: string) => void; done: () => void } {
+  if (!stream.isTTY) {
+    return { progress: (line) => stream.write(`gh-pulse: ${line}\n`), done: () => {} };
+  }
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let i = 0;
+  let line = '';
+  const draw = (): void => { stream.write(`\r\x1b[K${frames[i % frames.length]} ${label}${line ? `: ${line}` : ''}`); i += 1; };
+  const timer = setInterval(draw, 80);
+  timer.unref();
+  draw();
+  return {
+    progress: (l) => { line = l; draw(); },
+    done: () => { clearInterval(timer); stream.write(`\r\x1b[K${line ? `gh-pulse: ${line}\n` : ''}`); },
+  };
+}
+
 function specFrom(rangeText: string | undefined, sinceText: string | undefined, now: Date): RangeSpec | null {
   if (rangeText !== undefined && sinceText !== undefined) throw new UsageError('pass --range or --since, not both');
   if (sinceText !== undefined) return customRange(sinceText, now);
@@ -122,7 +144,10 @@ export async function main(argv: readonly string[]): Promise<number> {
     return showTui(dir, { range: startKey, loadRange: (key, progress) => loadRange(rangeSpec(key, deps.now()), progress) });
   }
   if (verb === 'open' || verb === 'text' || verb === 'json') {
-    if (spec) await loadRange(spec, deps.log);
+    if (spec) {
+      const sp = ttySpinner(`gh-pulse ${spec.label}`);
+      try { await loadRange(spec, sp.progress); } finally { sp.done(); }
+    }
     const paths = spec ? rangeOutputPaths(dir, rangeSlug(spec, repos)) : outputPaths(dir);
     if (verb === 'open') {
       if (openInBrowser(paths.html)) return 0;
@@ -143,11 +168,14 @@ export async function main(argv: readonly string[]): Promise<number> {
     // A range scan prints the report; mail is opt-in, and the baseline never moves.
     const send = parsed.flags.has('--send');
     if (send && !to) throw new UsageError('no recipient: pass --to, set GH_PULSE_TO, or configure git user.email');
+    const sp = ttySpinner(`gh-pulse ${spec.label}`);
     try {
-      await rangeScan({ spec, top, repos, dataDir: dir, send, to, from }, deps);
+      await rangeScan({ spec, top, repos, dataDir: dir, send, to, from, progress: sp.progress }, deps);
+      sp.done();
       process.stdout.write(readFileSync(rangeOutputPaths(dir, rangeSlug(spec, repos)).text, 'utf8'));
       return 0;
     } catch (error) {
+      sp.done();
       process.stderr.write(`gh-pulse: ${(error as Error).stack ?? String(error)}\n`);
       return 1;
     }
@@ -155,10 +183,14 @@ export async function main(argv: readonly string[]): Promise<number> {
 
   if (!to) throw new UsageError('no recipient: pass --to, set GH_PULSE_TO, or configure git user.email');
   const dryRun = parsed.flags.has('--dry-run');
+  const sp = ttySpinner(dryRun ? 'gh-pulse dry run' : 'gh-pulse daily run');
   try {
-    await run({ dryRun, to, from, top, hours, repos, dataDir: dir }, deps);
+    // On a terminal the coarse log lines ride the spinner too; in cron they print as before.
+    await run({ dryRun, to, from, top, hours, repos, dataDir: dir, progress: sp.progress }, process.stderr.isTTY ? { ...deps, log: sp.progress } : deps);
+    sp.done();
     return 0;
   } catch (error) {
+    sp.done();
     process.stderr.write(`gh-pulse: ${(error as Error).stack ?? String(error)}\n`);
     if (!dryRun) await sendFailure(error, to, from, deps.resendKey(), deps.fetch);
     return 1;
