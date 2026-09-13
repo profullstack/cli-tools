@@ -169,6 +169,21 @@ export interface ReportContext {
   port: Portfolio;
   trafficBlind: number;
   portfolioImg: string;
+  /** Set by a range scan; the daily run leaves it out. */
+  range?: RangeInfo;
+  /** The per-repo day series a range scan charts; the daily run uses fourteenDays. */
+  series?: (x: RepoState, kind: 'views' | 'clones') => Day[];
+}
+
+export interface RangeInfo {
+  key: RangeKey | 'custom';
+  label: string;
+  since: string;
+  fromDay: string;
+  toDay: string;
+  coverage: string;
+  partialRepos: number;
+  days: number;
 }
 
 export interface Image {
@@ -353,6 +368,172 @@ export function baselineFor(prev: Snapshot | null, now: Date): Snapshot | null {
   return ageH >= 6 && ageH <= 96 ? prev : null;
 }
 
+// ---------------------------------------------------------------- ranges
+
+export const RANGE_KEYS = ['hour', 'day', 'week', 'month', 'quarter', 'year', 'all'] as const;
+export type RangeKey = (typeof RANGE_KEYS)[number];
+
+const DAY_MS = 86400000;
+export const RANGE_MS: Record<RangeKey, number> = {
+  hour: 3600000, day: DAY_MS, week: 7 * DAY_MS, month: 30 * DAY_MS, quarter: 91 * DAY_MS, year: 365 * DAY_MS, all: Number.POSITIVE_INFINITY,
+};
+export const RANGE_LABEL: Record<RangeKey, string> = {
+  hour: 'last hour', day: 'last 24 hours', week: 'last 7 days', month: 'last 30 days', quarter: 'last 90 days', year: 'last 365 days', all: 'all time',
+};
+const RANGE_ALIASES: Record<string, RangeKey> = {
+  h: 'hour', '1h': 'hour', hour: 'hour', lasthour: 'hour',
+  d: 'day', '1d': 'day', '24h': 'day', day: 'day', today: 'day', yesterday: 'day', lastday: 'day',
+  w: 'week', '7d': 'week', '1w': 'week', week: 'week', lastweek: 'week',
+  m: 'month', '30d': 'month', '1m': 'month', month: 'month', lastmonth: 'month',
+  q: 'quarter', '90d': 'quarter', '3m': 'quarter', quarter: 'quarter', lastquarter: 'quarter',
+  y: 'year', '365d': 'year', '1y': 'year', '12m': 'year', year: 'year', lastyear: 'year',
+  a: 'all', all: 'all', alltime: 'all', 'all-time': 'all', ever: 'all', forever: 'all',
+};
+
+/** What one report covers: a named range, or a custom start date. */
+export interface RangeSpec {
+  key: RangeKey | 'custom';
+  since: Date;
+  label: string;
+  /** File-safe name for out/range/<slug>.* */
+  slug: string;
+}
+
+export function parseRangeKey(text: string): RangeKey | null {
+  return RANGE_ALIASES[text.trim().toLowerCase().replace(/[\s_]+/g, '')] ?? null;
+}
+
+export function rangeSpec(key: RangeKey, now: Date): RangeSpec {
+  const since = key === 'all' ? new Date(0) : new Date(now.getTime() - RANGE_MS[key]);
+  return { key, since, label: RANGE_LABEL[key], slug: key };
+}
+
+/** The cache name: a `--repo` subset gets its own file so the TUI never shows three repos as the whole portfolio. */
+export const rangeSlug = (spec: RangeSpec, repos: readonly string[]): string => (repos.length ? `${spec.slug}-subset` : spec.slug);
+
+export function customRange(sinceText: string, now: Date): RangeSpec {
+  const t = Date.parse(sinceText.length === 10 ? `${sinceText}T00:00:00Z` : sinceText);
+  if (!Number.isFinite(t) || t > now.getTime()) throw new Error(`--since wants a past date like 2026-09-01, not ${sinceText}`);
+  const since = new Date(t);
+  return { key: 'custom', since, label: `since ${since.toISOString().slice(0, 10)}`, slug: `since-${since.toISOString().slice(0, 10)}` };
+}
+
+export const rangeDays = (spec: RangeSpec, now: Date): number =>
+  spec.key === 'all' ? Number.POSITIVE_INFINITY : Math.max(1, Math.ceil((now.getTime() - spec.since.getTime()) / DAY_MS));
+
+/** Commits are capped per day so one busy afternoon cannot outrank a star; longer ranges get a proportionally larger cap. */
+export const commitCapFor = (days: number): number => (Number.isFinite(days) ? COMMIT_CAP * Math.max(1, days) : Number.POSITIVE_INFINITY);
+
+/** How many pages each endpoint may be walked for a range. Longer ranges pay more; `all` pays what it takes, within reason. */
+export interface PageBudget { commits: number; pulls: number; issues: number; releases: number; stars: number; forks: number }
+export function pageBudget(key: RangeKey | 'custom' | 'daily', days = 1): PageBudget {
+  const k = key === 'custom' ? (days <= 1 ? 'day' : days <= 7 ? 'week' : days <= 31 ? 'month' : days <= 92 ? 'quarter' : days <= 366 ? 'year' : 'all') : key;
+  switch (k) {
+    case 'daily': case 'hour': case 'day': return { commits: 3, pulls: 1, issues: 2, releases: 1, stars: 2, forks: 1 };
+    case 'week': return { commits: 5, pulls: 3, issues: 3, releases: 1, stars: 3, forks: 1 };
+    case 'month': return { commits: 15, pulls: 10, issues: 8, releases: 2, stars: 5, forks: 2 };
+    case 'quarter': return { commits: 30, pulls: 20, issues: 15, releases: 3, stars: 10, forks: 3 };
+    case 'year': return { commits: 60, pulls: 40, issues: 30, releases: 5, stars: 20, forks: 5 };
+    default: return { commits: 100, pulls: 100, issues: 100, releases: 10, stars: 60, forks: 10 };
+  }
+}
+
+// ---------------------------------------------------------------- ledger
+//
+// GitHub keeps traffic for fourteen days. Every daily snapshot stores that
+// window, so laying the snapshots end to end gives a per-repo, per-day series
+// that only grows. The newest snapshot that mentions a day wins, because
+// GitHub revises a day's numbers for a while after first publishing them.
+
+export interface Ledger {
+  views: Map<string, Map<string, Bucket>>;
+  clones: Map<string, Map<string, Bucket>>;
+  /** One point per snapshot, oldest first. */
+  points: { at: string; stars: number; followers: string[]; starsByRepo: Map<string, number>; forksByRepo: Map<string, number> }[];
+  firstDay: string | null;
+}
+
+export function buildLedger(snapshots: Snapshot[]): Ledger {
+  const ledger: Ledger = { views: new Map(), clones: new Map(), points: [], firstDay: null };
+  for (const s of [...snapshots].sort((a, b) => a.at.localeCompare(b.at))) {
+    const starsByRepo = new Map<string, number>();
+    const forksByRepo = new Map<string, number>();
+    let stars = 0;
+    for (const [name, r] of Object.entries(s.repos)) {
+      starsByRepo.set(name, r.stars);
+      forksByRepo.set(name, r.forks);
+      stars += r.stars;
+      mergeBuckets(ledger, name, r.views, r.clones);
+    }
+    ledger.points.push({ at: s.at, stars, followers: s.followers, starsByRepo, forksByRepo });
+  }
+  return ledger;
+}
+
+export function mergeBuckets(ledger: Ledger, name: string, views: Bucket[] | null, clones: Bucket[] | null): void {
+  for (const [kind, buckets] of [['views', views], ['clones', clones]] as const) {
+    if (!buckets) continue;
+    let m = ledger[kind].get(name);
+    if (!m) { m = new Map(); ledger[kind].set(name, m); }
+    for (const b of buckets) {
+      const day = b.timestamp.slice(0, 10);
+      m.set(day, { timestamp: `${day}T00:00:00Z`, count: b.count, uniques: b.uniques });
+      if (ledger.firstDay === null || day < ledger.firstDay) ledger.firstDay = day;
+    }
+  }
+}
+
+/** Views or clones for one repo between two days inclusive. */
+export function ledgerSum(series: Map<string, Bucket> | undefined, fromDay: string, toDay: string): { count: number; uniques: number } {
+  let count = 0;
+  let uniques = 0;
+  for (const [day, b] of series ?? []) {
+    if (day >= fromDay && day <= toDay) { count += b.count; uniques += b.uniques; }
+  }
+  return { count, uniques };
+}
+
+/** A zero-filled day series between two days inclusive, oldest first. */
+export function ledgerDays(series: Map<string, Bucket> | undefined, fromDay: string, toDay: string): Day[] {
+  const out: Day[] = [];
+  const start = Date.parse(`${fromDay}T00:00:00Z`);
+  const end = Date.parse(`${toDay}T00:00:00Z`);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return out;
+  for (let t = start; t <= end; t += DAY_MS) {
+    const day = new Date(t).toISOString().slice(0, 10);
+    const b = series?.get(day);
+    out.push({ day, count: b ? b.count : 0, uniques: b ? b.uniques : 0 });
+  }
+  return out;
+}
+
+/** Fold a long day series into at most `maxBars` bars so a year still reads as a chart. Each bar is labelled by its first day. */
+export function foldDays(days: Day[], maxBars: number): Day[] {
+  if (days.length <= maxBars) return days;
+  const size = Math.ceil(days.length / maxBars);
+  const out: Day[] = [];
+  for (let i = 0; i < days.length; i += size) {
+    const chunk = days.slice(i, i + size);
+    out.push({ day: chunk[0]!.day, count: chunk.reduce((t, d) => t + d.count, 0), uniques: chunk.reduce((t, d) => t + d.uniques, 0) });
+  }
+  return out;
+}
+
+/**
+ * The newest snapshot taken at or before `since`, else null. A snapshot from
+ * inside the range is not a baseline: measured against it, a week's stars
+ * would shrink to whatever arrived since this morning.
+ */
+export function pointAt(ledger: Ledger, since: Date): Ledger['points'][number] | null {
+  const sinceIso = since.toISOString();
+  let before: Ledger['points'][number] | null = null;
+  for (const p of ledger.points) {
+    if (p.at <= sinceIso) before = p;
+    else break;
+  }
+  return before;
+}
+
 // ---------------------------------------------------------------- snapshots
 
 export function snapshotsDir(dir: string): string {
@@ -518,7 +699,7 @@ function bars({ title, color, days }: ChartSeries, x0: number, y0: number, w: nu
     if (d.count && (i === peak || i === n - 1)) {
       s += `<text x="${(bx + bw / 2).toFixed(1)}" y="${(baseY - bh - 4).toFixed(1)}" font-size="10" fill="#0b0b0b" text-anchor="middle">${d.count}</text>`;
     }
-    if (i === 0 || i === n - 1 || i === 7) {
+    if (i === 0 || i === n - 1 || i === Math.floor(n / 2)) {
       s += `<text x="${(bx + bw / 2).toFixed(1)}" y="${baseY + 13}" font-size="9" fill="#52514e" text-anchor="middle">${d.day.slice(5)}</text>`;
     }
   });
@@ -582,28 +763,29 @@ export function renderHtml(c: ReportContext): string {
     `<div style="font-size:24px;font-weight:600;color:#0b0b0b;line-height:1.2">${value}</div>` +
     (sub ? `<div style="font-size:12px;color:#52514e">${sub}</div>` : '') + '</td>';
   const n = (v: number): string => v.toLocaleString('en-US');
-  const starDelta = c.prevTotalStars === null ? 'all repos' : `${signed(c.totalStars - c.prevTotalStars)} in window`;
+  const inWindow = c.range ? c.range.label : 'in window';
+  const starDelta = c.prevTotalStars === null ? 'all repos' : c.range?.key === 'all' ? 'all repos' : `${signed(c.totalStars - c.prevTotalStars)} ${inWindow}`;
   const followerDelta = c.useBaseline
-    ? `${signed(c.followerMoves.gained.length - c.followerMoves.lost.length)} (${c.followerMoves.gained.length} new, ${c.followerMoves.lost.length} lost)`
-    : 'baseline captured';
+    ? `${signed(c.followerMoves.gained.length - c.followerMoves.lost.length)} (${c.followerMoves.gained.length} new, ${c.followerMoves.lost.length} lost)${c.range ? ` ${c.range.label}` : ''}`
+    : c.range ? `no snapshot yet from the start of the range` : 'baseline captured';
   const userLink = (l: string): string => `<a href="https://github.com/${esc(l)}" style="color:#2a78d6">${esc(l)}</a>`;
   const refLink = (p: Ref): string => `<a href="${esc(p.url)}" style="color:#2a78d6">#${p.n}</a> ${esc(p.t)}`;
 
   let h = `<div style="background:#f4f4f2;padding:16px 8px;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;color:#0b0b0b">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:680px;margin:0 auto;background:#fcfcfb;border-radius:10px"><tr><td style="padding:20px 22px">
-<div style="font-size:20px;font-weight:700">GitHub pulse</div>
-<div style="font-size:13px;color:#52514e;margin-top:2px">${esc(c.login)} · ${fmtWhen(c.now)} · window ${windowH}h since ${fmtWhen(c.cutoff)}${c.useBaseline ? '' : ' (no previous snapshot; clock window)'}</div>
+<div style="font-size:20px;font-weight:700">GitHub pulse${c.range ? ` · ${esc(c.range.label)}` : ''}</div>
+<div style="font-size:13px;color:#52514e;margin-top:2px">${esc(c.login)} · ${fmtWhen(c.now)} · ${c.range ? esc(c.range.coverage) : `window ${windowH}h since ${fmtWhen(c.cutoff)}${c.useBaseline ? '' : ' (no previous snapshot; clock window)'}`}</div>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="6" style="margin:14px -6px 0;border-collapse:separate"><tr>
 ${tile('Repos moved', movers.length, `of ${c.repoCount} scanned`)}
 ${tile('Stars', n(c.totalStars), starDelta)}
 ${tile('Views', n(c.port.views), `${n(c.port.uniques)} unique visitors · ${esc(c.trafficLabel)}`)}
 ${tile('Clones', n(c.port.clones), `${n(c.port.cloners)} unique cloners · ${esc(c.trafficLabel)}`)}
 </tr></table>
-<div style="font-size:13px;color:#52514e;margin-top:8px">Followers: ${n(c.followers.length)} · ${followerDelta}${c.trafficBlind ? ` · traffic unavailable for ${c.trafficBlind} repos (no push access)` : ''}</div>
-<img src="${c.portfolioImg}" width="640" alt="14-day views and clones across all repos" style="display:block;width:100%;max-width:640px;height:auto;margin:14px 0 6px;border:1px solid #e6e5e1;border-radius:8px">
+<div style="font-size:13px;color:#52514e;margin-top:8px">Followers: ${n(c.followers.length)} · ${followerDelta}${c.trafficBlind ? ` · traffic unavailable for ${c.trafficBlind} repos (no push access)` : ''}${c.range?.partialRepos ? ` · counts for ${c.range.partialRepos} repos are lower bounds (page budget reached)` : ''}</div>
+<img src="${c.portfolioImg}" width="640" alt="${c.range ? esc(c.range.label) : '14-day'} views and clones across all repos" style="display:block;width:100%;max-width:640px;height:auto;margin:14px 0 6px;border:1px solid #e6e5e1;border-radius:8px">
 `;
 
-  h += '<div style="font-size:15px;font-weight:700;margin:18px 0 6px">Ranked by movement</div>';
+  h += `<div style="font-size:15px;font-weight:700;margin:18px 0 6px">Ranked by movement${c.range ? `, ${esc(c.range.label)}` : ''}</div>`;
   if (movers.length === 0) h += '<div style="font-size:13px;color:#52514e">Nothing moved in the window.</div>';
   h += '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:13px;border-collapse:collapse">';
   movers.slice(0, 40).forEach((x, i) => {
@@ -627,7 +809,7 @@ ${tile('Clones', n(c.port.clones), `${n(c.port.cloners)} unique cloners · ${esc
 <div style="font-size:12px;color:#52514e;margin:2px 0 6px">${esc(movementBits(m).join(' · ') || 'traffic only')}</div>`;
     if (x.trafficOk) {
       h += `<table role="presentation" cellpadding="0" cellspacing="0" style="font-size:12px;border-collapse:collapse;margin-bottom:6px">
-<tr style="color:#52514e"><td style="padding:2px 14px 2px 0"></td><td style="padding:2px 14px 2px 0;text-align:right">${esc(c.trafficLabel)}</td><td style="padding:2px 0;text-align:right">14 days to ${esc(c.newestDay)}</td></tr>
+<tr style="color:#52514e"><td style="padding:2px 14px 2px 0"></td><td style="padding:2px 14px 2px 0;text-align:right">${esc(c.range ? c.range.label : c.trafficLabel)}</td><td style="padding:2px 0;text-align:right">14 days to ${esc(c.newestDay)}</td></tr>
 <tr><td style="padding:2px 14px 2px 0">Views / unique visitors</td><td style="padding:2px 14px 2px 0;text-align:right;font-weight:600">${m.views} / ${m.uniques}</td><td style="padding:2px 0;text-align:right">${v14}</td></tr>
 <tr><td style="padding:2px 14px 2px 0">Clones / unique cloners</td><td style="padding:2px 14px 2px 0;text-align:right;font-weight:600">${m.clones} / ${m.cloners}</td><td style="padding:2px 0;text-align:right">${c14}</td></tr>
 </table>`;
@@ -671,8 +853,8 @@ ${tile('Clones', n(c.port.clones), `${n(c.port.cloners)} unique cloners · ${esc
 
 export function renderText(c: ReportContext): string {
   const out: string[] = [];
-  out.push(`GITHUB PULSE ${isoDay(c.now)} (${c.login})`);
-  out.push(`window since ${c.cutoff.toISOString()} · traffic: ${c.trafficLabel}, newest GitHub day ${c.newestDay}`);
+  out.push(`GITHUB PULSE ${isoDay(c.now)} (${c.login})${c.range ? ` · ${c.range.label}` : ''}`);
+  out.push(c.range ? c.range.coverage : `window since ${c.cutoff.toISOString()} · traffic: ${c.trafficLabel}, newest GitHub day ${c.newestDay}`);
   out.push('');
   out.push(`${c.movers.length} of ${c.repoCount} repos moved · stars ${c.totalStars}${c.prevTotalStars === null ? '' : ` (${signed(c.totalStars - c.prevTotalStars)})`} · views ${c.port.views}/${c.port.uniques} unique · clones ${c.port.clones}/${c.port.cloners} unique · followers ${c.followers.length} (${signed(c.followerMoves.gained.length - c.followerMoves.lost.length)})`);
   out.push('');
@@ -695,6 +877,8 @@ export interface ReportJson {
   followersLost: string[];
   totals: { repos: number; stars: number; starsDelta: number | null; views: number; uniques: number; clones: number; cloners: number };
   movers: ReportMover[];
+  /** Present on range reports. */
+  range?: RangeInfo;
 }
 
 export interface ReportMover {
@@ -717,6 +901,7 @@ export function reportJson(c: ReportContext): ReportJson {
     since: c.cutoff.toISOString(),
     newestTrafficDay: c.newestDay,
     trafficLabel: c.trafficLabel,
+    ...(c.range ? { range: c.range } : {}),
     user: c.login,
     followers: c.followers.length,
     followersGained: c.followerMoves.gained,
@@ -728,7 +913,8 @@ export function reportJson(c: ReportContext): ReportJson {
     movers: c.movers.map((x) => ({
       repo: x.repo.full_name, private: x.repo.private, url: x.repo.html_url, stars: x.repo.stargazers_count, forks: x.repo.forks_count,
       score: Number(x.m.score.toFixed(2)), movement: x.m,
-      views14d: fourteenDays(x.views, c.newestDay), clones14d: fourteenDays(x.clones, c.newestDay),
+      views14d: c.series ? c.series(x, 'views') : fourteenDays(x.views, c.newestDay),
+      clones14d: c.series ? c.series(x, 'clones') : fourteenDays(x.clones, c.newestDay),
       referrers: x.referrers ?? [], paths: x.paths ?? [],
     })),
   };
@@ -790,9 +976,77 @@ export async function sendFailure(error: unknown, to: string, from: string, key:
 interface StarEntry { starred_at: string; user: { login: string } }
 interface ForkEntry { full_name: string; created_at: string }
 interface CommitEntry { author?: { login?: string } | null; commit?: { author?: { name?: string } } }
-interface PullEntry { number: number; title: string; created_at: string; merged_at: string | null; closed_at: string | null; user?: { login?: string }; html_url: string }
+interface PullEntry { number: number; title: string; created_at: string; updated_at: string; merged_at: string | null; closed_at: string | null; user?: { login?: string }; html_url: string }
 interface IssueEntry { number: number; title: string; created_at: string; closed_at: string | null; user?: { login?: string }; html_url: string; pull_request?: unknown }
-interface ReleaseEntry { tag_name: string; published_at: string | null; html_url: string }
+interface ReleaseEntry { tag_name: string; published_at: string | null; created_at: string; html_url: string }
+
+/** Walk pages newest-first until `stop` says the rest is older than we need, or the budget is spent. Returns whether the walk was cut short. */
+async function walk<T>(gh: GitHub, path: string, max: number, stop: (item: T) => boolean, options: { accept?: string; allow?: number[] } = {}): Promise<{ items: T[]; partial: boolean }> {
+  const items: T[] = [];
+  let url: string | undefined = path;
+  for (let i = 0; url; i += 1) {
+    if (i >= max) return { items, partial: true };
+    const { data, link } = await gh.get<T[]>(url, options);
+    if (!Array.isArray(data)) break;
+    items.push(...data);
+    const last = data[data.length - 1];
+    if (last !== undefined && stop(last)) break;
+    url = nextLink(link);
+  }
+  return { items, partial: false };
+}
+
+/** Commits, PRs, issues and releases since `cutoffMs`, written into `m`. */
+export async function collectEvents(gh: GitHub, name: string, cutoffMs: number, budget: PageBudget, m: Movement): Promise<boolean> {
+  const cutoffIso = new Date(cutoffMs).toISOString();
+  const older = (iso: string | null | undefined): boolean => !!iso && Date.parse(iso) < cutoffMs;
+  const [commits, pulls, issues, releases] = await Promise.all([
+    walk<CommitEntry>(gh, `/repos/${name}/commits?since=${cutoffIso}&per_page=100`, budget.commits, () => false, { allow: [409, 404] }),
+    walk<PullEntry>(gh, `/repos/${name}/pulls?state=all&sort=updated&direction=desc&per_page=100`, budget.pulls, (p) => older(p.updated_at), { allow: [404] }),
+    walk<IssueEntry>(gh, `/repos/${name}/issues?state=all&since=${cutoffIso}&sort=updated&per_page=100`, budget.issues, () => false, { allow: [404] }),
+    walk<ReleaseEntry>(gh, `/repos/${name}/releases?per_page=100`, budget.releases, (r) => older(r.published_at ?? r.created_at), { allow: [404] }),
+  ]);
+  m.commits = commits.items.length;
+  m.authors = [...new Set(commits.items.map((c) => c.author?.login ?? c.commit?.author?.name).filter((a): a is string => !!a))];
+  for (const pr of pulls.items) {
+    const ref: Ref = { n: pr.number, t: pr.title, u: pr.user?.login ?? '', url: pr.html_url };
+    if (Date.parse(pr.created_at) >= cutoffMs) { m.prOpened += 1; m.openedPrs.push(ref); }
+    if (pr.merged_at && Date.parse(pr.merged_at) >= cutoffMs) { m.prMerged += 1; m.mergedPrs.push(ref); }
+    else if (pr.closed_at && Date.parse(pr.closed_at) >= cutoffMs) m.prClosed += 1;
+  }
+  for (const is of issues.items) {
+    if (is.pull_request) continue;
+    if (Date.parse(is.created_at) >= cutoffMs) { m.issuesOpened += 1; m.openedIssues.push({ n: is.number, t: is.title, u: is.user?.login ?? '', url: is.html_url }); }
+    if (is.closed_at && Date.parse(is.closed_at) >= cutoffMs) m.issuesClosed += 1;
+  }
+  for (const rel of releases.items) {
+    if (rel.published_at && Date.parse(rel.published_at) >= cutoffMs) { m.releases += 1; m.releaseList.push({ tag: rel.tag_name, url: rel.html_url }); }
+  }
+  return commits.partial || pulls.partial || issues.partial || releases.partial;
+}
+
+/** Stargazers since `cutoffMs`, newest first. GitHub lists stars oldest first, so the walk starts at the LAST page and moves back. */
+export async function collectStars(gh: GitHub, name: string, cutoffMs: number, maxPages: number): Promise<{ logins: string[]; partial: boolean }> {
+  const accept = 'application/vnd.github.star+json';
+  const first = await gh.get<StarEntry[]>(`/repos/${name}/stargazers?per_page=100`, { accept, allow: [404] });
+  if (!first.data) return { logins: [], partial: false };
+  const last = lastPage(first.link);
+  const logins: string[] = [];
+  let partial = false;
+  for (let page = last, walked = 0; page >= 1; page -= 1, walked += 1) {
+    if (walked >= maxPages) { partial = true; break; }
+    const data = page === 1 ? first.data : (await gh.get<StarEntry[]>(`/repos/${name}/stargazers?per_page=100&page=${page}`, { accept })).data ?? [];
+    const recent = data.filter((s) => Date.parse(s.starred_at) >= cutoffMs);
+    logins.push(...recent.map((s) => s.user.login).reverse());
+    if (recent.length < data.length) break; // the rest of this page, and every earlier page, is older
+  }
+  return { logins, partial };
+}
+
+export async function collectForks(gh: GitHub, name: string, cutoffMs: number, maxPages: number): Promise<{ names: string[]; partial: boolean }> {
+  const r = await walk<ForkEntry>(gh, `/repos/${name}/forks?sort=newest&per_page=100`, maxPages, (f) => Date.parse(f.created_at) < cutoffMs, { allow: [404] });
+  return { names: r.items.filter((f) => Date.parse(f.created_at) >= cutoffMs).map((f) => f.full_name), partial: r.partial };
+}
 
 export const defaultDeps = (): RunDeps => ({
   fetch: globalThis.fetch,
@@ -863,50 +1117,22 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
   }
 
   // 4. detail for candidates
+  const budget = pageBudget('daily');
   await Promise.all([...R.values()].map((x) => gh.limit(async () => {
     const n = x.repo.full_name;
     const m = x.m;
     const hasBaseline = prevRepos.has(n);
     if (needStars.has(n)) {
-      // Newest stargazers live on the LAST page.
-      const first = await gh.get<StarEntry[]>(`/repos/${n}/stargazers?per_page=100`, { accept: 'application/vnd.github.star+json', allow: [404] });
-      let page = first.data ?? [];
-      const last = lastPage(first.link);
-      if (last > 1) page = (await gh.get<StarEntry[]>(`/repos/${n}/stargazers?per_page=100&page=${last}`, { accept: 'application/vnd.github.star+json' })).data ?? [];
-      const recent = page.filter((s) => Date.parse(s.starred_at) >= cutoffMs);
-      m.newStargazers = recent.map((s) => s.user.login).reverse();
-      if (!hasBaseline) m.stars = recent.length;
+      const { logins } = await collectStars(gh, n, cutoffMs, budget.stars);
+      m.newStargazers = logins;
+      if (!hasBaseline) m.stars = logins.length;
     }
     if (needForks.has(n)) {
-      const f = await gh.get<ForkEntry[]>(`/repos/${n}/forks?sort=newest&per_page=30`, { allow: [404] });
-      const recent = (f.data ?? []).filter((k) => Date.parse(k.created_at) >= cutoffMs);
-      m.newForks = recent.map((k) => k.full_name);
-      if (!hasBaseline) m.forks = recent.length;
+      const { names } = await collectForks(gh, n, cutoffMs, budget.forks);
+      m.newForks = names;
+      if (!hasBaseline) m.forks = names.length;
     }
-    if (needEvents.has(n)) {
-      const [commits, pulls, issues, releases] = await Promise.all([
-        gh.all<CommitEntry>(`/repos/${n}/commits?since=${cutoffIso}&per_page=100`, { max: 3, allow: [409, 404] }),
-        gh.get<PullEntry[]>(`/repos/${n}/pulls?state=all&sort=updated&direction=desc&per_page=60`, { allow: [404] }),
-        gh.all<IssueEntry>(`/repos/${n}/issues?state=all&since=${cutoffIso}&sort=updated&per_page=100`, { max: 2, allow: [404] }),
-        gh.get<ReleaseEntry[]>(`/repos/${n}/releases?per_page=10`, { allow: [404] }),
-      ]);
-      m.commits = commits.length;
-      m.authors = [...new Set(commits.map((c) => c.author?.login ?? c.commit?.author?.name).filter((a): a is string => !!a))];
-      for (const pr of pulls.data ?? []) {
-        const ref: Ref = { n: pr.number, t: pr.title, u: pr.user?.login ?? '', url: pr.html_url };
-        if (Date.parse(pr.created_at) >= cutoffMs) { m.prOpened += 1; m.openedPrs.push(ref); }
-        if (pr.merged_at && Date.parse(pr.merged_at) >= cutoffMs) { m.prMerged += 1; m.mergedPrs.push(ref); }
-        else if (pr.closed_at && Date.parse(pr.closed_at) >= cutoffMs) m.prClosed += 1;
-      }
-      for (const is of issues) {
-        if (is.pull_request) continue;
-        if (Date.parse(is.created_at) >= cutoffMs) { m.issuesOpened += 1; m.openedIssues.push({ n: is.number, t: is.title, u: is.user?.login ?? '', url: is.html_url }); }
-        if (is.closed_at && Date.parse(is.closed_at) >= cutoffMs) m.issuesClosed += 1;
-      }
-      for (const rel of releases.data ?? []) {
-        if (rel.published_at && Date.parse(rel.published_at) >= cutoffMs) { m.releases += 1; m.releaseList.push({ tag: rel.tag_name, url: rel.html_url }); }
-      }
-    }
+    if (needEvents.has(n)) await collectEvents(gh, n, cutoffMs, budget, m);
     m.score = score(m);
     m.mover = isMover(m);
   })));
@@ -1007,6 +1233,198 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
   }
   deps.log(`${gh.calls.made} API calls (${gh.calls.retries} retries), ${gh.remaining} remaining this hour`);
   return { subject, movers: movers.length, repos: repos.length, sent, snapshot: snapshotFile, html, calls: gh.calls.made };
+}
+
+// ---------------------------------------------------------------- range scans
+//
+// A range scan answers "what moved in the last week / month / quarter / year /
+// ever" on demand. Events come live from GitHub for the whole range; traffic
+// comes from the ledger, because GitHub only serves fourteen days of it and the
+// ledger is where every earlier day survives. It never moves the daily
+// baseline and never writes a snapshot.
+
+export interface RangeOptions {
+  spec: RangeSpec;
+  top: number;
+  repos: string[];
+  dataDir: string;
+  send: boolean;
+  to: string;
+  from: string;
+  /** Skip the live GitHub calls for events; traffic and star totals still come from the ledger and the listing. */
+  progress?: (line: string) => void;
+}
+
+export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()): Promise<{ report: ReportJson; html: string; subject: string; sent: boolean; calls: number }> {
+  const gh = new GitHub(deps.token(), deps.fetch);
+  const now = deps.now();
+  const { spec } = opt;
+  const cutoffMs = spec.since.getTime();
+  const days = rangeDays(spec, now);
+  const budget = pageBudget(spec.key, days);
+  const say = opt.progress ?? deps.log;
+
+  const me = (await gh.get<{ login: string; followers: number }>('/user')).data!;
+  say(`${me.login}, ${spec.label}${spec.key === 'all' ? '' : ` (since ${spec.since.toISOString()})`}`);
+
+  let repos = await gh.all<RepoInfo>('/user/repos?affiliation=owner,organization_member&per_page=100&sort=pushed', { max: 30 });
+  repos = repos.filter((r) => !r.fork);
+  if (opt.repos.length) repos = repos.filter((r) => opt.repos.includes(r.full_name));
+
+  // The ledger: every snapshot, plus today's live fourteen days on top.
+  const ledger = buildLedger(listSnapshots(opt.dataDir).flatMap((f) => { try { return [readSnapshot(f)]; } catch { return []; } }));
+  const R = new Map<string, RepoState>();
+  await Promise.all(repos.map((r) => gh.limit(async () => {
+    const [v, c] = await Promise.all([
+      gh.get<{ views: Bucket[] }>(`/repos/${r.full_name}/traffic/views`, { allow: [403, 404] }),
+      gh.get<{ clones: Bucket[] }>(`/repos/${r.full_name}/traffic/clones`, { allow: [403, 404] }),
+    ]);
+    const views = v.data?.views ?? null;
+    const clones = c.data?.clones ?? null;
+    mergeBuckets(ledger, r.full_name, views, clones);
+    R.set(r.full_name, { repo: r, views, clones, trafficOk: !!(v.data && c.data), m: emptyMovement() });
+  })));
+  say(`${repos.length} repos, traffic merged into the ledger`);
+
+  const newest = newestDay([...R.values()].flatMap((x) => [x.views, x.clones]), isoDay(now));
+  // Traffic is daily, so an hour is the newest day GitHub has; anything longer is the range clipped to what the ledger has.
+  const fromDay = spec.key === 'hour' ? newest : spec.key === 'all' ? (ledger.firstDay ?? newest) : isoDay(spec.since) > (ledger.firstDay ?? '0') ? isoDay(spec.since) : (ledger.firstDay ?? isoDay(spec.since));
+  const toDay = newest;
+  const coverage = spec.key === 'hour'
+    ? `traffic is daily; showing GitHub's newest day, ${newest}`
+    : `traffic covers ${fromDay} to ${toDay}${ledger.firstDay && isoDay(spec.since) < ledger.firstDay && spec.key !== 'all' ? ' (the ledger starts there; GitHub keeps 14 days and the daily snapshots keep the rest)' : ''}`;
+
+  // Baseline point for followers and net stars: a snapshot from before the range started, if there is one.
+  const start = spec.key === 'all' ? null : pointAt(ledger, spec.since);
+
+  const cap = commitCapFor(days);
+  let partialRepos = 0;
+  await Promise.all([...R.values()].map((x) => gh.limit(async () => {
+    const r = x.repo;
+    const n = r.full_name;
+    const m = x.m;
+    const dv = ledgerSum(ledger.views.get(n), fromDay, toDay);
+    const dc = ledgerSum(ledger.clones.get(n), fromDay, toDay);
+    m.views = dv.count; m.uniques = dv.uniques; m.clones = dc.count; m.cloners = dc.uniques;
+    let partial = false;
+    if (spec.key === 'all') {
+      m.stars = r.stargazers_count;
+      m.forks = r.forks_count;
+      if (r.stargazers_count > 0) { const s = await collectStars(gh, n, 0, budget.stars); m.newStargazers = s.logins; partial ||= s.partial; }
+      if (r.forks_count > 0) { const f = await collectForks(gh, n, 0, budget.forks); m.newForks = f.names; partial ||= f.partial; }
+    } else {
+      if (r.stargazers_count > 0) { const s = await collectStars(gh, n, cutoffMs, budget.stars); m.newStargazers = s.logins; m.stars = s.logins.length; partial ||= s.partial; }
+      if (r.forks_count > 0) { const f = await collectForks(gh, n, cutoffMs, budget.forks); m.newForks = f.names; m.forks = f.names.length; partial ||= f.partial; }
+      // Net movement can be negative; the snapshot at the start of the range knows.
+      const then = start?.starsByRepo.get(n);
+      if (then !== undefined && r.stargazers_count - then < m.stars) m.stars = r.stargazers_count - then;
+    }
+    const touched = spec.key === 'all' || Date.parse(r.pushed_at) >= cutoffMs || Date.parse(r.updated_at) >= cutoffMs;
+    if (touched) partial = (await collectEvents(gh, n, cutoffMs, budget, m)) || partial;
+    if (partial) partialRepos += 1;
+    const W = WEIGHTS;
+    m.score = Math.max(0, m.stars) * W.star + Math.max(0, m.forks) * W.fork + m.uniques * W.unique + m.views * W.view +
+      m.clones * W.clone + m.cloners * W.cloner + Math.min(m.commits, cap) * W.commit +
+      m.prOpened * W.prOpened + m.prMerged * W.prMerged + m.prClosed * W.prClosed +
+      m.issuesOpened * W.issueOpened + m.issuesClosed * W.issueClosed + m.releases * W.release;
+    m.mover = isMover(m);
+  })));
+  say(`events collected (${gh.calls.made} calls so far)`);
+
+  const movers = [...R.values()].filter((x) => x.m.mover).sort((a, b) => b.m.score - a.m.score);
+  await Promise.all(movers.map((x) => gh.limit(async () => {
+    if (!x.trafficOk) return;
+    const n = x.repo.full_name;
+    const [ref, paths] = await Promise.all([
+      gh.get<Referrer[]>(`/repos/${n}/traffic/popular/referrers`, { allow: [403, 404] }),
+      gh.get<PopularPath[]>(`/repos/${n}/traffic/popular/paths`, { allow: [403, 404] }),
+    ]);
+    x.referrers = ref.data ?? [];
+    x.paths = paths.data ?? [];
+  })));
+
+  const followers = (await gh.all<{ login: string }>('/user/followers?per_page=100', { max: 60 })).map((u) => u.login).sort();
+  const startFollowers = new Set(start?.followers ?? []);
+  const followerMoves = start
+    ? { gained: followers.filter((l) => !startFollowers.has(l)), lost: [...startFollowers].filter((l) => !followers.includes(l)) }
+    : { gained: [], lost: [] };
+
+  const totalStars = repos.reduce((s, r) => s + r.stargazers_count, 0);
+  // Only the scanned repos count, so a --repo run does not compare three repos against the whole portfolio.
+  const prevTotalStars = spec.key === 'all' ? 0 : start
+    ? repos.reduce((s, r) => s + (start.starsByRepo.get(r.full_name) ?? r.stargazers_count), 0)
+    : totalStars - [...R.values()].reduce((s, x) => s + Math.max(0, x.m.stars), 0);
+  const port: Portfolio = { views: 0, uniques: 0, clones: 0, cloners: 0, viewsByDay: new Map(), clonesByDay: new Map() };
+  for (const x of R.values()) {
+    port.views += x.m.views; port.uniques += x.m.uniques; port.clones += x.m.clones; port.cloners += x.m.cloners;
+    for (const b of ledgerDays(ledger.views.get(x.repo.full_name), fromDay, toDay)) port.viewsByDay.set(b.day, (port.viewsByDay.get(b.day) ?? 0) + b.count);
+    for (const b of ledgerDays(ledger.clones.get(x.repo.full_name), fromDay, toDay)) port.clonesByDay.set(b.day, (port.clonesByDay.get(b.day) ?? 0) + b.count);
+  }
+  const trafficBlind = [...R.values()].filter((x) => !x.trafficOk).length;
+
+  const images: Image[] = [];
+  const addImage = (id: string, svg: string): string => { images.push({ id, buf: deps.render(svg) }); return `cid:${id}`; };
+  const portDays = [...port.viewsByDay.keys()].sort();
+  const fold = (d: Day[]): Day[] => foldDays(d, 60);
+  const portfolioImg = addImage('portfolio', chartPair(
+    { title: `Views per ${portDays.length > 60 ? 'period' : 'day'}, all repos`, color: '#2a78d6', days: fold(portDays.map((d) => ({ day: d, count: port.viewsByDay.get(d) ?? 0, uniques: 0 }))) },
+    { title: `Clones per ${portDays.length > 60 ? 'period' : 'day'}, all repos`, color: '#eb6834', days: fold(portDays.map((d) => ({ day: d, count: port.clonesByDay.get(d) ?? 0, uniques: 0 }))) },
+    640, 170));
+  const detailed = movers.slice(0, opt.top);
+  const seriesFor = (x: RepoState, kind: 'views' | 'clones'): Day[] => fold(ledgerDays(ledger[kind].get(x.repo.full_name), fromDay, toDay));
+  for (const x of detailed) {
+    if (!x.trafficOk) continue;
+    x.img = addImage(`r${x.repo.id}`, chartPair(
+      { title: 'Views', color: '#2a78d6', days: seriesFor(x, 'views') },
+      { title: 'Clones', color: '#eb6834', days: seriesFor(x, 'clones') }, 640, 120));
+  }
+
+  const ctx: ReportContext = {
+    login: me.login, now, cutoff: spec.key === 'all' ? new Date(`${fromDay}T00:00:00Z`) : spec.since, useBaseline: !!start, newestDay: newest,
+    trafficLabel: spec.label, repoCount: repos.length, movers, detailed, followers, followerMoves, totalStars, prevTotalStars, port, trafficBlind, portfolioImg,
+    range: { key: spec.key, label: spec.label, since: spec.since.toISOString(), fromDay, toDay, coverage, partialRepos, days },
+    series: seriesFor,
+  };
+  const html = renderHtml(ctx);
+  const text = renderText(ctx);
+  const report = reportJson(ctx);
+  const out = join(opt.dataDir, 'out', 'range');
+  const slug = rangeSlug(spec, opt.repos);
+  mkdirSync(join(out, 'charts'), { recursive: true });
+  writeFileSync(join(out, `${slug}.html`), html.replace(/cid:([\w-]+)/g, (_, id: string) => `data:image/png;base64,${images.find((i) => i.id === id)?.buf.toString('base64') ?? ''}`));
+  writeFileSync(join(out, `${slug}.txt`), text);
+  writeFileSync(join(out, `${slug}.json`), `${JSON.stringify(report, null, 2)}\n`);
+  for (const i of images) writeFileSync(join(out, 'charts', `${slug}-${i.id}.png`), i.buf);
+
+  const subject = `GitHub pulse, ${spec.label}: ${movers.length} repos moved, ${signed(totalStars - prevTotalStars)} stars, ${port.views} views, ${port.clones} clones`;
+  let sent = false;
+  if (opt.send) {
+    const key = deps.resendKey();
+    if (!key) throw new Error('RESEND_API_KEY is not set (and not in ~/.config/logicsrc/shell.env)');
+    await sendResend({ to: opt.to, from: opt.from, subject, html, text, images }, key, deps.fetch);
+    sent = true;
+    say(`sent to ${opt.to}: ${subject}`);
+  }
+  say(`${gh.calls.made} API calls (${gh.calls.retries} retries), ${gh.remaining} remaining this hour`);
+  return { report, html, subject, sent, calls: gh.calls.made };
+}
+
+/** The cached range report, if one exists and is younger than `maxAgeMs`. */
+export function readRangeReport(dir: string, slug: string, maxAgeMs = 3600000): ReportJson | null {
+  const p = join(dir, 'out', 'range', `${slug}.json`);
+  if (!existsSync(p)) return null;
+  try {
+    const r = JSON.parse(readFileSync(p, 'utf8')) as ReportJson;
+    if (Date.now() - Date.parse(r.at) > maxAgeMs) return null;
+    return r;
+  } catch {
+    return null;
+  }
+}
+
+export function rangeOutputPaths(dir: string, slug: string): { html: string; text: string; json: string } {
+  const out = join(dir, 'out', 'range');
+  return { html: join(out, `${slug}.html`), text: join(out, `${slug}.txt`), json: join(out, `${slug}.json`) };
 }
 
 /** Where the last report's files are, for `show`, `open` and `--json`. */

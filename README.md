@@ -476,20 +476,43 @@ movement are ranked by a weighted score; each comes with its traffic, the top
 ones with a 14-day chart, and new or lost followers are named.
 
 ```sh
-gh-pulse                       # scan every repo, email the report, snapshot
-gh-pulse --dry-run             # scan and write the report, send nothing
-gh-pulse show                  # the last report and the history, as a TUI
-gh-pulse open                  # the last HTML report, in the browser
-gh-pulse text                  # the last report as plain text
-gh-pulse json                  # the last report as JSON
-gh-pulse --repo profullstack/nixamp --dry-run   # one repo, for a look
+gh-pulse                       # the daily run: scan every repo, email, snapshot
+gh-pulse --dry-run             # scan and write the daily report, send nothing
+gh-pulse --range week          # what moved in the last 7 days, to stdout
+gh-pulse --range year --send   # the same for a year, emailed
+gh-pulse --since 2026-09-01    # any start date
+gh-pulse show                  # the TUI: ranges and filters are clickable
+gh-pulse show --range quarter  # start on a range
+gh-pulse open [--range all]    # the HTML report, in the browser
+gh-pulse text [--range month]  # plain text
+gh-pulse json [--range day]    # JSON (what `show` reads)
+gh-pulse --repo profullstack/nixamp --range week   # one repo, for a look
 ```
 
 The same report reaches every surface: the email (HTML with inline charts,
-through Resend), the terminal (`show`, built on hqtui: click a row, the
-selected repo's 14-day views and clones, a History tab over every snapshot),
-the browser (`open`), and pipes (`text`, `json`). The moshcode pit alias is
-`/pulse`.
+through Resend), the terminal (`show`, built on hqtui), the browser (`open`),
+and pipes (`text`, `json`). The moshcode pit alias is `/pulse`.
+
+**Ranges.** `hour`, `day`, `week`, `month`, `quarter`, `year` and `all` (also
+`1h`, `24h`, `7d`, `30d`, `90d`, `365d`), or `--since` a date. A range scan
+pulls the events live from GitHub for the whole range (commits, PRs, issues,
+releases, who starred and forked, walking as many pages as the range
+deserves) and the traffic from the ledger of daily snapshots, which is the
+only place GitHub's fourteen-day traffic window survives: the longer the
+daily run has been going, the further back `year` and `all` can see, and the
+report says exactly which days it covers. A range scan never moves the daily
+baseline. `show`, `open`, `text` and `json` reuse a range report under an hour
+old and scan otherwise. `hour` has hourly events but daily traffic, because
+GitHub publishes nothing finer.
+
+**In the TUI** the range row and the filter rows are clickable. Filters are
+on/off toggles: which kinds of movement count (stars, forks, commits, PRs,
+issues, releases, traffic), which owners, and private repos; a repo stays in
+the list while at least one enabled kind moved for it, and keeps its rank.
+Keys do the same: `h d w m q y a` pick a range, `l` returns to the latest
+daily report, `1`-`7` flip the kinds, `p` flips private, `r` rescans, Tab
+switches to History, `o` opens the HTML, `q` quits. Ranges load in the
+background while the current view stays up.
 
 GitHub publishes traffic in UTC-day buckets one to two days late, so "the last
 24 hours" cannot be read off the clock. Each run instead counts the growth of
