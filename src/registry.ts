@@ -49,6 +49,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-prs': 'Every open PR across the owners you name',
   'gh-prs-fix-all': 'Repair the open scan PRs that are broken because of us',
   'gh-prs-merge': 'Squash-merge the PRs that are genuinely ready',
+  'gh-pulse': 'What moved on GitHub since yesterday, ranked, with traffic: by email, TUI or JSON',
   hqtui: 'Every vital of this box, in the terminal: sockets, HTTP, sessions, services',
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
@@ -193,6 +194,9 @@ export const PIT_ALIASES: Record<string, string> = {
   // after `| domainfree`, so `free-names` had to become a command first.
   names: 'free-names',
   prs: 'gh-prs',
+  // `pulse` opens the terminal view of the last report; the scan itself is
+  // cron's job and stays the long spelling.
+  pulse: 'gh-pulse show',
   speak: 'tts',
   // The short word for `sysupdate`, and the reason that command is not itself
   // called `update`: `cli-tools update` already means "move this checkout",

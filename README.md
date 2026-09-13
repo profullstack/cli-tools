@@ -465,6 +465,56 @@ What it will not do is as much of the design:
 - **A check that ran and failed is a result, not an obstacle.** Retrying until it
   passes is how a flaky suite becomes a green one that means nothing.
 
+### `gh-pulse`
+
+What moved on GitHub since yesterday, ranked, with traffic. Every repo the
+`gh` token can see (yours plus every org you belong to, forks excluded) is
+checked for movement since the previous run: stars, forks, commits, pull
+requests, issues, releases, and the traffic GitHub shows at `/graphs/traffic`
+(views, unique visitors, clones, referrers, popular content). Repos with
+movement are ranked by a weighted score; each comes with its traffic, the top
+ones with a 14-day chart, and new or lost followers are named.
+
+```sh
+gh-pulse                       # scan every repo, email the report, snapshot
+gh-pulse --dry-run             # scan and write the report, send nothing
+gh-pulse show                  # the last report and the history, as a TUI
+gh-pulse open                  # the last HTML report, in the browser
+gh-pulse text                  # the last report as plain text
+gh-pulse json                  # the last report as JSON
+gh-pulse --repo profullstack/nixamp --dry-run   # one repo, for a look
+```
+
+The same report reaches every surface: the email (HTML with inline charts,
+through Resend), the terminal (`show`, built on hqtui: click a row, the
+selected repo's 14-day views and clones, a History tab over every snapshot),
+the browser (`open`), and pipes (`text`, `json`). The moshcode pit alias is
+`/pulse`.
+
+GitHub publishes traffic in UTC-day buckets one to two days late, so "the last
+24 hours" cannot be read off the clock. Each run instead counts the growth of
+the 14-day buckets since the previous snapshot: exactly "since the last
+email", and a skipped day widens the window rather than losing data. Every
+run writes `~/.local/share/gh-pulse/snapshots/<date>.json.gz` (`GH_PULSE_DATA`
+moves it) with the raw per-repo counts and buckets. GitHub keeps nothing past
+14 days, so those files are the long-run history, and what `show` reads.
+
+Scoring: star 5, fork 4, release 5, PR merged 3, PR or issue opened 2, commit
+1 (capped at 25), unique visitor 1, unique cloner 1, clone 0.5, view 0.2. A
+single clone or visitor in a day is treated as background noise; two unique
+visitors or two unique cloners make a repo a mover on traffic alone.
+
+Mail: `RESEND_API_KEY` from the environment, else from
+`~/.config/logicsrc/shell.env` (the cron case). The sender must sit on a
+verified Resend domain (`GH_PULSE_FROM`, default `pulse@profullstack.com`);
+`GH_PULSE_TO` or `--to` names the recipient, falling back to the committer
+email. A crash sends a plain FAILED mail so a broken cron is never silent. A
+daily entry:
+
+```
+5 13 * * * $HOME/.local/bin/gh-pulse >>$HOME/.local/share/gh-pulse/cron.log 2>&1
+```
+
 ### `gh-prs-fix-all`
 
 Looks at every open threatcrush-scan pull request and fixes the ones broken
