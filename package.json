@@ -1,6 +1,6 @@
 {
   "name": "@profullstack/cli-tools",
-  "version": "0.33.0",
+  "version": "0.34.0",
   "private": true,
   "description": "Local command-line tools, in TypeScript, exposed on PATH.",
   "type": "module",
