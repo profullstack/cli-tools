@@ -128,7 +128,7 @@ export interface ShowOptions {
   /** Start on this range instead of the latest daily report. */
   range?: RangeKey | undefined;
   /** Produce (or fetch from cache) the report for a range. Called off the render loop. */
-  loadRange: (key: RangeKey, progress: (line: string) => void) => Promise<ReportJson>;
+  loadRange: (key: RangeKey, progress: (line: string) => void, force?: boolean) => Promise<ReportJson>;
 }
 
 export async function showTui(dataDir: string, opts: ShowOptions): Promise<number> {
@@ -175,8 +175,8 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
     scanLine = force ? 'rescanning' : 'loading';
     notice = '';
     app.invalidate();
-    opts.loadRange(key, (line) => { scanLine = line; app.invalidate(); }).then(
-      (r) => { report = r; current = key; selected = 0; offset = 0; scanning = null; scanLine = ''; app.invalidate(); },
+    opts.loadRange(key, (line) => { scanLine = line; app.invalidate(); }, force).then(
+      (r) => { report = r; current = key; selected = 0; offset = 0; scanning = null; scanLine = ''; notice = ''; app.invalidate(); },
       (error: unknown) => { scanning = null; scanLine = ''; notice = `scan failed: ${(error as Error).message}`; app.invalidate(); },
     );
   };
@@ -213,11 +213,11 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
 
   if (opts.range) pickRange(opts.range);
 
-  app.render(({ ui, theme, width, height, elapsed }) => {
+  app.render(({ ui, theme, width, height, elapsed, capabilities }) => {
     const rows = visible();
     const bodyRows = Math.max(3, height - 14);
-    // The same glyph the spinner line shows, for the range button that is loading.
-    const glyph = widgets.spinnerFrame(elapsed, widgets.SPINNER_FRAMES.dots);
+    // The same glyph the spinner line shows, for the range button that is loading; ascii where the terminal has no Unicode.
+    const glyph = widgets.spinnerFrame(elapsed, capabilities.unicode ? widgets.SPINNER_FRAMES.dots : widgets.SPINNER_FRAMES.ascii);
     if (selected >= rows.length) selected = Math.max(0, rows.length - 1);
     if (selected < offset) offset = selected;
     if (selected >= offset + bodyRows) offset = selected - bodyRows + 1;

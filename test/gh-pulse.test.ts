@@ -23,6 +23,7 @@ import {
   type Snapshot,
 } from '../src/gh-pulse.ts';
 import { historyRows } from '../src/gh-pulse-tui.ts';
+import { ttySpinner } from '../bin/gh-pulse.ts';
 
 const b = (day: string, count: number, uniques = count): Bucket => ({ timestamp: `${day}T00:00:00Z`, count, uniques });
 const moved = (patch: Partial<Movement>): Movement => ({ ...emptyMovement(), ...patch });
@@ -194,5 +195,35 @@ describe('historyRows', () => {
       },
     };
     expect(historyRows([snap])).toEqual([{ at: snap.at, repos: 2, stars: 12, followers: 2, movers: 1, views: 3, clones: 4 }]);
+  });
+});
+
+describe('ttySpinner', () => {
+  const fake = (isTTY: boolean, columns = 40) => {
+    const out: string[] = [];
+    const stream = { isTTY, columns, write: (s: string) => { out.push(s); return true; } } as unknown as NodeJS.WriteStream;
+    return { stream, out };
+  };
+
+  it('prints plain lines and nothing else when there is no terminal', () => {
+    const { stream, out } = fake(false);
+    const sp = ttySpinner('gh-pulse daily run', stream);
+    sp.progress('349 repos');
+    sp.done();
+    sp.done();
+    expect(out).toEqual(['gh-pulse: 349 repos\n']);
+  });
+
+  it('clamps the busy row to the terminal width and stops exactly once', () => {
+    const { stream, out } = fake(true, 30);
+    const sp = ttySpinner('gh-pulse last 7 days', stream);
+    sp.progress('a progress line that is far wider than thirty columns');
+    sp.done();
+    sp.done();
+    const rows = out.filter((s) => s.startsWith('\r\x1b[K') && !s.endsWith('\n')).map((s) => s.slice(4));
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.length <= 30)).toBe(true);
+    expect(rows[rows.length - 1]!.endsWith('…')).toBe(true);
+    expect(out.filter((s) => s.endsWith('\n'))).toEqual(['\r\x1b[Kgh-pulse: a progress line that is far wider than thirty columns\n']);
   });
 });
