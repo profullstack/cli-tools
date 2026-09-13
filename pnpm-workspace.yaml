@@ -7,3 +7,5 @@
 # makes on purpose.
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@profullstack/hqtui@0.5.1'
