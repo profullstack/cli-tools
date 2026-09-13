@@ -28,7 +28,8 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, unlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, hostname } from 'node:os';
 import { join } from 'node:path';
@@ -574,30 +575,96 @@ export function writeSnapshot(dir: string, snap: Snapshot): string {
 
 // ---------------------------------------------------------------- github
 
+export interface GitHubOptions {
+  /** Requests in flight at once. Four keeps well clear of GitHub's concurrency limit. */
+  concurrency?: number;
+  /** Minimum gap between two request starts. 100ms is at most 600 a minute, under the 900-points-a-minute secondary limit. */
+  minIntervalMs?: number;
+  /**
+   * Calls of the hour that are never spent, so `gh` and everything else on the
+   * same token keep working. When the hour is down to the reserve the scan
+   * pauses until it resets and then carries on.
+   */
+  reserve?: number;
+  /** ETag cache directory. GitHub does not charge for a 304, so an unchanged page is free. Null disables the cache. */
+  cacheDir?: string | null;
+  /** Where a pause is announced: the spinner line, or the log. */
+  onWait?: (line: string) => void;
+  now?: () => number;
+  sleep?: (ms: number) => Promise<void>;
+}
+
+export const DEFAULT_RESERVE = 500;
+export const cacheDir = (dataDir: string): string => join(dataDir, 'cache');
+
+/** A cached reply: the ETag to offer next time and the body to reuse when GitHub says nothing changed. */
+interface CachedReply { url: string; etag: string; link: string; status: number; data: unknown; at: string }
+
+const hhmm = (epochMs: number): string => `${new Date(epochMs).toISOString().slice(11, 16)} UTC`;
+
+/**
+ * The GitHub client every scan goes through, and the only place the hour's
+ * budget is spent. It paces itself (a few in flight, a gap between starts),
+ * reads the rate-limit headers on every reply, and when the hour is down to
+ * the reserve it stops and waits for the reset instead of running into a 403.
+ * A 403 or 429 that arrives anyway is waited out for as long as GitHub says,
+ * on one shared pause, never on a capped guess. Replies are cached by ETag so
+ * a page that has not changed comes back as a free 304. Once any task has
+ * failed nothing queued behind it starts, because a crashed scan that keeps
+ * draining its queue in the background is how an hour disappears.
+ */
 export class GitHub {
-  readonly calls = { made: 0, retries: 0 };
+  /** made: requests sent. cached: answered 304, free. counted: what the hour was charged. */
+  readonly calls = { made: 0, retries: 0, cached: 0, counted: 0 };
   remaining: number | null = null;
+  /** When the hour resets, epoch ms, from the last reply. */
+  resetAt: number | null = null;
   private readonly queue: (() => void)[] = [];
   private active = 0;
+  private aborted: Error | null = null;
+  private lastStart = Number.NEGATIVE_INFINITY;
+  private spacer: Promise<void> = Promise.resolve();
+  private pause: Promise<void> | null = null;
   // Explicit fields rather than constructor parameter properties: Node's type
   // stripping accepts only syntax it can erase, and this is the one construct
   // in the repo it refuses (see gh.ts).
   private readonly token: string;
   private readonly fetchImpl: typeof fetch;
   private readonly concurrency: number;
+  private readonly minIntervalMs: number;
+  private readonly reserve: number;
+  private readonly cacheDir: string | null;
+  private readonly onWait: (line: string) => void;
+  private readonly now: () => number;
+  private readonly sleep: (ms: number) => Promise<void>;
 
-  constructor(token: string, fetchImpl: typeof fetch, concurrency = 6) {
+  constructor(token: string, fetchImpl: typeof fetch, options: GitHubOptions | number = {}) {
+    const o = typeof options === 'number' ? { concurrency: options } : options;
     this.token = token;
     this.fetchImpl = fetchImpl;
-    this.concurrency = concurrency;
+    this.concurrency = o.concurrency ?? 4;
+    this.minIntervalMs = o.minIntervalMs ?? 100;
+    this.reserve = o.reserve ?? DEFAULT_RESERVE;
+    this.cacheDir = o.cacheDir ?? null;
+    this.onWait = o.onWait ?? (() => {});
+    this.now = o.now ?? (() => Date.now());
+    this.sleep = o.sleep ?? ((ms) => new Promise((s) => setTimeout(s, ms)));
   }
 
-  /** Run `fn` when a slot is free; six at a time keeps clear of the abuse limits. */
+  /** Run `fn` when a slot is free. After a failure, queued tasks are rejected instead of started. */
   limit<T>(fn: () => Promise<T>): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       const start = () => {
+        if (this.aborted) {
+          reject(this.aborted);
+          this.queue.shift()?.();
+          return;
+        }
         this.active += 1;
-        fn().then(resolve, reject).finally(() => {
+        fn().then(resolve, (error: unknown) => {
+          this.aborted ??= error instanceof Error ? error : new Error(String(error));
+          reject(error);
+        }).finally(() => {
           this.active -= 1;
           this.queue.shift()?.();
         });
@@ -607,30 +674,55 @@ export class GitHub {
     });
   }
 
+  /**
+   * One line for the log: what the hour has left and when it turns, as the
+   * last reply's headers said. Not from /rate_limit: that endpoint reported a
+   * fresh hour for this token while every real reply carried the true count.
+   */
+  budgetLine(): string {
+    if (this.remaining === null) return 'GitHub: rate limit unknown';
+    return `GitHub: ${this.remaining} calls left this hour${this.resetAt ? `, resets ${hhmm(this.resetAt)}` : ''}, reserve ${this.reserve}`;
+  }
+
   async get<T>(pathOrUrl: string, options: { accept?: string; allow?: number[] } = {}): Promise<{ data: T | null; link: string; status: number }> {
     const url = pathOrUrl.startsWith('http') ? pathOrUrl : `https://api.github.com${pathOrUrl}`;
+    const accept = options.accept ?? 'application/vnd.github+json';
+    const cached = this.readCache(url, accept);
     for (let attempt = 0; ; attempt += 1) {
+      if (this.aborted) throw this.aborted;
+      await this.pace();
       this.calls.made += 1;
-      const r = await this.fetchImpl(url, {
-        headers: {
-          authorization: `Bearer ${this.token}`,
-          accept: options.accept ?? 'application/vnd.github+json',
-          'x-github-api-version': '2022-11-28',
-          'user-agent': 'gh-pulse (cli-tools)',
-        },
-      });
-      const rem = r.headers.get('x-ratelimit-remaining');
-      if (rem !== null) this.remaining = Number(rem);
-      if (r.ok) return { data: (await r.json()) as T, link: r.headers.get('link') ?? '', status: r.status };
+      const headers = this.headers(accept);
+      if (cached) headers['if-none-match'] = cached.etag;
+      const r = await this.fetchImpl(url, { headers });
+      this.readLimits(r.headers);
+      if (r.status === 304 && cached) {
+        this.calls.cached += 1;
+        this.touchCache(url, accept);
+        return { data: cached.data as T, link: cached.link, status: cached.status };
+      }
+      this.calls.counted += 1;
+      if (r.ok) {
+        const data = (await r.json()) as T;
+        const link = r.headers.get('link') ?? '';
+        const etag = r.headers.get('etag');
+        if (etag) this.writeCache({ url, etag, link, status: r.status, data, at: new Date(this.now()).toISOString() }, accept);
+        return { data, link, status: r.status };
+      }
       if (options.allow?.includes(r.status)) return { data: null, link: '', status: r.status };
-      const retryable = r.status === 429 || r.status === 502 || r.status === 503 ||
-        (r.status === 403 && (r.headers.get('retry-after') !== null || rem === '0'));
-      if (retryable && attempt < 4) {
+      const retryAfter = Number(r.headers.get('retry-after') ?? 0) * 1000;
+      const limited = r.status === 429 || (r.status === 403 && (retryAfter > 0 || this.remaining === 0));
+      const flaky = r.status === 502 || r.status === 503 || r.status === 504;
+      if ((limited || flaky) && attempt < 4) {
         this.calls.retries += 1;
-        let wait = Number(r.headers.get('retry-after') ?? 0) * 1000;
-        if (!wait && rem === '0') wait = Math.max(0, Number(r.headers.get('x-ratelimit-reset')) * 1000 - Date.now()) + 1000;
-        if (!wait) wait = 2000 * (attempt + 1);
-        await new Promise((s) => setTimeout(s, Math.min(wait, 120000)));
+        if (!limited) await this.sleep(2000 * (attempt + 1));
+        else if (retryAfter > 0) {
+          this.onWait(`GitHub asked for a ${Math.ceil(retryAfter / 1000)}s pause`);
+          await this.sleep(retryAfter);
+        } else {
+          this.remaining = 0;
+          await this.holdUntilReset();
+        }
         continue;
       }
       const body = await r.text().catch(() => '');
@@ -648,6 +740,162 @@ export class GitHub {
       url = nextLink(link);
     }
     return out;
+  }
+
+  private headers(accept: string): Record<string, string> {
+    return {
+      authorization: `Bearer ${this.token}`,
+      accept,
+      'x-github-api-version': '2022-11-28',
+      'user-agent': 'gh-pulse (cli-tools)',
+    };
+  }
+
+  private readLimits(headers: Headers): void {
+    const rem = headers.get('x-ratelimit-remaining');
+    if (rem !== null && rem !== '' && Number.isFinite(Number(rem))) this.remaining = Number(rem);
+    const reset = headers.get('x-ratelimit-reset');
+    if (reset !== null && reset !== '' && Number.isFinite(Number(reset))) this.resetAt = Number(reset) * 1000;
+  }
+
+  /**
+   * Before a request starts: wait out a pause in progress, start one when the
+   * hour is down to the reserve, then keep the minimum gap from the previous
+   * start. Starts are serialised so concurrent callers space out; the slot
+   * itself is not held while waiting.
+   */
+  private async pace(): Promise<void> {
+    const previous = this.spacer;
+    let release!: () => void;
+    this.spacer = new Promise<void>((r) => { release = r; });
+    try {
+      await previous;
+      if (this.pause) await this.pause;
+      if (this.remaining !== null && this.remaining <= this.reserve && this.resetAt !== null && this.resetAt > this.now()) {
+        await this.holdUntilReset();
+      }
+      const gap = this.lastStart + this.minIntervalMs - this.now();
+      if (gap > 0) await this.sleep(gap);
+      this.lastStart = this.now();
+    } finally {
+      release();
+    }
+  }
+
+  /** One shared pause until the hour resets; every caller waits on the same promise. */
+  private holdUntilReset(): Promise<void> {
+    if (!this.pause) {
+      // Without a reset time (no header on the reply) a minute is the guess, and the next reply corrects it.
+      const until = (this.resetAt ?? this.now() + 60000) + 1000;
+      const ms = Math.max(0, until - this.now());
+      this.onWait(`rate limit: ${this.remaining ?? 0} of the hour left, keeping ${this.reserve} in reserve; resuming ${hhmm(until)}, in ${Math.max(1, Math.ceil(ms / 60000))} min`);
+      this.pause = this.sleep(ms).then(() => {
+        this.pause = null;
+        this.remaining = null;
+        this.resetAt = null;
+      });
+    }
+    return this.pause;
+  }
+
+  private cacheFile(url: string, accept: string): string | null {
+    if (!this.cacheDir) return null;
+    return join(this.cacheDir, `${createHash('sha1').update(`${accept}\n${url}`).digest('hex')}.json.gz`);
+  }
+
+  private readCache(url: string, accept: string): CachedReply | null {
+    const file = this.cacheFile(url, accept);
+    if (!file || !existsSync(file)) return null;
+    try {
+      const reply = JSON.parse(gunzipSync(readFileSync(file)).toString('utf8')) as CachedReply;
+      return reply.url === url && typeof reply.etag === 'string' ? reply : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private writeCache(reply: CachedReply, accept: string): void {
+    const file = this.cacheFile(reply.url, accept);
+    if (!file || !this.cacheDir) return;
+    try {
+      mkdirSync(this.cacheDir, { recursive: true });
+      // Written whole then renamed, so a run killed mid-write leaves no torn entry behind.
+      const tmp = `${file}.${process.pid}.tmp`;
+      writeFileSync(tmp, gzipSync(JSON.stringify(reply)));
+      renameSync(tmp, file);
+    } catch {
+      // A cache that cannot be written is only a cache.
+    }
+  }
+
+  private touchCache(url: string, accept: string): void {
+    const file = this.cacheFile(url, accept);
+    if (!file) return;
+    try {
+      const t = new Date(this.now());
+      utimesSync(file, t, t);
+    } catch {
+      // Pruning will take it a little early; nothing is lost.
+    }
+  }
+}
+
+/** Drop cache entries GitHub has not been asked about for `maxAgeMs`: a deleted repo, a page from a range nobody scans. Returns how many went. */
+export function pruneCache(dir: string, now: number, maxAgeMs = 30 * 86400000): number {
+  if (!existsSync(dir)) return 0;
+  let removed = 0;
+  for (const f of readdirSync(dir)) {
+    if (!f.endsWith('.json.gz')) continue;
+    const p = join(dir, f);
+    try {
+      if (now - statSync(p).mtimeMs > maxAgeMs) { unlinkSync(p); removed += 1; }
+    } catch {
+      // Raced with another run; it is gone either way.
+    }
+  }
+  return removed;
+}
+
+/**
+ * The client options every scan uses: the ETag cache under the data dir, the
+ * reserve from GH_PULSE_RESERVE (calls of the hour never spent, default 500),
+ * pauses announced on the progress line.
+ */
+export function clientOptions(dataDir: string, onWait: (line: string) => void, env: NodeJS.ProcessEnv = process.env): GitHubOptions {
+  const reserve = Number(env['GH_PULSE_RESERVE'] ?? DEFAULT_RESERVE);
+  return { cacheDir: cacheDir(dataDir), reserve: Number.isFinite(reserve) && reserve >= 0 ? reserve : DEFAULT_RESERVE, onWait };
+}
+
+/**
+ * One daily run at a time. The lock names the pid; a lock left by a process
+ * that no longer exists is stale and taken over. Two runs at once would spend
+ * the hour twice and then fight over the baseline.
+ */
+export function acquireRunLock(dataDir: string, pid = process.pid, alive: (pid: number) => boolean = isAlive): () => void {
+  mkdirSync(dataDir, { recursive: true });
+  const file = join(dataDir, 'run.lock');
+  if (existsSync(file)) {
+    const holder = Number(readFileSync(file, 'utf8').trim());
+    if (Number.isFinite(holder) && holder !== pid && alive(holder)) {
+      throw new Error(`another gh-pulse run is in progress (pid ${holder}); wait for it, or remove ${file} if it is not`);
+    }
+  }
+  writeFileSync(file, `${pid}\n`);
+  return () => {
+    try {
+      if (readFileSync(file, 'utf8').trim() === String(pid)) unlinkSync(file);
+    } catch {
+      // Already gone.
+    }
+  };
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
@@ -977,10 +1225,17 @@ export async function sendFailure(error: unknown, to: string, from: string, key:
 
 interface StarEntry { starred_at: string; user: { login: string } }
 interface ForkEntry { full_name: string; created_at: string }
-interface CommitEntry { author?: { login?: string } | null; commit?: { author?: { name?: string } } }
+interface CommitEntry { author?: { login?: string } | null; commit?: { author?: { name?: string; date?: string }; committer?: { date?: string } } }
 interface PullEntry { number: number; title: string; created_at: string; updated_at: string; merged_at: string | null; closed_at: string | null; user?: { login?: string }; html_url: string }
 interface IssueEntry { number: number; title: string; created_at: string; closed_at: string | null; user?: { login?: string }; html_url: string; pull_request?: unknown }
 interface ReleaseEntry { tag_name: string; published_at: string | null; created_at: string; html_url: string }
+
+/**
+ * `since=` for a URL, floored to the hour. The same URL for an hour means a
+ * page that has not changed is a free 304 on every rescan; the exact cutoff is
+ * still applied to the items, so nothing from the extra minutes is counted.
+ */
+export const sinceParam = (cutoffMs: number): string => new Date(Math.floor(cutoffMs / 3600000) * 3600000).toISOString();
 
 /** Walk pages newest-first until `stop` says the rest is older than we need, or the budget is spent. Returns whether the walk was cut short. */
 async function walk<T>(gh: GitHub, path: string, max: number, stop: (item: T) => boolean, options: { accept?: string; allow?: number[] } = {}): Promise<{ items: T[]; partial: boolean }> {
@@ -1000,7 +1255,7 @@ async function walk<T>(gh: GitHub, path: string, max: number, stop: (item: T) =>
 
 /** Commits, PRs, issues and releases since `cutoffMs`, written into `m`. */
 export async function collectEvents(gh: GitHub, name: string, cutoffMs: number, budget: PageBudget, m: Movement): Promise<boolean> {
-  const cutoffIso = new Date(cutoffMs).toISOString();
+  const cutoffIso = sinceParam(cutoffMs);
   const older = (iso: string | null | undefined): boolean => !!iso && Date.parse(iso) < cutoffMs;
   const [commits, pulls, issues, releases] = await Promise.all([
     walk<CommitEntry>(gh, `/repos/${name}/commits?since=${cutoffIso}&per_page=100`, budget.commits, () => false, { allow: [409, 404] }),
@@ -1008,8 +1263,10 @@ export async function collectEvents(gh: GitHub, name: string, cutoffMs: number, 
     walk<IssueEntry>(gh, `/repos/${name}/issues?state=all&since=${cutoffIso}&sort=updated&per_page=100`, budget.issues, () => false, { allow: [404] }),
     walk<ReleaseEntry>(gh, `/repos/${name}/releases?per_page=100`, budget.releases, (r) => older(r.published_at ?? r.created_at), { allow: [404] }),
   ]);
-  m.commits = commits.items.length;
-  m.authors = [...new Set(commits.items.map((c) => c.author?.login ?? c.commit?.author?.name).filter((a): a is string => !!a))];
+  // The URL asked from the top of the hour; the commits from before the exact cutoff are dropped here.
+  const recent = commits.items.filter((c) => { const d = c.commit?.committer?.date ?? c.commit?.author?.date; return !d || Date.parse(d) >= cutoffMs; });
+  m.commits = recent.length;
+  m.authors = [...new Set(recent.map((c) => c.author?.login ?? c.commit?.author?.name).filter((a): a is string => !!a))];
   for (const pr of pulls.items) {
     const ref: Ref = { n: pr.number, t: pr.title, u: pr.user?.login ?? '', url: pr.html_url };
     if (Date.parse(pr.created_at) >= cutoffMs) { m.prOpened += 1; m.openedPrs.push(ref); }
@@ -1070,8 +1327,18 @@ export function svgToPng(svg: string): Buffer {
 }
 
 export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promise<RunResult> {
-  const gh = new GitHub(deps.token(), deps.fetch);
+  const say = opt.progress ?? deps.log;
+  const gh = new GitHub(deps.token(), deps.fetch, clientOptions(opt.dataDir, say));
   const now = deps.now();
+  const unlock = acquireRunLock(opt.dataDir);
+  try {
+    return await runLocked(opt, deps, gh, now);
+  } finally {
+    unlock();
+  }
+}
+
+async function runLocked(opt: RunOptions, deps: RunDeps, gh: GitHub, now: Date): Promise<RunResult> {
   const prev = latestSnapshot(opt.dataDir, deps.log);
   const base = baselineFor(prev, now);
   const cutoff = base ? new Date(base.at) : new Date(now.getTime() - opt.hours * 3600000);
@@ -1080,7 +1347,7 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
   const prevRepos = new Map(Object.entries(base?.repos ?? {}));
 
   const me = (await gh.get<{ login: string; followers: number }>('/user')).data!;
-  deps.log(`${me.login}, window since ${cutoffIso}${base ? ' (previous snapshot)' : ' (clock)'}`);
+  deps.log(`${me.login}, window since ${cutoffIso}${base ? ' (previous snapshot)' : ' (clock)'}; ${gh.budgetLine()}`);
 
   // 1. every repo the token can see, minus forks
   let repos = await gh.all<RepoInfo>('/user/repos?affiliation=owner,organization_member&per_page=100&sort=pushed', { max: 30 });
@@ -1239,8 +1506,14 @@ export async function run(opt: RunOptions, deps: RunDeps = defaultDeps()): Promi
     snapshotFile = writeSnapshot(opt.dataDir, snap);
     deps.log(`snapshot ${snapshotFile}`);
   }
-  deps.log(`${gh.calls.made} API calls (${gh.calls.retries} retries), ${gh.remaining} remaining this hour`);
-  return { subject, movers: movers.length, repos: repos.length, sent, snapshot: snapshotFile, html, calls: gh.calls.made };
+  const pruned = pruneCache(cacheDir(opt.dataDir), now.getTime());
+  deps.log(`${callsLine(gh)}${pruned ? `, ${pruned} stale cache entries dropped` : ''}`);
+  return { subject, movers: movers.length, repos: repos.length, sent, snapshot: snapshotFile, html, calls: gh.calls.counted };
+}
+
+/** The closing line of a scan: what the hour was charged, what came free, what is left. */
+export function callsLine(gh: GitHub): string {
+  return `${gh.calls.counted} API calls charged (${gh.calls.cached} answered from cache, ${gh.calls.retries} retries), ${gh.remaining ?? 'unknown'} left this hour`;
 }
 
 // ---------------------------------------------------------------- range scans
@@ -1264,16 +1537,16 @@ export interface RangeOptions {
 }
 
 export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()): Promise<{ report: ReportJson; html: string; subject: string; sent: boolean; calls: number }> {
-  const gh = new GitHub(deps.token(), deps.fetch);
+  const say = opt.progress ?? deps.log;
+  const gh = new GitHub(deps.token(), deps.fetch, clientOptions(opt.dataDir, say));
   const now = deps.now();
   const { spec } = opt;
   const cutoffMs = spec.since.getTime();
   const days = rangeDays(spec, now);
   const budget = pageBudget(spec.key, days);
-  const say = opt.progress ?? deps.log;
 
   const me = (await gh.get<{ login: string; followers: number }>('/user')).data!;
-  say(`${me.login}, ${spec.label}${spec.key === 'all' ? '' : ` (since ${spec.since.toISOString()})`}`);
+  say(`${me.login}, ${spec.label}${spec.key === 'all' ? '' : ` (since ${spec.since.toISOString()})`}; ${gh.budgetLine()}`);
 
   let repos = await gh.all<RepoInfo>('/user/repos?affiliation=owner,organization_member&per_page=100&sort=pushed', { max: 30 });
   repos = repos.filter((r) => !r.fork);
@@ -1418,8 +1691,8 @@ export async function rangeScan(opt: RangeOptions, deps: RunDeps = defaultDeps()
     sent = true;
     say(`sent to ${opt.to}: ${subject}`);
   }
-  say(`${gh.calls.made} API calls (${gh.calls.retries} retries), ${gh.remaining} remaining this hour`);
-  return { report, html, subject, sent, calls: gh.calls.made };
+  say(callsLine(gh));
+  return { report, html, subject, sent, calls: gh.calls.counted };
 }
 
 /** The cached range report, if one exists and is younger than `maxAgeMs`. */
