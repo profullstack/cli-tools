@@ -57,6 +57,7 @@ const SUMMARIES: Record<string, string> = {
   torrent: 'Make a torrent out of a directory, and get it seeded',
   tts: 'Read text aloud and keep the audio',
   vid: 'Inspect, thumbnail, clip and shrink video, through ffmpeg',
+  wcag: 'Audit a site against WCAG with axe in headless Chrome, for the W3C report tool',
 };
 
 /** The repository root, found from this file rather than from the cwd. */

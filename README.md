@@ -20,6 +20,7 @@ TypeScript, installed as executables on `PATH`.
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
+| [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
@@ -59,6 +60,9 @@ One thing here is not a `PATH` command and does not need Node:
   [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
+- **A Chrome or Chromium** — `wcag` only. `CHROME_PATH` names one; otherwise
+  the usual binaries on `PATH` are tried, then the builds Puppeteer and
+  Playwright keep under `~/.cache`. axe-core itself ships with this repo
 - **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
   it: the archive Google publishes is a zip, and Node cannot read one
 - **Network on first use** — `favicon` only: the generation is
@@ -1063,6 +1067,58 @@ and `-i`/`-o` are always passed on, so that prompt is unreachable.
 `FAVICON_SPEC` is what `npx` runs. Pin it (`@profullstack/favicon-generator@1.2.1`)
 when a release breaks you, or point it at a checkout while working on the
 generator itself.
+
+### `wcag`
+
+The automated half of a WCAG-EM evaluation, with the W3C's
+[WCAG-EM Report Tool](https://www.w3.org/WAI/eval/report-tool/) for the other
+half:
+
+```sh
+wcag audit https://example.org                      # 5 pages from the sitemap, WCAG 2.2 AA
+wcag audit https://example.org --pages 12 --level AAA --md audit.md
+wcag audit https://example.org --sample list --url https://example.org/checkout
+wcag report wcag-report.json                        # -> evaluation.json, for the report tool
+wcag open                                           # the hand-off, step by step
+```
+
+The report tool is a web page with no command line. It is a form for the
+five steps of the methodology, and the reason it cannot be a CLI is that most
+success criteria need a person to decide them. What a machine can do is the
+part that is machine-shaped, and that is what `audit` does: choose the
+structured sample (step 3 — the home page, then one page per section of the
+sitemap before a second of any, so a blog gives up its about, pricing and docs
+pages before a second post), load each in headless Chrome, run
+[axe-core](https://github.com/dequelabs/axe-core) over it, and print one row
+per success criterion: how many pages fail it, how many need a look, and the
+rule with the most elements in violation. `report` turns that into the tool's
+own evaluation file, which "Open evaluation" loads with the scope, the sample
+and one assertion per page and criterion filled in, so the evaluator starts
+at the judgement calls rather than at an empty form.
+
+**Nothing is ever marked passed.** axe can prove a failure — an image with no
+alternative fails 1.1.1 wherever it is — but "no rule fired" proves nothing
+about a criterion as a whole, since its rules cover a part of each one. A
+criterion with only passing checks lands in the tool as "cannot tell", with
+the checks listed; the summary shows the passes in their own column because
+they are still worth seeing. The exit status is 1 when a criterion within the
+target fails on any page, which is what a CI step wants to know.
+
+The browser is driven over the DevTools protocol by hand — Node's own
+WebSocket, six protocol methods — rather than through Puppeteer or Playwright,
+which would each bring a Chrome download and a driver to open a page and
+evaluate two scripts. The box's Chrome is found instead: `CHROME_PATH`, then
+`PATH`, then the builds those two keep in `~/.cache`. A Puppeteer build on a
+box without Chrome's system libraries runs when they are staged under
+`~/.local/share/chrome-deps`, and that is wired up here so the command works
+the same whichever Chrome it finds. `CHROME_NO_SANDBOX=1` drops the sandbox for
+containers and root.
+
+The evaluation file mirrors the tool's own export, read from its source: the
+JSON-LD context, one `Webpage` subject per sampled page whose id is its URL,
+and `Assertion`s whose `test` is the tool's own criterion id
+(`WCAG22:contrast-minimum`). `--wcag 2.1` uses the 2.1 ids and leaves the nine
+2.2-only criteria out.
 
 ### `vid`
 
