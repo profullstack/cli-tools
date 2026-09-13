@@ -88,13 +88,22 @@ export function ttySpinner(label: string, stream: NodeJS.WriteStream = process.s
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   let i = 0;
   let line = '';
-  const draw = (): void => { stream.write(`\r\x1b[K${frames[i % frames.length]} ${label}${line ? `: ${line}` : ''}`); i += 1; };
+  let ended = false;
+  // Clamped to the terminal width: `\r\x1b[K` only clears the last physical row
+  // of a wrapped line, so an overlong row would walk down the screen a row per tick.
+  const draw = (): void => {
+    const cols = stream.columns ?? 80;
+    const text = `${frames[i % frames.length]} ${label}${line ? `: ${line}` : ''}`;
+    stream.write(`\r\x1b[K${text.length < cols ? text : `${text.slice(0, Math.max(0, cols - 2))}…`}`);
+    i += 1;
+  };
   const timer = setInterval(draw, 80);
   timer.unref();
   draw();
   return {
-    progress: (l) => { line = l; draw(); },
-    done: () => { clearInterval(timer); stream.write(`\r\x1b[K${line ? `gh-pulse: ${line}\n` : ''}`); },
+    progress: (l) => { line = l; if (!ended) draw(); },
+    // Idempotent: a caller may stop it in a finally block after stopping it on success.
+    done: () => { if (ended) return; ended = true; clearInterval(timer); stream.write(`\r\x1b[K${line ? `gh-pulse: ${line}\n` : ''}`); },
   };
 }
 
@@ -149,7 +158,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   if (verb === 'show') {
     const { showTui } = await import('../src/gh-pulse-tui.ts');
     const startKey: RangeKey | undefined = spec && spec.key !== 'custom' ? spec.key : undefined;
-    const code = await showTui(dir, { range: startKey, loadRange: (key, progress) => loadRange(rangeSpec(key, deps.now()), progress) });
+    const code = await showTui(dir, { range: startKey, loadRange: (key, progress, force) => loadRange(rangeSpec(key, deps.now()), progress, force) });
     // A range scan still in flight would keep the process alive after the screen is gone, spending the hour on a report nobody reads.
     process.exit(code);
   }
@@ -181,22 +190,25 @@ export async function main(argv: readonly string[]): Promise<number> {
     const sp = ttySpinner(`gh-pulse ${spec.label}`);
     try {
       await rangeScan({ spec, top, repos, dataDir: dir, send, to, from, progress: sp.progress }, deps);
-      sp.done();
-      process.stdout.write(readFileSync(rangeOutputPaths(dir, rangeSlug(spec, repos)).text, 'utf8'));
-      return 0;
     } catch (error) {
       sp.done();
       process.stderr.write(`gh-pulse: ${(error as Error).stack ?? String(error)}\n`);
       return 1;
+    } finally {
+      sp.done();
     }
+    process.stdout.write(readFileSync(rangeOutputPaths(dir, rangeSlug(spec, repos)).text, 'utf8'));
+    return 0;
   }
 
   if (!to) throw new UsageError('no recipient: pass --to, set GH_PULSE_TO, or configure git user.email');
   const dryRun = parsed.flags.has('--dry-run');
   const sp = ttySpinner(dryRun ? 'gh-pulse dry run' : 'gh-pulse daily run');
   try {
-    // On a terminal the coarse log lines ride the spinner too; in cron they print as before.
-    await run({ dryRun, to, from, top, hours, repos, dataDir: dir, progress: sp.progress }, process.stderr.isTTY ? { ...deps, log: sp.progress } : deps);
+    // On a terminal the coarse log lines and the per-ten counts ride the spinner;
+    // in cron only the coarse lines print, exactly as before the spinner existed.
+    const tty = process.stderr.isTTY === true;
+    await run({ dryRun, to, from, top, hours, repos, dataDir: dir, ...(tty ? { progress: sp.progress } : {}) }, tty ? { ...deps, log: sp.progress } : deps);
     sp.done();
     return 0;
   } catch (error) {
