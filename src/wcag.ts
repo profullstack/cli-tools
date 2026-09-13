@@ -33,7 +33,7 @@
  *   `reportFindings`, a `Webpage` subject per sampled page whose id is its
  *   URL, and an `Assertion` per page and criterion with `test` set to the
  *   tool's own criterion ids (`WCAG22:non-text-content`). A file of that
- *   shape goes through the tool's "Open evaluation" rather than the beta
+ *   shape goes through the tool's "Open report" rather than the beta
  *   assertion import, which is the path that restores the sample as well.
  */
 
@@ -1363,7 +1363,7 @@ const describe = (outcome: CriterionOutcome, page: PageResult, report: Report): 
 
 /**
  * The report tool's own evaluation file, with the sample and the automated
- * results filled in. Open it in the tool with "Open evaluation".
+ * results filled in. Open it in the tool with "Open report".
  */
 export function toEvaluation(report: Report, options: EvaluationOptions = {}): Record<string, unknown> {
   const { wcagVersion: version } = report;
@@ -1456,7 +1456,9 @@ export function toEvaluation(report: Report, options: EvaluationOptions = {}): R
     reportFindings: {
       documentSteps: [{ '@id': '_:about' }, { '@id': '_:defineScope' }, { '@id': '_:exploreTarget' }, { '@id': '_:selectSample' }],
       commissioner: options.commissioner ?? '',
-      date,
+      // The tool reads reportFindings.date['@value']; an untyped string is lost.
+      // Use a calendar date for the report and keep precise assertion timestamps.
+      date: { type: 'http://www.w3.org/TR/NOTE-datetime', '@value': date.slice(0, 10) },
       evaluator: options.evaluator ?? '',
       evaluationSpecifics: '',
       summary,
@@ -1483,11 +1485,16 @@ export const OPEN_STEPS = `The WCAG-EM Report Tool is a web page with no command
   1. wcag audit https://example.org --pages 8           writes wcag-report.json
   2. wcag report wcag-report.json                       writes evaluation.json
   3. open ${REPORT_TOOL_URL}
-  4. "Open evaluation" in the menu, choose evaluation.json
+  4. "Open report" on the Overview page, choose evaluation.json
+  5. In "4. Evaluate sample set", select the pages under "Add results for samples"
+     (or "Select all"), then expand "Show samples to enter individual results"
+     beneath a criterion to see its imported findings.
 
 Steps 1 (scope) and 3 (sample) are then filled in, and step 4 (audit) holds
 one assertion per page and criterion: "failed" where axe proved a failure,
 "cannot tell" where it found something to look at or only checked a part.
 Nothing is marked "passed" — that is the evaluator's call, made in the tool.
+The "Entire sample set" outcomes stay "Not checked" for the evaluator to finish,
+so the report's overall progress remains 0 until those outcomes are recorded.
 The tool keeps the evaluation in the browser and saves it back out as JSON
-from step 5.`;
+with "View report" > "Download report (JSON)".`;

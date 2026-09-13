@@ -1165,9 +1165,16 @@ pages before a second post), load each in headless Chrome, run
 [axe-core](https://github.com/dequelabs/axe-core) over it, and print one row
 per success criterion: how many pages fail it, how many need a look, and the
 rule with the most elements in violation. `report` turns that into the tool's
-own evaluation file, which "Open evaluation" loads with the scope, the sample
-and one assertion per page and criterion filled in, so the evaluator starts
-at the judgement calls rather than at an empty form.
+own evaluation file, which "Open report" on the Overview page loads with the
+scope, the sample and one assertion per page and criterion filled in, so the
+evaluator starts at the judgement calls rather than at an empty form.
+
+In "4. Evaluate sample set", select the pages under "Add results for samples"
+(or "Select all"), then expand "Show samples to enter individual results"
+beneath a criterion to see its imported findings. The "Entire sample set"
+outcomes remain "Not checked" for the evaluator to complete, so the tool's
+overall progress starts at 0 even when page findings are present. Save with
+"View report" > "Download report (JSON)".
 
 **Nothing is ever marked passed.** axe can prove a failure — an image with no
 alternative fails 1.1.1 wherever it is — but "no rule fired" proves nothing
