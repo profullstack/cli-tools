@@ -40,6 +40,7 @@ import {
   buildReply,
   chooseTransport,
   composeRaw,
+  defangHost,
   folderFor,
   formatAccounts,
   formatFolders,
@@ -717,6 +718,11 @@ async function main(argv: string[]): Promise<number> {
           `mail: ${result.fellBackFrom.transport} failed (${result.fellBackFrom.error}); sent via ${result.transport}\n`,
         );
       }
+      if (result.defanged && result.defanged.length > 0) {
+        process.stderr.write(
+          `mail: defanged ${result.defanged.length} hostname${result.defanged.length === 1 ? '' : 's'} Forward Email refuses (Cloudflare Family DNS): ${result.defanged.map(defangHost).join(', ')}\n`,
+        );
+      }
       // SMTP servers file their own Sent copy; Resend never does.
       let filed: string | null = null;
       if (result.transport === 'resend') {
@@ -729,7 +735,7 @@ async function main(argv: string[]): Promise<number> {
         const uid = needUids(rest, 'reply')[0]!;
         await withMailbox(account, (box) => box.flag(folder, [uid], ['\\Answered'], [])).catch(() => undefined);
       }
-      if (isJson) json({ transport: result.transport, id: result.id, to: outgoing.to, subject: outgoing.subject, filed });
+      if (isJson) json({ transport: result.transport, id: result.id, to: outgoing.to, subject: outgoing.subject, filed, defanged: result.defanged ?? [] });
       else {
         out(`sent via ${result.transport} to ${outgoing.to.join(', ')}: ${outgoing.subject}${result.id ? ` (${result.id})` : ''}`);
         if (filed) out(`copy filed in ${filed}`);

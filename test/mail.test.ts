@@ -17,6 +17,9 @@ import {
   buildReply,
   chooseTransport,
   composeRaw,
+  defangBlockedHosts,
+  defangHost,
+  defangHosts,
   folderFor,
   formatAccounts,
   formatAddresses,
@@ -25,6 +28,7 @@ import {
   formatProviders,
   fromHeader,
   guessProvider,
+  hostnamesIn,
   isProviderName,
   isTransportFailure,
   loadConfig,
@@ -45,6 +49,7 @@ import {
   selectAccount,
   selectAccounts,
   sendMail,
+  smtpFiltersHostnames,
   senderName,
   splitAddresses,
   stripHtml,
@@ -550,6 +555,72 @@ describe('sendMail', () => {
         resend: async () => 'never',
       }),
     ).rejects.toThrow(/ETIMEDOUT/);
+  });
+
+  // Forward Email refuses a message that so much as mentions a hostname
+  // Cloudflare's Family DNS blocks, and a few refusals suspend the account.
+  describe('hostnames Forward Email refuses', () => {
+    const blocked = async (host: string) => host.endsWith('bittorrented.com');
+
+    it('finds the hostname-shaped tokens in a body, once each, addresses excluded', () => {
+      expect(
+        hostnamesIn(
+          'New on https://www.bittorrented.com/blog and bittorrented.com/dht; mail bot@bittorrented.com. Also nichedb.dev, v1.2.3 and e.g. this.',
+        ),
+      ).toEqual(['www.bittorrented.com', 'bittorrented.com', 'nichedb.dev']);
+    });
+
+    it('defangs every dot of a blocked host, longest name first, and leaves the rest', () => {
+      expect(defangHost('www.bittorrented.com')).toBe('www[.]bittorrented[.]com');
+      expect(defangHosts('see www.bittorrented.com and bittorrented.com, not bittorrented.community', ['bittorrented.com', 'www.bittorrented.com'])).toBe(
+        'see www[.]bittorrented[.]com and bittorrented[.]com, not bittorrented.community',
+      );
+    });
+
+    it('rewrites subject, text and html, and says which hosts it touched', async () => {
+      const result = await defangBlockedHosts(
+        { ...outgoing, subject: 'bittorrented.com is down', text: 'https://bittorrented.com/x and nichedb.dev\n', html: '<a href="https://bittorrented.com/x">x</a>' },
+        blocked,
+      );
+      expect(result.defanged).toEqual(['bittorrented.com']);
+      expect(result.outgoing.subject).toBe('bittorrented[.]com is down');
+      expect(result.outgoing.text).toBe('https://bittorrented[.]com/x and nichedb.dev\n');
+      expect(result.outgoing.html).toBe('<a href="https://bittorrented[.]com/x">x</a>');
+    });
+
+    it('hands back the same message when nothing is blocked', async () => {
+      const result = await defangBlockedHosts({ ...outgoing, text: 'nichedb.dev only\n' }, async () => false);
+      expect(result.defanged).toEqual([]);
+      expect(result.outgoing).toBe(outgoing === result.outgoing ? outgoing : result.outgoing);
+      expect(result.outgoing.text).toBe('nichedb.dev only\n');
+    });
+
+    it('applies only through Forward Email SMTP, and before the send', async () => {
+      const fe = account({ smtp: { host: 'smtp.forwardemail.net', port: 465, secure: true } });
+      const seen: string[] = [];
+      const result = await sendMail(fe, { ...outgoing, text: 'read bittorrented.com today\n' }, {
+        smtp: async (_account, message) => {
+          seen.push(message.text);
+          return 'm-1';
+        },
+        isBlocked: blocked,
+      });
+      expect(seen).toEqual(['read bittorrented[.]com today\n']);
+      expect(result).toEqual({ transport: 'smtp', id: 'm-1', defanged: ['bittorrented.com'] });
+
+      expect(smtpFiltersHostnames(fe)).toBe(true);
+      expect(smtpFiltersHostnames(account())).toBe(false);
+      let lookups = 0;
+      const other = await sendMail(account(), { ...outgoing, text: 'read bittorrented.com today\n' }, {
+        smtp: async (_account, message) => message.text,
+        isBlocked: async () => {
+          lookups += 1;
+          return true;
+        },
+      });
+      expect(lookups).toBe(0);
+      expect(other).toEqual({ transport: 'smtp', id: 'read bittorrented.com today\n' });
+    });
   });
 
   it('classifies pipe failures apart from message refusals', () => {
