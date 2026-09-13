@@ -432,6 +432,15 @@ describe('toEvaluation', () => {
     expect(evaluation.reportFindings.evaluator).toBe('Anthony');
   });
 
+  it('preserves the evaluation date in the typed value the report tool imports', () => {
+    // W3C's importer reads reportFindings.date['@value']; a plain string
+    // silently becomes an empty date. Use YYYY-MM-DD for the report date.
+    expect(evaluation.reportFindings.date).toEqual({
+      type: 'http://www.w3.org/TR/NOTE-datetime',
+      '@value': '2026-09-13',
+    });
+  });
+
   // The tool derives a sampled page's id from the URL in its description and
   // finds it again by title, so both have to be exactly this.
   it('puts every loaded page in the structured sample with its URL as id and description', () => {

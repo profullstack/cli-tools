@@ -217,7 +217,7 @@ async function runReport(argv: string[]): Promise<number> {
 
   const assertions = (evaluation.auditSample as unknown[]).length;
   const sampled = ((evaluation.selectSample as { structuredSample: unknown[] }).structuredSample).length;
-  out(`${outFile}: ${sampled} pages in the sample, ${assertions} assertions. Open it at ${REPORT_TOOL_URL} with "Open evaluation".`);
+  out(`${outFile}: ${sampled} pages in the sample, ${assertions} assertions. Open it at ${REPORT_TOOL_URL} with "Open report" on the Overview page. Run \`wcag open\` for the full steps.`);
   return 0;
 }
 
