@@ -19,7 +19,7 @@
  * flips private, r rescans the current range, o opens the HTML, q quits.
  */
 
-import { createApp } from '@profullstack/hqtui';
+import { createApp, widgets } from '@profullstack/hqtui';
 
 import {
   RANGE_KEYS,
@@ -213,9 +213,11 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
 
   if (opts.range) pickRange(opts.range);
 
-  app.render(({ ui, theme, width, height }) => {
+  app.render(({ ui, theme, width, height, elapsed }) => {
     const rows = visible();
-    const bodyRows = Math.max(3, height - 13);
+    const bodyRows = Math.max(3, height - 14);
+    // The same glyph the spinner line shows, for the range button that is loading.
+    const glyph = widgets.spinnerFrame(elapsed, widgets.SPINNER_FRAMES.dots);
     if (selected >= rows.length) selected = Math.max(0, rows.length - 1);
     if (selected < offset) offset = selected;
     if (selected >= offset + bodyRows) offset = selected - bodyRows + 1;
@@ -228,7 +230,7 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
       col.buttons([
         { label: 'latest', variant: current === 'latest' ? 'primary' : 'ghost', onPress: () => pickRange('latest') },
         ...RANGE_KEYS.map((k) => ({
-          label: `${RANGE_LABEL[k].replace('last ', '')}${scanning === k ? ' …' : ''}`,
+          label: `${RANGE_LABEL[k].replace('last ', '')}${scanning === k ? ` ${glyph}` : ''}`,
           variant: (current === k ? 'primary' : 'ghost') as 'primary' | 'ghost',
           onPress: () => pickRange(k),
         })),
@@ -247,8 +249,15 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
         }
       });
 
+      // The busy line: a spinner with the live count while a range is fetching, the last notice otherwise.
+      if (scanning) col.spinner({ label: `fetching ${RANGE_LABEL[scanning]} from GitHub`, text: scanLine, size: 1 });
+      else col.text(notice || 'ready · h d w m q y a pick a range, 1-7 flip kinds, click anything', { fg: theme.muted, size: 1 });
+
       if (!report) {
-        col.panel({ title: scanning ? `Scanning ${RANGE_LABEL[scanning]}` : 'No report' }, (p) => { p.text(scanLine || notice || 'nothing loaded yet', { fg: theme.muted }); });
+        col.panel({ title: scanning ? `Fetching ${RANGE_LABEL[scanning]}` : 'No report' }, (p) => {
+          if (scanning) p.spinner({ label: `fetching ${RANGE_LABEL[scanning]} from GitHub`, text: scanLine });
+          else p.text(notice || 'nothing loaded yet', { fg: theme.muted });
+        });
         return;
       }
       const rep = report;
@@ -264,7 +273,7 @@ export async function showTui(dataDir: string, opts: ShowOptions): Promise<numbe
           { label: 'Stars', value: `${rep.totals.stars}${rep.totals.starsDelta === null ? '' : ` (${rep.totals.starsDelta >= 0 ? '+' : ''}${rep.totals.starsDelta})`}`, color: theme.accent },
           { label: 'Views', value: `${rep.totals.views} / ${rep.totals.uniques} unique` },
           { label: 'Clones', value: `${rep.totals.clones} / ${rep.totals.cloners} unique` },
-          { label: scanning ? 'Scanning' : 'Status', value: scanning ? `${RANGE_LABEL[scanning]}: ${scanLine}` : (notice || 'ready'), color: scanning ? theme.warning : theme.muted },
+          { label: 'Newest traffic day', value: rep.newestTrafficDay },
         ], { width: '1fr' });
       });
 

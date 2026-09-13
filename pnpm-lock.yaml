@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@profullstack/hqtui':
-        specifier: ^0.5.1
-        version: 0.5.1
+        specifier: ^0.6.0
+        version: 0.6.0
       '@resvg/resvg-js':
         specifier: ^2.6.2
         version: 2.6.2
@@ -382,8 +382,8 @@ packages:
   '@pinojs/redact@0.4.0':
     resolution: {integrity: sha512-k2ENnmBugE/rzQfEcdWHcCY+/FM3VLzH9cYEsbdsoqrvzAKRhUZeRNhAZvB8OitQJ1TBed3yqWtdjzS6wJKBwg==}
 
-  '@profullstack/hqtui@0.5.1':
-    resolution: {integrity: sha512-TRj2CKCUhpXhhmsQ1DMIZb9OcU+XLm90BqhPPo0zk2OwyXNcQhlqBeNdxLqwTY/BlIWZpcTyQto458AQ7iCTFg==}
+  '@profullstack/hqtui@0.6.0':
+    resolution: {integrity: sha512-jUFockH6yWeE48xD4gOKINPGzUmShn5k8c6Wqv/apkxI8CIJW4ieGZx5Co+ltD/CGqnGEVnXUbUu5SlNpfBdfQ==}
     engines: {bun: '>=1.1', node: '>=22.6'}
     hasBin: true
 
@@ -1274,7 +1274,7 @@ snapshots:
 
   '@pinojs/redact@0.4.0': {}
 
-  '@profullstack/hqtui@0.5.1': {}
+  '@profullstack/hqtui@0.6.0': {}
 
   '@resvg/resvg-js-android-arm-eabi@2.6.2':
     optional: true
