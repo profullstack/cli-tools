@@ -29,6 +29,14 @@
  *
  * Mail goes through Resend: RESEND_API_KEY from the environment, else from
  * ~/.config/logicsrc/shell.env (the cron case). A crash sends a FAILED mail.
+ *
+ * The hour: GitHub allows 5000 calls an hour on the token, shared with `gh`
+ * and everything else that uses it. A scan paces its requests, caches replies
+ * by ETag (an unchanged page comes back as a free 304) and keeps
+ * GH_PULSE_RESERVE calls (default 500) unspent for everyone else; down to the
+ * reserve, or rate limited anyway, it pauses until the hour resets and then
+ * carries on. One daily run at a time: a second refuses while <data>/run.lock
+ * names a live process.
  */
 
 import { readFileSync } from 'node:fs';
@@ -141,7 +149,9 @@ export async function main(argv: readonly string[]): Promise<number> {
   if (verb === 'show') {
     const { showTui } = await import('../src/gh-pulse-tui.ts');
     const startKey: RangeKey | undefined = spec && spec.key !== 'custom' ? spec.key : undefined;
-    return showTui(dir, { range: startKey, loadRange: (key, progress) => loadRange(rangeSpec(key, deps.now()), progress) });
+    const code = await showTui(dir, { range: startKey, loadRange: (key, progress) => loadRange(rangeSpec(key, deps.now()), progress) });
+    // A range scan still in flight would keep the process alive after the screen is gone, spending the hour on a report nobody reads.
+    process.exit(code);
   }
   if (verb === 'open' || verb === 'text' || verb === 'json') {
     if (spec) {
