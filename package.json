@@ -32,6 +32,7 @@
     "sharp": "^0.35.3"
   },
   "dependencies": {
+    "axe-core": "^4.13.0",
     "imapflow": "^1.7.8",
     "mailparser": "^3.9.20",
     "nodemailer": "^10.0.0"
