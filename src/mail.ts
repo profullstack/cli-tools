@@ -26,7 +26,7 @@
  * {@link Mailbox} interface so tests never open a socket.
  */
 
-import { resolveMx } from 'node:dns/promises';
+import { Resolver, resolveMx } from 'node:dns/promises';
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -1420,6 +1420,107 @@ export async function composeRaw(outgoing: Outgoing): Promise<Buffer> {
 }
 
 // ---------------------------------------------------------------------------
+// Hostnames Forward Email refuses
+// ---------------------------------------------------------------------------
+
+/**
+ * Forward Email runs every hostname in an outbound message past Cloudflare's
+ * Family DNS and refuses the whole message when one is blocked:
+ *
+ *   554 5.6.0 Link hostname of bittorrented.com was detected by Cloudflare's
+ *   Family DNS to contain adult-related content, phishing, and/or malware.
+ *
+ * A bare mention counts, not just a link, and a few refusals inside a rolling
+ * window suspend the account's outbound queue until their support lifts it by
+ * hand. Our own torrent site in a report title was enough to do it.
+ *
+ * So before a message leaves through Forward Email, every hostname in it is
+ * resolved at 1.1.1.3, and one that answers 0.0.0.0 (the block answer) is
+ * defanged in place: `bittorrented.com` becomes `bittorrented[.]com`, which a
+ * reader understands and the filter does not see. Addresses are left alone;
+ * the check is on link hostnames, and a defanged address would bounce.
+ */
+
+export const FAMILY_DNS = '1.1.1.3';
+
+/** SMTP hosts known to run the Family DNS check on what they relay. */
+const FAMILY_DNS_FILTERED_SMTP = /(^|\.)forwardemail\.net$/i;
+
+export function smtpFiltersHostnames(account: Pick<Account, 'smtp'>): boolean {
+  return FAMILY_DNS_FILTERED_SMTP.test(account.smtp.host);
+}
+
+/** Answers true when Family DNS blocks the host. */
+export type HostBlockCheck = (host: string) => Promise<boolean>;
+
+/** Hostname-shaped tokens: labels, then a letters-only top level. Not preceded by `@` (an address) or a dot (already inside a longer name). */
+const HOSTNAME_RE = /(?<![\w@.-])((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24})(?![\w-])/gi;
+
+/** Every hostname-shaped token in a text, lower-cased, each once, in order of first appearance. */
+export function hostnamesIn(text: string): string[] {
+  const out = new Set<string>();
+  for (const match of text.matchAll(HOSTNAME_RE)) out.add(match[1]!.toLowerCase());
+  return [...out];
+}
+
+/** The resolver check, against 1.1.1.3 by default. A host it cannot resolve at all is not blocked, it is unknown, and goes as written. */
+export function familyDnsBlockCheck(server: string = FAMILY_DNS): HostBlockCheck {
+  const resolver = new Resolver({ timeout: 3000, tries: 1 });
+  resolver.setServers([server]);
+  return async (host) => {
+    try {
+      const addresses = await resolver.resolve4(host);
+      return addresses.includes('0.0.0.0');
+    } catch {
+      return false;
+    }
+  };
+}
+
+export function defangHost(host: string): string {
+  return host.replace(/\./g, '[.]');
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** `hosts` defanged wherever they appear as a whole name; longest first, so `www.x.com` is done before `x.com` finds its tail. */
+export function defangHosts(text: string, hosts: string[]): string {
+  let out = text;
+  for (const host of [...hosts].sort((a, b) => b.length - a.length)) {
+    const re = new RegExp(`(?<![\\w@-])${escapeRegExp(host)}(?![\\w-])`, 'gi');
+    out = out.replace(re, defangHost);
+  }
+  return out;
+}
+
+export interface DefangResult {
+  outgoing: Outgoing;
+  /** The hostnames that were blocked and defanged, sorted. Empty when the message went as written. */
+  defanged: string[];
+}
+
+/** At most this many distinct hostnames are looked up per message; a longer digest goes as written past that. */
+const HOST_LOOKUP_CAP = 50;
+
+export async function defangBlockedHosts(outgoing: Outgoing, isBlocked: HostBlockCheck): Promise<DefangResult> {
+  const hosts = hostnamesIn([outgoing.subject, outgoing.text, outgoing.html ?? ''].join('\n')).slice(0, HOST_LOOKUP_CAP);
+  const verdicts = await Promise.all(hosts.map(async (host) => [host, await isBlocked(host)] as const));
+  const blocked = verdicts.filter(([, yes]) => yes).map(([host]) => host).sort();
+  if (blocked.length === 0) return { outgoing, defanged: [] };
+  return {
+    outgoing: {
+      ...outgoing,
+      subject: defangHosts(outgoing.subject, blocked),
+      text: defangHosts(outgoing.text, blocked),
+      ...(outgoing.html ? { html: defangHosts(outgoing.html, blocked) } : {}),
+    },
+    defanged: blocked,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Sending
 // ---------------------------------------------------------------------------
 
@@ -1492,6 +1593,8 @@ export interface SendResult {
   id: string | null;
   /** Set when the first transport failed and the second carried it. */
   fellBackFrom?: { transport: Transport; error: string };
+  /** Hostnames Forward Email would have refused, defanged before the send. */
+  defanged?: string[];
 }
 
 export type SmtpSender = (account: Account, outgoing: Outgoing) => Promise<string | null>;
@@ -1591,27 +1694,39 @@ export async function sendMail(
     via?: Transport;
     smtp?: SmtpSender;
     resend?: ResendSender;
+    /** The Family DNS check, for a test; the real resolver otherwise. */
+    isBlocked?: HostBlockCheck;
   } = {},
 ): Promise<SendResult> {
   const choice = chooseTransport(account, options.resendKey, options.via);
   const smtp = options.smtp ?? sendViaSmtp;
   const resend = options.resend ?? resendSender();
 
+  // Through Forward Email, a blocked hostname is defanged first or the message
+  // never leaves; the fallback (if taken) carries the same defanged copy.
+  let message = outgoing;
+  let defanged: string[] = [];
+  if (choice.transport === 'smtp' && smtpFiltersHostnames(account)) {
+    ({ outgoing: message, defanged } = await defangBlockedHosts(outgoing, options.isBlocked ?? familyDnsBlockCheck()));
+  }
+  const tail = defanged.length > 0 ? { defanged } : {};
+
   const attempt = async (transport: Transport): Promise<string | null> =>
-    transport === 'smtp' ? smtp(account, outgoing) : resend(options.resendKey!, outgoing);
+    transport === 'smtp' ? smtp(account, message) : resend(options.resendKey!, message);
 
   try {
-    return { transport: choice.transport, id: await attempt(choice.transport) };
+    return { transport: choice.transport, id: await attempt(choice.transport), ...tail };
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (!choice.fallback || !isTransportFailure(message)) {
-      throw error instanceof MailError ? error : new MailError(`${choice.transport}: ${message}`);
+    const reason = error instanceof Error ? error.message : String(error);
+    if (!choice.fallback || !isTransportFailure(reason)) {
+      throw error instanceof MailError ? error : new MailError(`${choice.transport}: ${reason}`);
     }
     const id = await attempt(choice.fallback);
     return {
       transport: choice.fallback,
       id,
-      fellBackFrom: { transport: choice.transport, error: message },
+      fellBackFrom: { transport: choice.transport, error: reason },
+      ...tail,
     };
   }
 }
