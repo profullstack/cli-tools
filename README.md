@@ -105,17 +105,22 @@ publishes:
 curl -fsSL https://profullstack.com/install.sh | sh
 ```
 
-That drops [`profullstack.com/skill.md`](https://profullstack.com/skill.md)
-into `~/.claude/skills/profullstack/SKILL.md`, and into
-`~/.codex/skills/profullstack/skill.md` as well when there is a `~/.codex` to
-put it in, so the agent driving these commands knows what this shop builds and
-how it builds it before it is asked anything. Same bargain as the Stripe CLI:
-the commands and the agent that drives them should arrive together, rather than
-the skill being a second curl nobody remembers. The published script is fetched
-and run rather than reimplemented here, so a box gets exactly what the one-liner
-gives it. `PROFULLSTACK_INSTALL_URL` points it somewhere else,
-`CLI_TOOLS_SKIP_SKILL=1` skips it, and an unreachable site warns rather than
-failing the install.
+That writes [`profullstack.com/skill.md`](https://profullstack.com/skill.md)
+once to `~/.agents/skills/profullstack/SKILL.md` and symlinks it into every
+coding agent installed on the box — Claude Code, Codex, Gemini, qwen, opencode,
+Crush, Goose, Amp, Cursor, Windsurf, aider-desk, Kilo Code — so whichever agent
+you drive these commands with knows what this shop builds and how before it is
+asked anything. A skill is Markdown and belongs to no vendor; only the
+directory an agent reads does, which is why one copy and twelve links beats
+twelve downloads. Nothing is created for an agent that is not installed.
+
+Same bargain as the Stripe CLI: the commands and the agent that drives them
+should arrive together, rather than the skill being a second curl nobody
+remembers. The published script is fetched and run with no arguments rather
+than reimplemented here, so a box gets exactly what the one-liner gives it and
+this repo never decides which agents count. `PROFULLSTACK_INSTALL_URL` points it
+somewhere else, `CLI_TOOLS_SKIP_SKILL=1` skips it, and an unreachable site warns
+rather than failing the install.
 
 It also installs the **companions** — commands this set ships but does not
 implement, because they are distributed in their own right:
