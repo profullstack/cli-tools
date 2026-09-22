@@ -98,6 +98,25 @@ downloads the release tarball and checks the published sha256, and if any of
 that fails it warns and moves on rather than failing an install that otherwise
 worked. Authenticate it once with `stripe login`.
 
+It also installs the **Profullstack skill**, by running the one-liner the site
+publishes:
+
+```sh
+curl -fsSL https://profullstack.com/install.sh | sh
+```
+
+That drops [`profullstack.com/skill.md`](https://profullstack.com/skill.md)
+into `~/.claude/skills/profullstack/SKILL.md`, and into
+`~/.codex/skills/profullstack/skill.md` as well when there is a `~/.codex` to
+put it in, so the agent driving these commands knows what this shop builds and
+how it builds it before it is asked anything. Same bargain as the Stripe CLI:
+the commands and the agent that drives them should arrive together, rather than
+the skill being a second curl nobody remembers. The published script is fetched
+and run rather than reimplemented here, so a box gets exactly what the one-liner
+gives it. `PROFULLSTACK_INSTALL_URL` points it somewhere else,
+`CLI_TOOLS_SKIP_SKILL=1` skips it, and an unreachable site warns rather than
+failing the install.
+
 It also installs the **companions** — commands this set ships but does not
 implement, because they are distributed in their own right:
 
