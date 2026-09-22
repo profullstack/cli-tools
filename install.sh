@@ -15,6 +15,8 @@
 #   CLI_TOOLS_FORCE    set to 1 to take over links owned by another checkout
 #   CLI_TOOLS_SKIP_STRIPE  set to 1 to skip the Stripe CLI
 #   STRIPE_CLI_VERSION     pin the Stripe CLI (default: latest release)
+#   CLI_TOOLS_SKIP_SKILL   set to 1 to skip the Profullstack agent skill
+#   PROFULLSTACK_INSTALL_URL  where that skill installer lives
 
 set -eu
 
@@ -259,6 +261,52 @@ install_stripe() {
 say "Installing the Stripe CLI"
 install_stripe
 
+# ── Profullstack skill ──────────────────────────────────────────────────
+#
+#   curl -fsSL https://profullstack.com/install.sh | sh
+#
+# The agent-facing half of this set. That published installer drops
+# profullstack.com/skill.md into ~/.claude/skills and ~/.codex/skills, which is
+# how Claude Code and Codex learn what this shop builds and how it builds it.
+# Running it here is the same bargain the Stripe CLI gets: the commands and the
+# agent that drives them arrive together, rather than the skill being a second
+# curl nobody remembers.
+#
+# The published script is fetched and run rather than reimplemented, so what a
+# box gets from the installer and what it gets from the one-liner stay the same
+# thing. Warns rather than dies, and CLI_TOOLS_SKIP_SKILL=1 skips it.
+
+SKILL_INSTALL_URL="${PROFULLSTACK_INSTALL_URL:-https://profullstack.com/install.sh}"
+
+install_skill() {
+	[ "${CLI_TOOLS_SKIP_SKILL:-0}" = "1" ] && return 0
+
+	command -v curl >/dev/null 2>&1 || { say "  skipped: curl is required."; return 0; }
+
+	# Which agents this box actually has decides what to ask for. The installer
+	# defaults to claude alone, which on a Codex-only box would create a
+	# ~/.claude nobody asked for and leave Codex without the skill.
+	if [ -d "$HOME/.codex" ]; then
+		if [ -d "$HOME/.claude" ]; then target="both"; else target="codex"; fi
+	else
+		target="claude"
+	fi
+
+	tmp="$(mktemp)" || { say "  skipped: could not create a temp file."; return 0; }
+
+	if ! curl -fsSL "$SKILL_INSTALL_URL" -o "$tmp" 2>/dev/null; then
+		say "  skipped: could not reach $SKILL_INSTALL_URL."
+		rm -f "$tmp"
+		return 0
+	fi
+
+	sh "$tmp" "$target" || say "  skipped: $SKILL_INSTALL_URL failed."
+	rm -f "$tmp"
+}
+
+say "Installing the Profullstack skill"
+install_skill
+
 # install-links.mjs already warns when $PREFIX is not on PATH, so there is
 # deliberately no second warning here.
 say ""
@@ -266,3 +314,4 @@ say "Installed. Try:"
 say "  cli-tools list             # what landed, and what is on PATH"
 say "  cli-tools aliases --install  # the moshcode pit aliases"
 say "  stripe login               # authenticate the Stripe CLI"
+say "  /profullstack              # the agent skill, inside Claude Code"
