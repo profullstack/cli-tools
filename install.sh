@@ -265,9 +265,12 @@ install_stripe
 #
 #   curl -fsSL https://profullstack.com/install.sh | sh
 #
-# The agent-facing half of this set. That published installer drops
-# profullstack.com/skill.md into ~/.claude/skills and ~/.codex/skills, which is
-# how Claude Code and Codex learn what this shop builds and how it builds it.
+# The agent-facing half of this set. That published installer writes
+# profullstack.com/skill.md once to ~/.agents/skills/profullstack and links it
+# into every coding agent on the box -- Claude Code, Codex, Gemini, qwen,
+# opencode, Crush, Goose, Cursor, Windsurf and the rest -- which is how
+# whatever agent you drive these commands with learns what this shop builds and
+# how it builds it.
 # Running it here is the same bargain the Stripe CLI gets: the commands and the
 # agent that drives them arrive together, rather than the skill being a second
 # curl nobody remembers.
@@ -283,15 +286,6 @@ install_skill() {
 
 	command -v curl >/dev/null 2>&1 || { say "  skipped: curl is required."; return 0; }
 
-	# Which agents this box actually has decides what to ask for. The installer
-	# defaults to claude alone, which on a Codex-only box would create a
-	# ~/.claude nobody asked for and leave Codex without the skill.
-	if [ -d "$HOME/.codex" ]; then
-		if [ -d "$HOME/.claude" ]; then target="both"; else target="codex"; fi
-	else
-		target="claude"
-	fi
-
 	tmp="$(mktemp)" || { say "  skipped: could not create a temp file."; return 0; }
 
 	if ! curl -fsSL "$SKILL_INSTALL_URL" -o "$tmp" 2>/dev/null; then
@@ -300,7 +294,10 @@ install_skill() {
 		return 0
 	fi
 
-	sh "$tmp" "$target" || say "  skipped: $SKILL_INSTALL_URL failed."
+	# No arguments: which agents are on the box is that installer's business,
+	# and it knows twelve of them. Naming one here would be this repo deciding
+	# that a box running Gemini or opencode does not get the skill.
+	sh "$tmp" || say "  skipped: $SKILL_INSTALL_URL failed."
 	rm -f "$tmp"
 }
 
