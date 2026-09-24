@@ -31,12 +31,20 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { shortcodeOf } from './emoji-platforms.ts';
+
 export const EMOJI_TEST_URL = 'https://unicode.org/Public/emoji/latest/emoji-test.txt';
 export const DEFAULT_OUT = './openemoji';
 export const DEFAULT_MODEL = 'gpt-image-2';
 export const DEFAULT_QUALITY = 'medium';
 export const DEFAULT_CONCURRENCY = 6;
 export const DEFAULT_SIZES = [16, 20, 32, 48, 64, 72, 96, 128, 160, 256, 512] as const;
+/** WebP copies for the web: small enough to put a whole catalog on one page. */
+export const DEFAULT_WEBP_SIZES = [64, 128] as const;
+export const CLDR_ANNOTATIONS_URLS = [
+  'https://cdn.jsdelivr.net/npm/cldr-annotations-full/annotations/en/annotations.json',
+  'https://cdn.jsdelivr.net/npm/cldr-annotations-derived-full/annotationsDerived/en/annotations.json',
+] as const;
 /** The PNG size fonts embed. 136 is what Noto Color Emoji ships. */
 export const FONT_BITMAP = 136;
 export const SPEC_VERSION = '0.1';
@@ -48,6 +56,7 @@ export const ANCHORS = ['1f600', '1f525', '2764-fe0f', '1f44d', '1f680', '1f431'
 export const STYLE = `Design one glyph for a premium, original emoji typeface that has to hold its own next to Apple and Microsoft Fluent.
 Art direction: soft-volume 3D with vector clarity. Bold, instantly readable silhouette built from clean geometric forms. Smooth, rich gradients that model the form; one warm key light from the upper left with a crisp specular highlight; gentle ambient occlusion where shapes meet; a subtle darker rim on the lower-right edge. Saturated, harmonious colour; materials read as what they are (glass, metal, fur, fabric, skin) without photographic noise. No outlines, no heavy strokes, no text or letters unless the emoji itself is a letter, number or written symbol.
 Composition: one subject, centred, filling about 86% of the square, facing the viewer, nothing cropped. Fully transparent background. No ground shadow, no frame, no badge, no backdrop, no watermark.
+Every design is original: never resemble a character, costume, logo or mascot from any film, game, brand or franchise (no Disney genie, fairy, mermaid or superhero looks); draw the generic idea in this set's own style.
 It must stay legible at 20 pixels and sit beside the rest of the set as one family.`;
 
 const TONES: Record<string, string> = {
@@ -202,7 +211,7 @@ export function tonePromptFor(entry: Entry): string {
     tones.length === 1
       ? `Change the skin of every person or hand in the image to ${tones[0]}.`
       : `There are ${tones.length} people; from left to right their skin is: ${tones.join('; ')}.`;
-  return `This is one glyph of an emoji typeface: "${entry.name}". ${who} Change skin only. Keep everything else identical: pose, outline, hair colour, clothing, lighting, composition, size and the fully transparent background.`;
+  return `This is one glyph of an emoji typeface: "${entry.name}", a wholesome, non-sexual, fully clothed cartoon like the emoji on every phone keyboard. ${who} Change skin only. Keep everything else identical: pose, outline, hair colour, clothing, lighting, composition, size and the fully transparent background.`;
 }
 
 // ---------------------------------------------------------------- the API
@@ -334,6 +343,40 @@ export async function loadEmojiTest(
   return text;
 }
 
+/**
+ * CLDR's English keywords per emoji ("lol" finds 😂), base and derived
+ * annotations merged. Keyed without FE0F, the way CLDR spells most of them.
+ * A failure to fetch is not fatal: the set just ships without keywords.
+ */
+export async function loadKeywords(
+  { env = process.env, fetchImpl = fetch, log = (_: string) => {} }: { env?: NodeJS.ProcessEnv; fetchImpl?: typeof fetch; log?: (line: string) => void } = {},
+): Promise<Map<string, string[]>> {
+  const file = join(cacheDir(env), 'cldr-annotations-en.json');
+  let merged: Record<string, string[]> | null = null;
+  if (existsSync(file) && Date.now() - (await stat(file)).mtimeMs < 30 * 24 * 3600 * 1000) {
+    merged = JSON.parse(await readFile(file, 'utf8'));
+  } else {
+    try {
+      merged = {};
+      for (const url of CLDR_ANNOTATIONS_URLS) {
+        const response = await fetchImpl(url);
+        if (!response.ok) throw new Error(`HTTP ${response.status} from ${url}`);
+        const body = (await response.json()) as Record<string, { annotations?: Record<string, { default?: string[] }> }>;
+        const table = Object.values(body)[0]?.annotations ?? {};
+        for (const [char, value] of Object.entries(table)) {
+          if (value.default?.length) merged[loose(char)] = value.default;
+        }
+      }
+      await mkdir(cacheDir(env), { recursive: true });
+      await writeFile(file, JSON.stringify(merged));
+    } catch (error) {
+      log(`no CLDR keywords: ${(error as Error).message}`);
+      return new Map();
+    }
+  }
+  return new Map(Object.entries(merged ?? {}));
+}
+
 /** "# Version: 17.0" from the file header. */
 export const unicodeVersionOf = (text: string): string => /^# Version: (\S+)/m.exec(text)?.[1] ?? 'unknown';
 
@@ -376,7 +419,6 @@ export async function generate(
   const byKey = new Map(all.map((e) => [e.key, e]));
   const masterPath = (key: string) => join(dirs.master, `${key}.png`);
   const report: GenerateReport = { drawn: [], skipped: [], failed: [], tokens: 0 };
-  const prompts: string[] = [];
 
   const needs = (e: Entry) => options.force || !existsSync(masterPath(e.key));
   const todo = picked.filter((e) => {
@@ -405,7 +447,12 @@ export async function generate(
       await writeFile(masterPath(entry.key), result.png);
       report.drawn.push(entry.key);
       report.tokens += result.tokens;
-      prompts.push(JSON.stringify({ key: entry.key, name: entry.name, references: references.length, prompt }));
+      // Appended as each glyph lands, so a killed run still records what it paid for.
+      await writeFile(
+        join(options.out, 'prompts.jsonl'),
+        `${JSON.stringify({ key: entry.key, name: entry.name, references: references.length, prompt })}\n`,
+        { flag: 'a' },
+      );
       options.log(`drew ${entry.char}  ${entry.key}  ${entry.name}`);
     } catch (error) {
       const message = (error as Error).message;
@@ -436,9 +483,6 @@ export async function generate(
     await draw(entry, tonePromptFor(entry), [await readFile(masterPath(base))]);
   });
 
-  if (prompts.length) {
-    await writeFile(join(options.out, 'prompts.jsonl'), `${prompts.join('\n')}\n`, { flag: 'a' });
-  }
   await writeFile(join(options.out, 'style.txt'), `${options.style}\n`);
   await mergeFailures(options.out, report);
   return report;
@@ -491,7 +535,15 @@ export interface BuildOptions {
   unicodeVersion: string;
   model: string;
   log: (line: string) => void;
+  webpSizes?: number[];
+  keywords?: Map<string, string[]>;
   run?: (command: string, args: string[], cwd?: string) => Promise<void>;
+}
+
+/** True when `derived` exists and is at least as new as `source`. */
+async function fresh(derived: string, source: string): Promise<boolean> {
+  if (!existsSync(derived)) return false;
+  return (await stat(derived)).mtimeMs >= (await stat(source)).mtimeMs;
 }
 
 /** Everything derived from the masters: sizes, SVGs, fonts, CSS, manifest, preview. */
@@ -506,11 +558,21 @@ export async function build(all: readonly Entry[], options: BuildOptions): Promi
   if (drawn.length === 0) throw new Error(`no masters in ${dirs.master}; run \`emoji generate\` first`);
 
   const sharp = await loadSharp();
-  const sizes = [...new Set([...options.sizes, FONT_BITMAP])].sort((a, b) => a - b);
-  options.log(`resizing ${drawn.length} glyphs to ${sizes.join(', ')}px`);
+  // 512 is what the SVG trace reads, so it is always made.
+  const sizes = [...new Set([...options.sizes, FONT_BITMAP, 512])].sort((a, b) => a - b);
+  const webpSizes = options.webpSizes ?? [...DEFAULT_WEBP_SIZES];
+  options.log(`resizing ${drawn.length} glyphs to ${sizes.join(', ')}px (webp ${webpSizes.join(', ') || 'none'})`);
   for (const size of sizes) await mkdir(join(dirs.png, String(size)), { recursive: true });
+  for (const size of webpSizes) await mkdir(join(dirs.root, 'webp', String(size)), { recursive: true });
   await pool(drawn, 8, async (key) => {
-    const master = await readFile(join(dirs.master, `${key}.png`));
+    const masterFile = join(dirs.master, `${key}.png`);
+    // A rebuild while generation is still running only does the new glyphs.
+    const outputs = [
+      ...sizes.map((size) => join(dirs.png, String(size), `${key}.png`)),
+      ...webpSizes.map((size) => join(dirs.root, 'webp', String(size), `${key}.webp`)),
+    ];
+    if ((await Promise.all(outputs.map((file) => fresh(file, masterFile)))).every(Boolean)) return;
+    const master = await readFile(masterFile);
     // Trim the transparent margin the model leaves, then centre on a square
     // canvas so every glyph shares one optical size across the set.
     const trimmed = await sharp(master).trim({ threshold: 1 }).toBuffer();
@@ -531,6 +593,12 @@ export async function build(all: readonly Entry[], options: BuildOptions): Promi
         .resize(size, size, { kernel: 'lanczos3' })
         .png({ compressionLevel: 9, palette: size <= 64 ? false : true, quality: 92 })
         .toFile(join(dirs.png, String(size), `${key}.png`));
+    }
+    for (const size of webpSizes) {
+      await sharp(square)
+        .resize(size, size, { kernel: 'lanczos3' })
+        .webp({ quality: 86, alphaQuality: 90, effort: 5 })
+        .toFile(join(dirs.root, 'webp', String(size), `${key}.webp`));
     }
   });
 
@@ -556,7 +624,13 @@ export async function build(all: readonly Entry[], options: BuildOptions): Promi
     }
   }
 
-  const manifest = manifestFor(all, drawn, { ...options, sizes, fonts });
+  const manifest = manifestFor(all, drawn, {
+    ...options,
+    sizes,
+    webpSizes,
+    fonts,
+    keywords: options.keywords ?? new Map(),
+  });
   await writeFile(join(options.out, 'openemoji.json'), `${JSON.stringify(manifest, null, 2)}\n`);
   await writeFile(join(options.out, 'openemoji.css'), cssFor(manifest));
   await writeFile(join(options.out, 'index.html'), previewFor(manifest));
@@ -619,6 +693,7 @@ src, dst = sys.argv[1], sys.argv[2]
 for name in sorted(os.listdir(src)):
     if not name.endswith('.png'): continue
     out = os.path.join(dst, name[:-4] + '.svg')
+    if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(os.path.join(src, name)): continue
     im = Image.open(os.path.join(src, name)).convert('RGBA').resize((320, 320), Image.LANCZOS)
     a = im.getchannel('A').point(lambda v: 255 if v >= 128 else 0)
     im.putalpha(a)
@@ -646,6 +721,7 @@ export interface Manifest {
   ai_provider: string;
   ai_prompt_url: string;
   sizes: number[];
+  webp_sizes: number[];
   formats: string[];
   fonts: Array<{ format: string; path: string }>;
   css: string;
@@ -657,16 +733,29 @@ export interface Manifest {
     group: string;
     subgroup: string;
     unicode: string;
+    keywords?: string[];
+    /** The set's own names (rule 3): `oe_` and the CLDR name, tones as _t1…_t5. */
+    shortcodes?: string[];
     base?: string;
+    /** Present only when the glyph is drawn: an entry without files is listed, not drawn. */
     svg?: string;
-    png: string;
+    png?: string;
+    webp?: string;
   }>;
 }
 
 export function manifestFor(
   all: readonly Entry[],
   drawn: readonly string[],
-  options: { sizes: number[]; svg: boolean; fonts: Manifest['fonts']; unicodeVersion: string; model: string },
+  options: {
+    sizes: number[];
+    webpSizes?: number[];
+    svg: boolean;
+    fonts: Manifest['fonts'];
+    unicodeVersion: string;
+    model: string;
+    keywords?: Map<string, string[]>;
+  },
 ): Manifest {
   const have = new Set(drawn);
   const known = new Set(all.map((e) => e.key));
@@ -683,7 +772,13 @@ export function manifestFor(
     ai_provider: 'OpenAI',
     ai_prompt_url: 'style.txt',
     sizes: options.sizes,
-    formats: ['png', ...(options.svg ? ['svg'] : []), ...options.fonts.map((f) => f.format)],
+    webp_sizes: options.webpSizes ?? [],
+    formats: [
+      'png',
+      ...(options.webpSizes?.length ? ['webp'] : []),
+      ...(options.svg ? ['svg'] : []),
+      ...options.fonts.map((f) => f.format),
+    ],
     fonts: options.fonts,
     css: 'openemoji.css',
     coverage: {
@@ -691,19 +786,26 @@ export function manifestFor(
       drawn: standard.filter((e) => have.has(e.key)).length,
       missing: standard.filter((e) => !have.has(e.key)).map((e) => e.key),
     },
-    emoji: all
-      .filter((e) => have.has(e.key))
-      .map((e) => ({
+    // Every emoji Unicode lists, drawn or not, so a catalog can show the
+    // whole set and what is still to come. Files mark the drawn ones.
+    emoji: all.map((e) => {
+      const keywords = options.keywords?.get(loose(e.char));
+      const drawnHere = have.has(e.key);
+      return {
         key: e.key,
         char: e.char,
         name: e.name,
         group: e.group,
         subgroup: e.subgroup,
         unicode: e.version,
+        ...(keywords?.length ? { keywords } : {}),
+        shortcodes: [shortcodeOf(e.name)],
         ...(baseKeyOf(e, known) ? { base: baseKeyOf(e, known)! } : {}),
-        ...(options.svg ? { svg: `svg/${e.key}.svg` } : {}),
-        png: `png/{size}/${e.key}.png`,
-      })),
+        ...(drawnHere && options.svg ? { svg: `svg/${e.key}.svg` } : {}),
+        ...(drawnHere ? { png: `png/{size}/${e.key}.png` } : {}),
+        ...(drawnHere && options.webpSizes?.length ? { webp: `webp/{size}/${e.key}.webp` } : {}),
+      };
+    }),
   };
 }
 
@@ -726,7 +828,7 @@ const escapeHtml = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '
 
 export function previewFor(manifest: Manifest): string {
   const groups = new Map<string, Manifest['emoji']>();
-  for (const e of manifest.emoji) groups.set(e.group, [...(groups.get(e.group) ?? []), e]);
+  for (const e of manifest.emoji.filter((x) => x.png)) groups.set(e.group, [...(groups.get(e.group) ?? []), e]);
   const size = manifest.sizes.includes(128) ? 128 : manifest.sizes[manifest.sizes.length - 1]!;
   const sections = [...groups]
     .map(

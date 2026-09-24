@@ -1151,6 +1151,7 @@ emoji generate --only 😀🔥🇯🇵👍🏽           # draw a handful and ju
 emoji generate                            # draw the rest; resumable
 emoji build                               # sizes, SVGs, fonts, CSS, manifest
 emoji status                              # coverage, and what failed
+emoji export --platform slack,signal      # bundles per network (all 22 by default)
 ```
 
 The list is Unicode's own `emoji-test.txt`: every fully-qualified sequence,
@@ -1182,6 +1183,8 @@ style.txt, prompts.jsonl, failures.json
 `<key>` is the fully-qualified codepoint sequence, lowercase, hyphen-joined
 (`1f469-1f3fe-200d-1f4bb`). The SVGs trade gradients for flat colour steps.
 The PNGs and the fonts carry the artwork as drawn.
+
+**Bundles per network.** `emoji export` writes `platforms/<network>/`: packs sized, encoded and named to each network's documented rules (checked against their docs and source, September 2026). Custom emoji for Slack, Discord, Stoat, Mastodon (a `tootctl emoji import` tarball), Misskey (`meta.json` zip), Pleroma/Akkoma (`pack.json`), Mattermost, Zulip, Rocket.Chat, Teams, Matrix, Telegram, Twitch, YouTube, Reddit and Kick; sticker packs where custom emoji do not exist (Signal, WhatsApp as `.wastickers`, Telegram stickers); and images to post for X (flags first), Bluesky and Meta's apps. Names are the set's shortcodes, `oe_` plus the CLDR name with tones as `_t1`…`_t5`, cut to each network's length cap. `platforms.json` holds the same table, steps included, for the catalog; the archives are meant to go up as release assets rather than into git.
 
 A master that exists is never paid for twice, so an interrupted run, a rate
 limit or a refusal costs only a rerun. Refusals and errors land in

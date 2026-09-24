@@ -238,6 +238,8 @@ describe('generate', () => {
 describe('manifest', () => {
   const manifest = manifestFor(all, ['1f600', '1f44d', '1f44d-1f3fd'], {
     sizes: [32, 128],
+    webpSizes: [64],
+    keywords: new Map([['❤', ['love', 'heart']]]),
     svg: true,
     fonts: [{ format: 'cbdt', path: 'font/OpenEmoji-CBDT.ttf' }],
     unicodeVersion: '18.0',
@@ -251,7 +253,7 @@ describe('manifest', () => {
       made_by: 'ai',
       disclosure: 'ai-generated',
       ai_model: 'gpt-image-2',
-      formats: ['png', 'svg', 'cbdt'],
+      formats: ['png', 'webp', 'svg', 'cbdt'],
     });
     expect(manifest.coverage).toMatchObject({ total: all.length, drawn: 3 });
     expect(manifest.coverage.missing).toContain('1f1ef-1f1f5');
@@ -265,9 +267,75 @@ describe('manifest', () => {
     });
   });
 
+  it('lists every emoji, and only drawn ones carry files', () => {
+    expect(manifest.emoji).toHaveLength(all.length);
+    const heart = manifest.emoji.find((e) => e.key === '2764-fe0f')!;
+    expect(heart.png).toBeUndefined();
+    expect(heart.svg).toBeUndefined();
+    // CLDR spells it without FE0F; the lookup still finds it.
+    expect(heart.keywords).toEqual(['love', 'heart']);
+    expect(manifest.emoji.find((e) => e.key === '1f600')!.webp).toBe('webp/{size}/1f600.webp');
+  });
+
   it('the stylesheet points at the fonts and falls back to the system set', () => {
     const css = cssFor(manifest);
     expect(css).toContain('url("font/OpenEmoji-CBDT.ttf")');
     expect(css).toContain('"Noto Color Emoji"');
+  });
+});
+
+describe('platform exports', async () => {
+  const { ESSENTIALS, PLATFORMS, fitName, packsFor, shortcodeOf, zipStore } = await import('../src/emoji-platforms.ts');
+
+  it('shortcodes are oe_ plus the CLDR name, tones as t1-t5', () => {
+    expect(shortcodeOf('face with tears of joy')).toBe('oe_face_with_tears_of_joy');
+    expect(shortcodeOf('woman technologist: medium-dark skin tone')).toBe('oe_woman_technologist_t4');
+    expect(shortcodeOf('kiss: woman, man, light skin tone, dark skin tone')).toBe('oe_kiss_woman_man_t1_t5');
+    expect(shortcodeOf('flag: Côte d’Ivoire')).toBe('oe_flag_cote_d_ivoire');
+    expect(shortcodeOf('keycap: #')).toBe('oe_keycap_hash');
+  });
+
+  it('long names are cut to the cap and stay unique', () => {
+    const a = fitName('oe_couple_with_heart_woman_man_t1_t5', '1f469-1f3fb-200d-2764', 32);
+    const b = fitName('oe_couple_with_heart_woman_man_t1_t4', '1f469-1f3fb-200d-2765', 32);
+    expect(a.length).toBeLessThanOrEqual(32);
+    expect(a).not.toBe(b);
+    expect(fitName('oe_fire', '1f525', 32)).toBe('oe_fire');
+  });
+
+  const drawn = (keys: string[], group = 'Smileys & Emotion', subgroup = 'face-smiling') =>
+    keys.map((key) => ({ key, char: '?', name: key, group, subgroup, unicode: '1.0', png: `png/{size}/${key}.png` }));
+
+  it('packs respect the network cap, split per group', () => {
+    const discord = PLATFORMS.find((p) => p.id === 'discord')!;
+    const emoji = drawn(Array.from({ length: 120 }, (_, i) => `1f${(600 + i).toString(16)}`));
+    const packs = packsFor(discord, emoji, 'all');
+    expect(packs.map((p) => p.keys.length)).toEqual([50, 50, 20]);
+    expect(packs[0]!.id).toBe('smileys-1');
+  });
+
+  it('stickers take the default tone only; essentials keep their order', () => {
+    const signal = PLATFORMS.find((p) => p.id === 'signal')!;
+    const emoji = [...drawn(['1f44d', '1f44d-1f3fd']), ...drawn([ESSENTIALS[1]!, ESSENTIALS[0]!])];
+    expect(packsFor(signal, emoji, 'default-tone')[0]!.keys).toEqual(['1f44d', ESSENTIALS[1], ESSENTIALS[0]]);
+    // 👍 is itself an essential; the pack follows ESSENTIALS order, not input order.
+    expect(packsFor(signal, emoji, 'essentials')[0]!.keys).toEqual([ESSENTIALS[0], ESSENTIALS[1], '1f44d']);
+  });
+
+  it('flags for X are the flag subgroups', () => {
+    const x = PLATFORMS.find((p) => p.id === 'x')!;
+    const emoji = [...drawn(['1f1ef-1f1f5'], 'Flags', 'country-flag'), ...drawn(['1f600'])];
+    expect(packsFor(x, emoji, 'flags')[0]!.keys).toEqual(['1f1ef-1f1f5']);
+    expect(x.highlight?.subgroups).toContain('country-flag');
+  });
+
+  it('writes a zip that unzip can read', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const dir = await mkdtemp(join(tmpdir(), 'zip-'));
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(dir, 'a.zip'), zipStore([{ name: 'oe_fire.png', data: PNG }, { name: 'emoji.txt', data: Buffer.from('ok\n') }]));
+    const listing = execFileSync('unzip', ['-l', join(dir, 'a.zip')]).toString();
+    expect(listing).toContain('oe_fire.png');
+    expect(execFileSync('unzip', ['-p', join(dir, 'a.zip'), 'emoji.txt']).toString()).toBe('ok\n');
   });
 });

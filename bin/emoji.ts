@@ -24,21 +24,25 @@ import {
   DEFAULT_OUT,
   DEFAULT_QUALITY,
   DEFAULT_SIZES,
+  DEFAULT_WEBP_SIZES,
   STYLE,
   build,
   generate,
   loadEmojiTest,
+  loadKeywords,
   openaiImages,
   parseEmojiTest,
   select,
   unicodeVersionOf,
 } from '../src/emoji.ts';
+import { PLATFORMS, exportPlatforms } from '../src/emoji-platforms.ts';
 import { isMain } from '../src/is-main.ts';
 
 const USAGE = `Usage:
   emoji list      [--group G] [--only …] [--json]
   emoji generate  [--out DIR] [selection] [--quality Q] [--concurrency N] [--style FILE] [--force] [--dry-run]
-  emoji build     [--out DIR] [--sizes 16,32,…] [--no-svg] [--no-font]
+  emoji build     [--out DIR] [--sizes 16,32,…] [--webp 64,128] [--no-svg] [--no-font]
+  emoji export    [--out DIR] [--platform slack,discord,…]   bundles per network
   emoji all       generate, then build
   emoji status    [--out DIR]
 
@@ -73,7 +77,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['--json', '--force', '--dry-run', '--refresh', '--components', '--no-svg', '--no-font', '--help'],
-      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes'],
+      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes', '--webp', '--platform', '--download-base'],
     });
     const verb = positional[0];
     if (flags.has('--help') || !verb) {
@@ -131,7 +135,15 @@ if (isMain(import.meta.url)) {
             return Number(s);
           })
         : [...DEFAULT_SIZES];
+      const webpSizes = values.has('--webp')
+        ? csv(values, '--webp').map((s) => {
+            if (!/^\d+$/.test(s) || Number(s) < 8 || Number(s) > 1024) throw new UsageError(`bad webp size: ${s}`);
+            return Number(s);
+          })
+        : [...DEFAULT_WEBP_SIZES];
       const manifest = await build(all, {
+        webpSizes,
+        keywords: await loadKeywords({ log }),
         out,
         sizes,
         svg: !flags.has('--no-svg'),
@@ -161,6 +173,31 @@ if (isMain(import.meta.url)) {
         await doGenerate();
         if (!flags.has('--dry-run')) await doBuild();
         break;
+      case 'export': {
+        const manifestFile = join(out, 'openemoji.json');
+        if (!existsSync(manifestFile)) throw new Error(`no ${manifestFile}; run \`emoji build\` first`);
+        const wanted = csv(values, '--platform');
+        const unknown = wanted.filter((id) => !PLATFORMS.some((p) => p.id === id));
+        if (unknown.length) {
+          throw new UsageError(`unknown platform: ${unknown.join(', ')} (known: ${PLATFORMS.map((p) => p.id).join(', ')})`);
+        }
+        const index = await exportPlatforms({
+          out,
+          manifest: JSON.parse(await readFile(manifestFile, 'utf8')),
+          // A network that borrows another's packs brings that one along.
+          platforms: wanted.length
+            ? PLATFORMS.filter(
+                (p) => wanted.includes(p.id) || PLATFORMS.some((q) => wanted.includes(q.id) && q.packsFrom === p.id),
+              )
+            : PLATFORMS,
+          downloadBase:
+            values.get('--download-base') ?? 'https://github.com/profullstack/openemoji/releases/latest/download',
+          log,
+        });
+        const packs = index.platforms.reduce((n, p) => n + p.packs.length, 0);
+        process.stdout.write(`${index.platforms.length} networks, ${packs} packs in ${join(out, 'platforms')}\n`);
+        break;
+      }
       case 'status': {
         const standard = all.filter((e) => e.group !== 'Component');
         const have = standard.filter((e) => existsSync(join(out, 'master', `${e.key}.png`))).length;
