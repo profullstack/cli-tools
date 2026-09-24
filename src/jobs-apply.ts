@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, type WriteStream } from 'node:fs';
-import { basename, dirname, extname } from 'node:path';
+import { basename, dirname, extname, join } from 'node:path';
 import { createInterface } from 'node:readline';
 
 import { type Profile, type Settings, expandHome, renderWhy } from './jobs-config.ts';
@@ -185,6 +185,27 @@ export const FORM_ERRORS = /(missing entry for required field[^"\\]{0,80}|this f
 // Tron over stdio
 // ---------------------------------------------------------------------------
 
+/**
+ * How to start `tron automate`. An installed TronBrowser ships its runtime as
+ * `<launcher>/sdk/automate-bin.js`, whose `@tronbrowser/*` imports resolve only
+ * through `<launcher>/tron-node.mjs`; run bare, it dies with
+ * ERR_MODULE_NOT_FOUND before speaking MCP. That is how `tron automate` itself
+ * starts it, Obscura path included. A source checkout's dist/ build resolves
+ * its own imports, so it runs directly.
+ */
+export function tronAutomateCommand(
+  automateBin: string,
+  chromiumBin: string | null,
+  exists: (path: string) => boolean = existsSync,
+): { args: string[]; env: Record<string, string> } {
+  const tail = [automateBin, ...(chromiumBin ? ['--chromium-bin', chromiumBin] : [])];
+  const launcher = dirname(dirname(automateBin));
+  const loader = join(launcher, 'tron-node.mjs');
+  if (!exists(loader)) return { args: tail, env: {} };
+  const obscura = join(launcher, 'obscura-bin', 'obscura');
+  return { args: [loader, ...tail], env: exists(obscura) ? { TRON_OBSCURA_BIN: obscura } : {} };
+}
+
 export class TronSession {
   private readonly child: ChildProcessWithoutNullStreams;
   private readonly pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (error: Error) => void }>();
@@ -192,9 +213,9 @@ export class TronSession {
   private exited = false;
 
   constructor(automateBin: string, chromiumBin: string | null, log: WriteStream) {
-    const args = [automateBin, ...(chromiumBin ? ['--chromium-bin', chromiumBin] : [])];
+    const { args, env } = tronAutomateCommand(automateBin, chromiumBin);
     // Its own process group, so close() can take the browser down with it.
-    this.child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    this.child = spawn(process.execPath, args, { stdio: ['pipe', 'pipe', 'pipe'], detached: true, env: { ...process.env, ...env } });
     this.child.stderr.pipe(log, { end: false });
     createInterface({ input: this.child.stdout }).on('line', (line) => {
       let message: Record<string, unknown>;

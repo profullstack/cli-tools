@@ -8,8 +8,26 @@ import {
   planForm,
   rulesFor,
   subjectMatchesCompany,
+  tronAutomateCommand,
   waitForCode,
 } from '../src/jobs-apply.ts';
+
+describe('tronAutomateCommand', () => {
+  const inst = '/home/u/.local/lib/tronbrowser/tronbrowser';
+  it('runs an installed runtime through the launcher\'s tron-node.mjs loader, with Obscura', () => {
+    const have = new Set([`${inst}/tron-node.mjs`, `${inst}/obscura-bin/obscura`]);
+    expect(tronAutomateCommand(`${inst}/sdk/automate-bin.js`, '/bin/chromium', (p) => have.has(p))).toEqual({
+      args: [`${inst}/tron-node.mjs`, `${inst}/sdk/automate-bin.js`, '--chromium-bin', '/bin/chromium'],
+      env: { TRON_OBSCURA_BIN: `${inst}/obscura-bin/obscura` },
+    });
+  });
+  it('runs a source checkout build directly', () => {
+    expect(tronAutomateCommand('/src/tron/packages/sdk/dist/automate-bin.js', null, () => false)).toEqual({
+      args: ['/src/tron/packages/sdk/dist/automate-bin.js'],
+      env: {},
+    });
+  });
+});
 
 const profile = () => {
   let p = emptyProfile();
