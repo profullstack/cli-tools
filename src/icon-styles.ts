@@ -53,6 +53,12 @@ export interface StyleSpec {
   dir: string;
   /** One line, for the manifest, the README and the set's index page. */
   material: string;
+  /**
+   * The ground this style needs. `dark` is a refusal a reader should honour:
+   * emissive marks that emit neutral white are invisible on a white tile, so
+   * a surface that cannot give them a dark ground should pick another style.
+   */
+  ground: 'light' | 'dark' | 'any';
   /** OpenEmoji masters used as style references; the agentic styles use none. */
   emojiRefs: readonly string[];
   /** The style paragraph, without the icon. */
@@ -211,6 +217,7 @@ function agenticStyle(variant: keyof typeof AGENTIC_MATERIALS): StyleSpec {
     label,
     dir: `styles/${id}`,
     material,
+    ground: variant === 'emissive' ? 'dark' : 'any',
     emojiRefs: [],
     styleText: `${AGENTIC_FRAME}\n${paragraph}`,
     promptFor(icon) {
@@ -230,6 +237,7 @@ export const HQ: StyleSpec = {
   label: 'HQ',
   dir: 'hq',
   material: 'Glass and enamel bodies under a warm key light, drawn beside the OpenEmoji masters.',
+  ground: 'any',
   emojiRefs: STYLE_REFS,
   styleText: HQ_STYLE,
   promptFor(icon) {
