@@ -32,6 +32,7 @@ TypeScript, installed as executables on `PATH`.
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
+| [`scorecard`](#scorecard) | One weekly number for the whole fleet: traffic, channels, posts and ads, week over week |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
 | [`user-export`](#user-export) | Every user across many databases, as one CSV |
 | [`email-cleaner`](#email-cleaner) | Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses |
@@ -603,6 +604,38 @@ daily entry:
 
 ```
 5 13 * * * $HOME/.local/bin/gh-pulse >>$HOME/.local/share/gh-pulse/cron.log 2>&1
+```
+
+### `scorecard`
+
+One weekly read across the fleet, built from the tools that already know the
+numbers: `crawlproof dashboard --json` for traffic and ads, `myna dashboard
+--json` for what went out. Nothing is recomputed here that one of them can
+answer.
+
+```
+scorecard                  # the report, to stdout
+scorecard --send           # the same, emailed, snapshot kept
+scorecard --range 30       # a month instead of a week
+scorecard --json           # the snapshot
+scorecard --no-save        # do not write this run into the ledger
+```
+
+The line it exists to draw is internal traffic. Most of the biggest referrers
+on this fleet are our own properties sending people to each other, which is
+real engagement and is not acquisition, so those are split out and the rest is
+totalled as `acquired`.
+
+The source column counts events, not visitors, and runs about twelve times the
+visitor count. The report says so rather than leaving two different units in
+one table to be read as one.
+
+Week over week needs a previous week. Snapshots go in
+`~/.local/share/scorecard` and the first run says it has nothing to compare
+against instead of printing changes against zero. A weekly entry:
+
+```
+0 9 * * 5 $HOME/.local/bin/scorecard --send >>$HOME/.local/share/scorecard/cron.log 2>&1
 ```
 
 ### `gh-prs-fix-all`
