@@ -32,7 +32,7 @@ import { join } from 'node:path';
 
 import { openaiImages } from '../src/emoji.ts';
 import { resolveCredentials } from '../src/credentials.ts';
-import { HQ_CONCURRENCY, buildHq, drawHq, guardCredits, withStyle } from '../src/icon-hq.ts';
+import { HQ_CONCURRENCY, buildHq, drawHq, guardCredits, loadBrandColors, withStyle } from '../src/icon-hq.ts';
 import { AGENTIC_STYLES, STYLES, type StyleSpec, resolveStyle } from '../src/icon-styles.ts';
 import { isMain } from '../src/is-main.ts';
 
@@ -51,14 +51,17 @@ const USAGE = `Usage:
                 [--style-dir DIR] [--dry-run]
 
 A colour style draws every UI icon with an image model (needs OPENAI_API_KEY),
-each pinned to its own simple line glyph so the silhouette and meaning hold;
-brands are never drawn, they take their owners' colours.
+each pinned to its own simple line glyph so the silhouette and meaning hold.
 
   hq       glass and enamel under a warm key light, drawn beside the OpenEmoji
-           masters (--style-dir, default ~/brand-assets/openemoji/master)
+           masters (--style-dir, default ~/brand-assets/openemoji/master).
+           Brands are not drawn: they stay the owner's flat mark in the
+           owner's published colour.
   agentic  the three flat-material styles, which take no emoji reference:
            matte (the default, and the one that holds at 20px on any ground),
-           machined, emissive
+           machined, emissive. These also re-render the brand marks in the
+           material, pinned to the owner's own mark: same geometry, same
+           colour, new surface.
 
 Masters go to <style-dir>/master and are never redrawn; --no-draw only
 rebuilds sizes and the manifest, and --draw-only only draws. Drawing a whole
@@ -231,13 +234,19 @@ if (isMain(import.meta.url)) {
         if (!existsSync(manifestFile)) throw new UsageError(`no ${manifestFile}; run \`icon build --out ${out}\` first`);
         const keys = csv(values, '--only').length
           ? csv(values, '--only').map((n) => find(n)?.key ?? n)
-          : GENERIC.map((i) => i.key);
-        const drawable = keys.filter((k) => GENERIC.some((i) => i.key === k));
+          : [...GENERIC.map((i) => i.key), ...BRANDS.map((b) => b.key)];
+        // What is drawable depends on the style: every style draws the generic
+        // icons, and one that knows how to re-render a mark also draws the
+        // brands. For any other style a brand is still a recolour, so asking
+        // for one is a no-op rather than an error.
+        const drawableFor = (style: StyleSpec) =>
+          keys.filter((k) => GENERIC.some((i) => i.key === k) || (style.promptForBrand && BRANDS.some((b) => b.key === k)));
         const quality = values.get('--quality') ?? 'medium';
         if (!['low', 'medium', 'high'].includes(quality)) throw new UsageError('--quality must be low, medium or high');
 
         if (flags.has('--dry-run')) {
           for (const style of chosen) {
+            const drawable = drawableFor(style);
             const pending = drawable.filter((k) => flags.has('--force') || !existsSync(join(out, style.dir, 'master', `${k}.png`)));
             process.stdout.write(`${style.id}: ${flags.has('--no-draw') ? 0 : pending.length} icons to draw, then sizes, brand colours and openicon.json in ${out}\n`);
           }
@@ -245,15 +254,23 @@ if (isMain(import.meta.url)) {
         }
 
         for (const style of chosen) {
+          const drawable = drawableFor(style);
           const pending = drawable.filter((k) => flags.has('--force') || !existsSync(join(out, style.dir, 'master', `${k}.png`)));
           if (!flags.has('--no-draw') && pending.length) {
             const key = resolveCredentials()['OPENAI_API_KEY'];
             if (!key) throw new Error('no OpenAI key: export OPENAI_API_KEY or run `cli-tools config set openai`');
             const { Resvg } = await import('@resvg/resvg-js');
+            // A style that restyles marks needs the owner colours at draw
+            // time, not only at derive time: without them every mark is drawn
+            // as "monochrome" and comes back graphite.
+            const brandColors = style.promptForBrand && drawable.some((k) => BRANDS.some((b) => b.key === k))
+              ? await loadBrandColors()
+              : undefined;
             const report = await drawHq({
               out,
               style,
               keys: drawable,
+              ...(brandColors ? { brandColors } : {}),
               caller: guardCredits(openaiImages(key)),
               styleDir: values.get('--style-dir') ?? join(process.env['HOME'] ?? '', 'brand-assets', 'openemoji', 'master'),
               concurrency: Number(values.get('--concurrency') ?? HQ_CONCURRENCY),

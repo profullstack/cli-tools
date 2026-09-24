@@ -11,7 +11,10 @@
  * the emoji; the agentic styles deliberately use none, because those masters
  * are where the gloss comes from.
  *
- * Brands are never drawn in any style: their coloured form is the same logo in
+ * Brands are drawn only by a style that says how (`promptForBrand`), and then
+ * only as a material re-rendering of the owner's own mark, pinned by that mark
+ * as the reference: the geometry is never the model's to invent. A style that
+ * says nothing — `hq` — keeps the older behaviour, the same logo recoloured to
  * the owner's published colour (Simple Icons' `hex`, or a cited brand page for
  * the few that came from Font Awesome).
  *
@@ -60,6 +63,35 @@ export const FA_BRAND_COLORS: Record<string, { hex: string; source: string }> = 
 
 export const SIMPLE_ICONS_DATA = `https://cdn.jsdelivr.net/npm/simple-icons@${SIMPLE_ICONS_VERSION}/data/simple-icons.json`;
 
+/** A brand's published colour and where it is published, or undefined. */
+export interface BrandColor {
+  hex: string;
+  source: string;
+}
+
+/**
+ * Every brand's owner colour, from Simple Icons where it carries one and from
+ * the cited brand page for the nine that came from Font Awesome. Both the draw
+ * pass and the derive pass need this — the draw pass to tell the model what
+ * colour the mark is, the derive pass to record it — so it is resolved once.
+ */
+export async function loadBrandColors(fetchImpl: typeof fetch = fetch): Promise<Map<string, BrandColor>> {
+  return brandColorsFrom(await loadSimpleIconsHex(fetchImpl));
+}
+
+export function brandColorsFrom(siHex: Map<string, string>): Map<string, BrandColor> {
+  const out = new Map<string, BrandColor>();
+  for (const brand of BRANDS) {
+    if (brand.source === 'simple-icons') {
+      const hex = siHex.get(brand.slug);
+      if (hex) out.set(brand.key, { hex, source: `simple-icons:${brand.slug}` });
+    } else if (FA_BRAND_COLORS[brand.key]) {
+      out.set(brand.key, FA_BRAND_COLORS[brand.key]!);
+    }
+  }
+  return out;
+}
+
 // ------------------------------------------------------------------ draw
 
 export class CreditError extends Error {}
@@ -92,6 +124,11 @@ export interface HqDrawOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Which style to draw; the HQ style when a caller does not say. */
   style?: StyleSpec;
+  /**
+   * Owner colours, needed only when the style restyles brands. Absent means
+   * brand keys are rejected exactly as they were before styles could draw them.
+   */
+  brandColors?: Map<string, BrandColor>;
 }
 
 export interface HqDrawReport {
@@ -112,8 +149,16 @@ export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
   const byKey = new Map(GENERIC.map((i) => [i.key, i]));
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
 
+  const brandByKey = new Map(BRANDS.map((b) => [b.key, b]));
+  const drawsBrands = Boolean(style.promptForBrand);
+
   const todo = options.keys.filter((key) => {
-    if (!byKey.has(key)) throw new Error(`${key} is not a drawn icon (brands take their colour, they are not drawn)`);
+    if (!byKey.has(key)) {
+      if (!brandByKey.has(key)) throw new Error(`${key} is not an icon in the set`);
+      // A brand is drawable only for a style that says how to re-render a mark;
+      // for every other style its coloured form is still the flat recolour.
+      if (!drawsBrands) throw new Error(`${key} is a brand and ${style.id} does not restyle marks (it recolours them)`);
+    }
     if (!options.force && existsSync(join(master, `${key}.png`))) {
       report.skipped.push(key);
       return false;
@@ -123,26 +168,52 @@ export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
 
   await pool(todo, options.concurrency, async (key) => {
     if (report.stoppedForCredit) return;
-    const icon = byKey.get(key)!;
-    // The line glyph, dark on white: a clear silhouette for the model to keep.
-    const line = await options.render(
-      strokeSvg(icon.body).replace('<svg ', '<svg style="background:#fff" ').replaceAll('currentColor', '#111111'),
-      1024,
-    );
+    const icon = byKey.get(key);
+    const brand = brandByKey.get(key);
+    // The pin: the icon's own artwork, dark on white, for the model to keep.
+    // A drawn icon has a body in the set; a brand's mark is a file on disk,
+    // fetched from its owner's source at build time and never authored here.
+    let line: Buffer;
+    let prompt: string;
+    if (brand) {
+      const markFile = join(options.out, 'svg', `${brand.key}.svg`);
+      if (!existsSync(markFile)) {
+        report.failed.push({ key, error: `no mark at ${markFile}; run \`icon build\` first` });
+        options.log(`FAILED ${key}: no mark on disk`);
+        return;
+      }
+      const colour = options.brandColors?.get(brand.key);
+      const mark = (await readFile(markFile, 'utf8'))
+        .replace('<svg ', '<svg style="background:#fff" ')
+        .replace('fill="currentColor"', `fill="${colour?.hex ?? '#111111'}"`);
+      line = Buffer.from(await options.render(mark, 1024));
+      prompt = style.promptForBrand!({ key: brand.key, title: brand.title, ...(colour ? { hex: colour.hex } : {}) });
+    } else {
+      line = Buffer.from(
+        await options.render(
+          strokeSvg(icon!.body).replace('<svg ', '<svg style="background:#fff" ').replaceAll('currentColor', '#111111'),
+          1024,
+        ),
+      );
+      prompt = style.promptFor(icon!);
+    }
     for (let attempt = 1; ; attempt += 1) {
       if (report.stoppedForCredit) return;
       try {
         report.calls += 1;
         const result = await options.caller({
           model: HQ_MODEL,
-          prompt: style.promptFor(icon),
+          // A brand takes no style reference: the mark is the only thing the
+          // model should be looking at, and an emoji master beside it is an
+          // invitation to redraw.
+          prompt,
           quality: options.quality,
-          references: [line, ...styleRefs],
+          references: brand ? [line] : [line, ...styleRefs],
         });
         await writeFile(join(master, `${key}.png`), result.png);
         await writeFile(
           join(options.out, style.dir, 'prompts.jsonl'),
-          `${JSON.stringify({ key, style: style.id, prompt: style.promptFor(icon), references: ['line', ...style.emojiRefs] })}\n`,
+          `${JSON.stringify({ key, style: style.id, prompt, brand: Boolean(brand), references: brand ? ['mark'] : ['line', ...style.emojiRefs] })}\n`,
           { flag: 'a' },
         );
         report.drawn.push(key);
@@ -230,14 +301,24 @@ export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEn
     made_by: 'ai',
   });
 
-  // UI icons: from the masters, trimmed and centred to one optical size.
+  // Owner colours, resolved once: the derive pass records them on every brand
+  // whether the mark was drawn into the material or only recoloured.
+  const siHex = options.simpleIconsHex ?? (await loadSimpleIconsHex(options.fetchImpl ?? fetch));
+  const brandColors = brandColorsFrom(siHex);
+
+  // Drawn artwork: from the masters, trimmed and centred to one optical size.
+  // A brand master is here too when the style restyles marks, and takes the
+  // same path as a drawn icon — the only difference is what it is called in
+  // the manifest, since the mark is the owner's and the material is ours.
   const broken: string[] = [];
   const masterDir = join(hq, 'master');
   const masters = existsSync(masterDir) ? (await readdir(masterDir)).filter((f) => f.endsWith('.png')) : [];
   const generic = new Set(GENERIC.map((i) => i.key));
+  const brandKeys = new Set(BRANDS.map((b) => b.key));
+  const drawnBrands = new Set<string>();
   await pool(masters, 8, async (file) => {
     const key = file.slice(0, -4);
-    if (!generic.has(key)) return;
+    if (!generic.has(key) && !brandKeys.has(key)) return;
     const source = join(masterDir, file);
     const outputs = [
       ...options.sizes.map((s) => join(hq, 'png', String(s), `${key}.png`)),
@@ -276,23 +357,30 @@ export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEn
           .toFile(outputs[options.sizes.length + i]!);
       }
     }
+    if (brandKeys.has(key)) {
+      // The mark is the owner's, the material is ours: `both`, not `ai`, and
+      // no `svg` — the styled form is raster, and a reader that finds an `svg`
+      // here would show the flat mark and never the material.
+      const colour = brandColors.get(key);
+      drawnBrands.add(key);
+      entries.set(key, {
+        ...files(key),
+        made_by: 'both',
+        ...(colour ? { hex: colour.hex, hex_source: colour.source } : {}),
+      });
+      return;
+    }
     entries.set(key, files(key));
   });
 
-  // Brands: the simple logo in the owner's colour.
-  const siHex = options.simpleIconsHex ?? (await loadSimpleIconsHex(options.fetchImpl ?? fetch));
+  // Brands the style did not draw: the simple logo in the owner's colour.
   for (const brand of BRANDS) {
+    if (drawnBrands.has(brand.key)) continue;
     const lineSvg = join(options.out, 'svg', `${brand.key}.svg`);
     if (!existsSync(lineSvg)) continue;
-    let hex: string | undefined;
-    let hexSource: string;
-    if (brand.source === 'simple-icons') {
-      hex = siHex.get(brand.slug);
-      hexSource = `simple-icons:${brand.slug}`;
-    } else {
-      hex = FA_BRAND_COLORS[brand.key]?.hex;
-      hexSource = FA_BRAND_COLORS[brand.key]?.source ?? '';
-    }
+    const colour = brandColors.get(brand.key);
+    const hex = colour?.hex;
+    const hexSource = colour?.source ?? '';
     if (!hex) {
       options.log(`no brand colour for ${brand.key}; skipped`);
       continue;
@@ -308,7 +396,10 @@ export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEn
     }
     entries.set(brand.key, { ...files(brand.key), svg: `${style.dir}/svg/${brand.key}.svg`, made_by: 'human', hex, hex_source: hexSource });
   }
-  options.log(`${entries.size} ${style.id} icons (${[...entries.values()].filter((e) => e.made_by === 'ai').length} drawn, ${[...entries.values()].filter((e) => e.hex).length} brand-coloured)`);
+  options.log(
+    `${entries.size} ${style.id} icons (${[...entries.values()].filter((e) => e.made_by === 'ai').length} drawn, ` +
+      `${drawnBrands.size} marks in the material, ${[...entries.values()].filter((e) => e.made_by === 'human').length} marks recoloured)`,
+  );
   if (broken.length) options.log(`${broken.length} unreadable masters, left out of the manifest: ${broken.join(', ')}`);
   return entries;
 }
