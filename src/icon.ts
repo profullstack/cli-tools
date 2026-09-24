@@ -139,6 +139,13 @@ export interface StyleInfo {
   label?: string;
   /** One line on the material, so a reader can choose without looking. */
   material?: string;
+  /**
+   * The ground this style is drawn to sit on. `dark` means it is only legible
+   * against one — a near-black body with a lit accent vanishes on white, and
+   * the marks that emit neutral white vanish completely. Only the set knows
+   * this, so a reader that places icons has to be told rather than guess.
+   */
+  ground?: 'light' | 'dark' | 'any';
   sizes: number[];
   webp_sizes: number[];
   made_by: 'ai' | 'human' | 'both';
