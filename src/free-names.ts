@@ -77,7 +77,15 @@ export async function freeNames(
   const { generate = generateNames, check = checkMany } = deps;
   const { count = DEFAULT_COUNT, tld, words, seed, jobs, timeout } = options;
 
-  const candidates = await generate(description, call, { count, tld, seed, words });
+  // Spread the optional ones rather than passing them as undefined: under
+  // exactOptionalPropertyTypes an absent option and one explicitly set to
+  // undefined are different things, and only the first means "use the default".
+  const candidates = await generate(description, call, {
+    count,
+    ...(tld === undefined ? {} : { tld }),
+    ...(seed === undefined ? {} : { seed }),
+    ...(words === undefined ? {} : { words }),
+  });
 
   // An empty generation is not an error and must not become one: the model
   // answered, the vocabulary was simply too thin to expand. Checking nothing
@@ -86,7 +94,10 @@ export async function freeNames(
     return { candidates: [], available: [], results: [], checked: 0, taken: 0, unknown: 0 };
   }
 
-  const results = await check(candidates, { jobs, timeout });
+  const results = await check(candidates, {
+    ...(jobs === undefined ? {} : { jobs }),
+    ...(timeout === undefined ? {} : { timeout }),
+  });
   const { taken, unknown } = summarize(results);
 
   return {

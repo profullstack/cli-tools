@@ -136,6 +136,15 @@ describe('addBody', () => {
  * bencode scan is off by a byte at either end, this is what says so.
  */
 describe('against a real client', () => {
+  /*
+   * This one shells out to npx twice, which on a cold cache means two package
+   * downloads. vitest's default limit is five seconds, so it killed the test
+   * before either subprocess finished AND before the catch below could decide
+   * the run was simply offline — the failure looked like a hashing bug and was
+   * a clock. The budget here is the two subprocess timeouts plus room to spawn.
+   */
+  const NPX_TIMEOUT_MS = 60_000;
+
   it('computes the info hash WebTorrent computes', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cli-tools-torrent-'));
     const data = join(dir, 'sample');
@@ -147,7 +156,7 @@ describe('against a real client', () => {
       created = join(dir, 'sample.torrent');
       execFileSync('npx', ['--yes', 'create-torrent', data, '-o', created], {
         stdio: 'ignore',
-        timeout: 120_000,
+        timeout: NPX_TIMEOUT_MS,
       });
     } catch {
       // No network, or no npx: the offline assertions above still stand.
@@ -159,11 +168,11 @@ describe('against a real client', () => {
     // reader is the reference for what we computed.
     const expected = execFileSync('npx', ['--yes', 'parse-torrent', created], {
       encoding: 'utf8',
-      timeout: 120_000,
+      timeout: NPX_TIMEOUT_MS,
     });
     expect(expected).toContain(infoHash(buf));
     expect(magnetFor(buf)).toContain(infoHash(buf));
-  });
+  }, NPX_TIMEOUT_MS * 2 + 10_000);
 });
 
 describe('web seeds', () => {
