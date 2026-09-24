@@ -9,8 +9,13 @@ import {
   ExportError,
   csvField,
   exportUsers,
+  isoTime,
   libsqlHttpUrl,
   parseConfig,
+  parseCsv,
+  parseRows,
+  remotePostgresCommand,
+  shq,
   readLibsql,
   readSqlite,
   readSupabaseAuth,
@@ -203,5 +208,95 @@ describe('exportUsers', () => {
       ['dead', 0, true],
       ['live', 1, false],
     ]);
+  });
+});
+
+describe('cmd: references', () => {
+  it('runs each command once and trims its output', () => {
+    const ran: string[] = [];
+    const resolve = secretResolver({}, { run: (c) => (ran.push(c), { status: 0, stdout: ' tok\n', stderr: '' }) });
+    expect(resolve('cmd:get-token', 'x')).toBe('tok');
+    expect(resolve('cmd:get-token', 'x')).toBe('tok');
+    expect(ran).toEqual(['get-token']);
+  });
+
+  it('refuses a failed or silent command without echoing its stderr', () => {
+    const resolve = secretResolver({}, { run: () => ({ status: 1, stdout: '', stderr: 'secret=abc' }) });
+    expect(() => resolve('cmd:nope', 'src')).toThrow(/exited 1 with no output/);
+    expect(() => resolve('cmd:nope', 'src')).not.toThrow(/abc/);
+  });
+});
+
+describe('isoTime', () => {
+  it('normalizes every shape a database hands back', () => {
+    expect(isoTime('2026-09-24T01:02:03.456789+00:00')).toBe('2026-09-24T01:02:03Z');
+    expect(isoTime('2026-09-24 01:02:03')).toBe('2026-09-24T01:02:03Z');
+    expect(isoTime('2026-09-24 01:02:03.5-07')).toBe('2026-09-24T08:02:03Z');
+    expect(isoTime(1700000000)).toBe('2023-11-14T22:13:20Z');
+    expect(isoTime('1700000000000')).toBe('2023-11-14T22:13:20Z');
+    expect(isoTime(new Date(0))).toBe('1970-01-01T00:00:00Z');
+    expect(isoTime(null)).toBe('');
+    expect(isoTime('last week')).toBe('last week');
+  });
+});
+
+describe('parseRows', () => {
+  it('reads a JSON array or a CSV with a header', () => {
+    expect(parseRows('s', '[{"name":"A","email":"a@x","last_login":null}]')).toEqual([
+      { site: 's', name: 'A', email: 'a@x', last_login: '' },
+    ]);
+    expect(parseRows('s', 'email,name,last_login\r\nb@x,"Doe, ""B""",2026\n')).toEqual([
+      { site: 's', name: 'Doe, "B"', email: 'b@x', last_login: '2026' },
+    ]);
+    expect(parseCsv('a,"x\ny"\n')).toEqual([['a', 'x\ny']]);
+    expect(parseRows('s', '  ')).toEqual([]);
+  });
+});
+
+describe('via', () => {
+  it('quotes for a POSIX shell', () => {
+    expect(shq("it's")).toBe(`'it'\\''s'`);
+  });
+
+  it('reads SQLite through a remote shell, end to end', async () => {
+    const dir = mkdtempSync(join(tmpdir(), "user-export-it's-"));
+    try {
+      const path = join(dir, 'u.db');
+      const db = new DatabaseSync(path);
+      db.exec("create table users (name text, email text, seen integer); insert into users values ('Dee', 'd@x', 1700000000)");
+      db.close();
+      // `sh -c` stands in for `ssh host`: same contract, one shell command.
+      const rows = await readSqlite(
+        { type: 'sqlite', site: 'r', via: 'sh -c', path, query: "select name, email, seen as last_login from users where name != 'x'" },
+        literal,
+      );
+      expect(rows).toEqual([{ site: 'r', name: 'Dee', email: 'd@x', last_login: '2023-11-14T22:13:20Z' }]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('wraps a Postgres query as one read-only JSON value', () => {
+    const command = remotePostgresCommand('select 1', 'postgresql:///db');
+    expect(command).toContain("default_transaction_read_only=on");
+    expect(command).toContain("'postgresql:///db'");
+    const encoded = command.match(/echo (\S+) \|/)![1]!;
+    expect(Buffer.from(encoded, 'base64').toString()).toBe(
+      "select coalesce(json_agg(t), '[]'::json) from (select 1) t",
+    );
+  });
+
+  it('runs an exec source and reports a failing one', async () => {
+    const ok = await exportUsers(
+      { sources: [{ type: 'exec', site: 'e', command: "printf 'name,email,last_login\\nE,e@x,\\n'" }, { type: 'exec', site: 'bad', command: 'echo boom >&2; exit 4' }] },
+      literal,
+    );
+    expect(ok[0]!.rows).toEqual([{ site: 'e', name: 'E', email: 'e@x', last_login: '' }]);
+    expect(ok[1]!.error).toMatch(/exited 4: boom/);
+  });
+
+  it('requires url for postgres only without via', () => {
+    expect(() => parseConfig('{"sources":[{"type":"postgres","site":"p","query":"q"}]}')).toThrow(/unless "via"/);
+    expect(parseConfig('{"sources":[{"type":"postgres","site":"p","query":"q","via":"ssh h"}]}').sources).toHaveLength(1);
   });
 });

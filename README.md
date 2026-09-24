@@ -1657,14 +1657,28 @@ The config lists sources, and nothing in the command knows whose they are:
 | `supabase-management` | `auth.users` on every project an access token can see | `token`; optional `include`, `exclude`, `sites` (project → label), `queries` (project → SQL) |
 | `supabase-auth` | one instance, cloud or self-hosted, via the GoTrue admin API | `site`, `url`, `serviceKey` |
 | `libsql` | Turso / libSQL over HTTP (no client library) | `site`, `url`, `token`, `query` |
-| `sqlite` | a file, opened read-only | `site`, `path`, `query` |
-| `postgres` | any Postgres URL, in a read-only transaction | `site`, `url`, `query` |
+| `sqlite` | a file, opened read-only | `site`, `path`, `query`; optional `via` |
+| `postgres` | any Postgres, in a read-only transaction | `site`, `query`, `url` and/or `via` |
+| `exec` | any command that prints a JSON array or a CSV with a header | `site`, `command` |
 
-Custom queries alias their columns to `name`, `email` and `last_login`. Secret
-fields are references, so the config can be shared while the values are not:
-`env:NAME` reads the environment, and `vault:<project>/<env>/<KEY>` pulls a
+Custom queries alias their columns to `name`, `email` and `last_login`.
+
+A database that only answers from inside its own host (a platform's private
+network, a SQLite file on a container volume) is read through `via`, a prefix
+that runs one shell command there: `ssh db.internal`, `railway ssh -p <project>
+-s <service> -e production`, `docker exec my-app sh -c`. The reader goes through
+it: psql with `default_transaction_read_only=on` and the rows as one
+`json_agg`, or a few lines of bun/node that open the SQLite file read-only.
+Nothing is installed on the far side and the query is base64, so no quoting
+survives into the remote shell.
+
+Secret fields are references, so the config can be shared while the values are
+not: `env:NAME` reads the environment, `vault:<project>/<env>/<KEY>` pulls a
 [logicsrc](https://logicsrc.com) team vault (team from `"vaultTeam"`, or
-`vault:<team>/<project>/<env>/<KEY>`), once per vault, decrypted only in memory.
+`vault:<team>/<project>/<env>/<KEY>`), once per vault, decrypted only in memory,
+and `cmd:<shell>` takes a command's trimmed stdout — for keys that already live
+in a platform, e.g. `cmd:railway variable list -p <id> -s web -e production
+--json | jq -r .TURSO_AUTH_TOKEN`.
 
 A source that fails is reported on stderr and the rest still export; the exit
 status is 3 when the output is partial. The config is found at `--config`, then

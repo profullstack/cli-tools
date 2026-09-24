@@ -40,10 +40,16 @@ Sources (see --example):
   libsql               Turso / libSQL over HTTP, with your own SELECT
   sqlite               a SQLite file, opened read-only, with your own SELECT
   postgres             any Postgres URL, in a read-only transaction
+  exec                 any command that prints rows as a JSON array or CSV
 
 Custom queries must alias their columns to name, email and last_login.
-Secret fields take a literal, env:NAME, or vault:<project>/<env>/<KEY>
-(logicsrc team vault; team from "vaultTeam" or vault:<team>/<project>/<env>/<KEY>).
+sqlite and postgres take "via": a prefix that runs one shell command where the
+database lives ("ssh host", "railway ssh -p P -s S -e production",
+"docker exec ctr sh -c"); the read-only reader is sent through it.
+
+Secret fields take a literal, env:NAME, vault:<project>/<env>/<KEY>
+(logicsrc team vault; team from "vaultTeam" or vault:<team>/<project>/<env>/<KEY>),
+or cmd:<shell> (the command's trimmed stdout).
 
 Options:
       --config FILE  config path (default: $USER_EXPORT_CONFIG, then

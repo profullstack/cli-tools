@@ -1,21 +1,29 @@
+import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { pullVault, type VaultTarget } from './vault.ts';
+import { pullVault, vaultTarget, type VaultTarget } from './vault.ts';
 
 /**
  * Export every user account across many databases as one CSV:
  * `site,name,email,last_login`.
  *
  * Nothing here knows whose databases these are. Which databases to read, and
- * with what, is a config file whose secret fields are *references* — `env:NAME`
- * or `vault:<project>/<env>/<KEY>` — so the file can live in a repo while the
- * values stay in the environment or a logicsrc team vault.
+ * with what, is a config file whose secret fields are *references* — `env:NAME`,
+ * `vault:<project>/<env>/<KEY>` or `cmd:<shell>` — so the file can live in a
+ * repo while the values stay in the environment, a logicsrc team vault, or
+ * whatever CLI already holds them.
  *
  * Every source is read-only. Supabase's management API is asked for
- * `read_only: true`, SQLite is opened read-only, and the other sources only
- * ever run the SELECT they were configured with.
+ * `read_only: true`, SQLite is opened read-only, Postgres runs in a read-only
+ * transaction, and libSQL only ever runs the SELECT it was configured with.
+ *
+ * A database that is only reachable from inside its own host (a platform's
+ * private network, a volume on a container) is read through `via`: a command
+ * prefix that runs a shell command there — `ssh host`, `railway ssh ...`,
+ * `docker exec ctr sh -c`. The reader is shipped through it, so nothing has
+ * to be installed on the far side beyond psql, or node/bun for SQLite.
  */
 
 export class ExportError extends Error {
@@ -68,13 +76,24 @@ export interface SqliteSource {
   site: string;
   path: string;
   query: string;
+  /** Run on another host: a prefix that executes one shell command there. */
+  via?: string;
 }
 
 export interface PostgresSource {
   type: 'postgres';
   site: string;
-  url: string;
+  /** A connection URL; with `via`, optional and handed to the remote psql. */
+  url?: string;
   query: string;
+  via?: string;
+}
+
+/** Anything else: a command that prints the rows as JSON or CSV. */
+export interface ExecSource {
+  type: 'exec';
+  site: string;
+  command: string;
 }
 
 export type Source =
@@ -82,7 +101,8 @@ export type Source =
   | SupabaseAuthSource
   | LibsqlSource
   | SqliteSource
-  | PostgresSource;
+  | PostgresSource
+  | ExecSource;
 
 export interface Config {
   /** Default team for `vault:` references. */
@@ -103,7 +123,7 @@ export const AUTH_USERS_QUERY = `select
 from auth.users
 order by last_sign_in_at desc nulls last`;
 
-const TYPES = ['supabase-management', 'supabase-auth', 'libsql', 'sqlite', 'postgres'] as const;
+const TYPES = ['supabase-management', 'supabase-auth', 'libsql', 'sqlite', 'postgres', 'exec'] as const;
 
 export function defaultConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const base = env.XDG_CONFIG_HOME || join(homedir(), '.config');
@@ -128,7 +148,8 @@ export function parseConfig(text: string): Config {
     'supabase-auth': ['site', 'url', 'serviceKey'],
     libsql: ['site', 'url', 'query'],
     sqlite: ['site', 'path', 'query'],
-    postgres: ['site', 'url', 'query'],
+    postgres: ['site', 'query'],
+    exec: ['site', 'command'],
   };
   sources.forEach((source: Source, index) => {
     if (!TYPES.includes(source?.type)) {
@@ -138,6 +159,9 @@ export function parseConfig(text: string): Config {
       if (typeof (source as unknown as Record<string, unknown>)[key] !== 'string') {
         throw new ExportError(`sources[${index}] (${source.type}): "${key}" is required`);
       }
+    }
+    if (source.type === 'postgres' && !source.url && !source.via) {
+      throw new ExportError(`sources[${index}] (postgres): "url" is required unless "via" is set`);
     }
   });
   return raw as Config;
@@ -154,17 +178,29 @@ export function loadConfig(path: string): Config {
 }
 
 export type VaultPuller = (target: VaultTarget) => Record<string, string>;
+export type CommandRunner = (command: string) => { status: number; stdout: string; stderr: string };
+
+export const shellRunner: CommandRunner = (command) => {
+  const r = spawnSync('sh', ['-c', command], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 120_000 });
+  return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr ?? r.error?.message ?? '' };
+};
 
 /**
- * Resolve `env:NAME` and `vault:<project>/<env>/<KEY>` (or
- * `vault:<team>/<project>/<env>/<KEY>`). Anything else is a literal. Each vault
- * is pulled once however many references point into it.
+ * Resolve `env:NAME`, `vault:<project>/<env>/<KEY>` (or
+ * `vault:<team>/<project>/<env>/<KEY>`) and `cmd:<shell>` (its trimmed stdout).
+ * Anything else is a literal. Each vault is pulled, and each command run, once
+ * however many references point at it.
  */
 export function secretResolver(
   env: NodeJS.ProcessEnv,
-  { team = 'profullstack', pull = (t: VaultTarget) => pullVault(t) }: { team?: string; pull?: VaultPuller } = {},
+  {
+    team = vaultTarget(env).team,
+    pull = (t: VaultTarget) => pullVault(t),
+    run = shellRunner,
+  }: { team?: string; pull?: VaultPuller; run?: CommandRunner } = {},
 ) {
   const vaults = new Map<string, Record<string, string>>();
+  const commands = new Map<string, string>();
 
   return (value: string | undefined, label: string): string => {
     if (value === undefined) return '';
@@ -185,6 +221,19 @@ export function secretResolver(
       const found = vaults.get(id)![key!];
       if (!found) throw new ExportError(`${label}: ${key} is not in vault ${id}`);
       return found;
+    }
+    if (value.startsWith('cmd:')) {
+      const command = value.slice(4);
+      if (!commands.has(command)) {
+        const r = run(command);
+        const out = r.stdout.trim();
+        if (r.status !== 0 || !out) {
+          // The command is config, not a secret, but its stderr might echo one.
+          throw new ExportError(`${label}: cmd: exited ${r.status}${out ? '' : ' with no output'}`);
+        }
+        commands.set(command, out);
+      }
+      return commands.get(command)!;
     }
     return value;
   };
@@ -209,7 +258,32 @@ function cell(value: unknown): string {
 
 /** Map any row object onto the output columns by name. */
 export function toUserRow(site: string, row: Record<string, unknown>): UserRow {
-  return { site, name: cell(row.name), email: cell(row.email), last_login: cell(row.last_login) };
+  return { site, name: cell(row.name), email: cell(row.email), last_login: isoTime(row.last_login) };
+}
+
+/**
+ * One timestamp format across every source: ISO 8601 UTC, to the second.
+ * Databases disagree — Postgres JSON says `+00:00`, SQLite apps store epoch
+ * seconds or milliseconds, or a bare `YYYY-MM-DD HH:MM:SS` meaning UTC — and a
+ * CSV sorted by last_login is only useful if they agree. Anything that does
+ * not parse is passed through untouched rather than guessed at.
+ */
+export function isoTime(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const text = cell(value).trim();
+  if (!text) return '';
+  let ms: number;
+  if (/^\d{9,13}(\.\d+)?$/.test(text)) {
+    const n = Number(text);
+    ms = n >= 1e12 ? n : n * 1000;
+  } else if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(text)) {
+    ms = Date.parse(`${text.replace(' ', 'T')}Z`);
+  } else if (/^\d{4}-\d{2}-\d{2}/.test(text)) {
+    ms = Date.parse(text.replace(' ', 'T').replace(/([+-]\d{2})$/, '$1:00'));
+  } else {
+    return text;
+  }
+  return Number.isFinite(ms) ? new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z') : text;
 }
 
 async function json(response: Response, what: string): Promise<unknown> {
@@ -303,7 +377,7 @@ export async function readSupabaseAuth(
         site: source.site,
         name: metadataName(user.user_metadata),
         email: user.email ?? '',
-        last_login: user.last_sign_in_at ?? '',
+        last_login: isoTime(user.last_sign_in_at),
       });
     }
     if (users.length < perPage) return rows;
@@ -354,8 +428,92 @@ export async function readLibsql(source: LibsqlSource, resolve: Resolve, fetcher
   });
 }
 
+/** Quote one word for a POSIX shell. */
+export function shq(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/** Run `<via> '<remote>'` and return stdout, or throw with the tail of stderr. */
+export function runVia(via: string, remote: string, timeoutMs = 180_000): Promise<string> {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('sh', ['-c', `${via} ${shq(remote)}`], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
+    child.stdout.on('data', (b: Buffer) => out.push(b));
+    child.stderr.on('data', (b: Buffer) => err.push(b));
+    child.on('error', (e) => (clearTimeout(timer), reject(e)));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) return resolvePromise(Buffer.concat(out).toString('utf8'));
+      const tail = Buffer.concat(err).toString('utf8').trim().split('\n').slice(-3).join(' | ');
+      reject(new ExportError(`remote command exited ${code}${tail ? `: ${tail}` : ''}`));
+    });
+  });
+}
+
+/** The reader shipped to a remote host for `sqlite` + `via`: bun or node >= 22.5. */
+const REMOTE_SQLITE = `const p=process.env.UE_DB,q=Buffer.from(process.env.UE_SQL,'base64').toString();let rows;
+if(globalThis.Bun){const{Database}=await import('bun:sqlite');const d=new Database(p,{readonly:true});rows=d.query(q).all();d.close()}
+else{const{DatabaseSync}=await import('node:sqlite');const d=new DatabaseSync(p,{readOnly:true});rows=d.prepare(q).all();d.close()}
+process.stdout.write(JSON.stringify(rows,(k,v)=>typeof v==='bigint'?String(v):v));`;
+
+const b64 = (text: string) => Buffer.from(text).toString('base64');
+
+export function remoteSqliteCommand(path: string, query: string): string {
+  return [
+    'F=/tmp/.user-export-$$.mjs',
+    `echo ${b64(REMOTE_SQLITE)} | base64 -d > "$F"`,
+    'if command -v bun >/dev/null 2>&1; then R=bun; elif command -v node >/dev/null 2>&1; then R="node --no-warnings"; else echo "neither bun nor node on the remote" >&2; exit 127; fi',
+    `UE_DB=${shq(path)} UE_SQL=${b64(query)} $R "$F"`,
+    'rc=$?; rm -f "$F"; exit $rc',
+  ].join('; ');
+}
+
+export function remotePostgresCommand(query: string, url = ''): string {
+  const sql = `select coalesce(json_agg(t), '[]'::json) from (${query}) t`;
+  return `echo ${b64(sql)} | base64 -d | PGOPTIONS='-c default_transaction_read_only=on' psql -X -q -At -v ON_ERROR_STOP=1${url ? ` ${shq(url)}` : ''}`;
+}
+
+/** Split CSV text into records, RFC 4180 quoting. */
+export function parseCsv(text: string): string[][] {
+  const records: string[][] = [];
+  let field = '';
+  let record: string[] = [];
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i]!;
+    if (quoted) {
+      if (c === '"' && text[i + 1] === '"') (field += '"'), (i += 1);
+      else if (c === '"') quoted = false;
+      else field += c;
+    } else if (c === '"') quoted = true;
+    else if (c === ',') record.push(field), (field = '');
+    else if (c === '\n' || c === '\r') {
+      if (c === '\r' && text[i + 1] === '\n') i += 1;
+      record.push(field), records.push(record), (record = []), (field = '');
+    } else field += c;
+  }
+  if (field || record.length) record.push(field), records.push(record);
+  return records.filter((r) => r.length > 1 || r[0] !== '');
+}
+
+/** Rows from a command's output: a JSON array of objects, or CSV with a header. */
+export function parseRows(site: string, text: string): UserRow[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith('[')) {
+    return (JSON.parse(trimmed) as Record<string, unknown>[]).map((row) => toUserRow(site, row));
+  }
+  const [header, ...records] = parseCsv(trimmed);
+  return records.map((values) => toUserRow(site, Object.fromEntries(header!.map((h, i) => [h.trim(), values[i] ?? '']))));
+}
+
 export async function readSqlite(source: SqliteSource, resolve: Resolve): Promise<UserRow[]> {
   const path = resolve(source.path, `${source.site} path`);
+  if (source.via) {
+    return parseRows(source.site, await runVia(resolve(source.via, `${source.site} via`), remoteSqliteCommand(path, source.query)));
+  }
   const { DatabaseSync } = await import('node:sqlite');
   const db = new DatabaseSync(path, { readOnly: true });
   try {
@@ -367,6 +525,9 @@ export async function readSqlite(source: SqliteSource, resolve: Resolve): Promis
 
 export async function readPostgres(source: PostgresSource, resolve: Resolve): Promise<UserRow[]> {
   const url = resolve(source.url, `${source.site} url`);
+  if (source.via) {
+    return parseRows(source.site, await runVia(resolve(source.via, `${source.site} via`), remotePostgresCommand(source.query, url)));
+  }
   const { default: postgres } = await import('postgres');
   const sql = postgres(url, { max: 1, prepare: false, idle_timeout: 5, connect_timeout: 20 });
   try {
@@ -377,26 +538,32 @@ export async function readPostgres(source: PostgresSource, resolve: Resolve): Pr
   }
 }
 
-/** Read every source. A failing source becomes an error entry, never a throw. */
+export async function readExec(source: ExecSource, resolve: Resolve): Promise<UserRow[]> {
+  const command = resolve(source.command, `${source.site} command`);
+  return parseRows(source.site, await runVia('sh -c', command));
+}
+
+/**
+ * Read every source, `concurrency` at a time, results in config order. A
+ * failing source becomes an error entry, never a throw.
+ */
 export async function exportUsers(
   config: Config,
   resolve: Resolve,
-  { fetcher = fetch, only = [] as string[] } = {},
+  { fetcher = fetch, only = [] as string[], concurrency = 4 } = {},
 ): Promise<SourceResult[]> {
-  const results: SourceResult[] = [];
   const keep = (site: string) => only.length === 0 || only.includes(site);
 
-  for (const source of config.sources) {
+  const read = async (source: Source): Promise<SourceResult[]> => {
     if (source.type === 'supabase-management') {
       try {
-        results.push(...(await readSupabaseManagement(source, resolve, fetcher, { only })));
+        return await readSupabaseManagement(source, resolve, fetcher, { only });
       } catch (error) {
-        results.push({ site: '*', source: 'supabase-management', rows: [], error: (error as Error).message });
+        return [{ site: '*', source: 'supabase-management', rows: [], error: (error as Error).message }];
       }
-      continue;
     }
 
-    if (!keep(source.site)) continue;
+    if (!keep(source.site)) return [];
     const label = `${source.type}:${source.site}`;
     try {
       const rows =
@@ -406,13 +573,16 @@ export async function exportUsers(
             ? await readLibsql(source, resolve, fetcher)
             : source.type === 'sqlite'
               ? await readSqlite(source, resolve)
-              : await readPostgres(source, resolve);
-      results.push({ site: source.site, source: label, rows });
+              : source.type === 'postgres'
+                ? await readPostgres(source, resolve)
+                : await readExec(source, resolve);
+      return [{ site: source.site, source: label, rows }];
     } catch (error) {
-      results.push({ site: source.site, source: label, rows: [], error: (error as Error).message });
+      return [{ site: source.site, source: label, rows: [], error: (error as Error).message }];
     }
-  }
-  return results;
+  };
+
+  return (await mapLimit(config.sources, concurrency, read)).flat();
 }
 
 export function csvField(value: string): string {
@@ -468,5 +638,9 @@ export const EXAMPLE_CONFIG: Config = {
     { type: 'libsql', site: 'blog.example', url: 'env:TURSO_DATABASE_URL', token: 'env:TURSO_AUTH_TOKEN', query: 'select name, email, last_login_at as last_login from users' },
     { type: 'sqlite', site: 'tool.example', path: '/srv/tool/data.db', query: 'select username as name, email, datetime(last_login, \'unixepoch\') as last_login from users' },
     { type: 'postgres', site: 'app.example', url: 'env:APP_DATABASE_URL', query: 'select full_name as name, email, last_login_at as last_login from users' },
+    { type: 'postgres', site: 'private.example', via: 'ssh db.internal', url: 'postgresql:///app?user=postgres', query: 'select name, email, last_seen as last_login from users' },
+    { type: 'sqlite', site: 'volume.example', via: 'docker exec my-app sh -c', path: '/data/app.db', query: 'select name, email, last_login from users' },
+    { type: 'libsql', site: 'platform.example', url: 'cmd:railway variable list -p <project-id> -s web -e production --json | jq -r .TURSO_DATABASE_URL', token: 'cmd:railway variable list -p <project-id> -s web -e production --json | jq -r .TURSO_AUTH_TOKEN', query: 'select name, email, last_login from users' },
+    { type: 'exec', site: 'anything.example', command: './export-users.sh --json' },
   ],
 };
