@@ -21,6 +21,7 @@ TypeScript, installed as executables on `PATH`.
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`emoji`](#emoji) | Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
+| [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
@@ -32,6 +33,7 @@ TypeScript, installed as executables on `PATH`.
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
 | [`user-export`](#user-export) | Every user across many databases, as one CSV |
+| [`email-cleaner`](#email-cleaner) | Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -1149,6 +1151,7 @@ emoji generate --only 😀🔥🇯🇵👍🏽           # draw a handful and ju
 emoji generate                            # draw the rest; resumable
 emoji build                               # sizes, SVGs, fonts, CSS, manifest
 emoji status                              # coverage, and what failed
+emoji export --platform slack,signal      # bundles per network (all 22 by default)
 ```
 
 The list is Unicode's own `emoji-test.txt`: every fully-qualified sequence,
@@ -1181,6 +1184,8 @@ style.txt, prompts.jsonl, failures.json
 (`1f469-1f3fe-200d-1f4bb`). The SVGs trade gradients for flat colour steps.
 The PNGs and the fonts carry the artwork as drawn.
 
+**Bundles per network.** `emoji export` writes `platforms/<network>/`: packs sized, encoded and named to each network's documented rules (checked against their docs and source, September 2026). Custom emoji for Slack, Discord, Stoat, Mastodon (a `tootctl emoji import` tarball), Misskey (`meta.json` zip), Pleroma/Akkoma (`pack.json`), Mattermost, Zulip, Rocket.Chat, Teams, Matrix, Telegram, Twitch, YouTube, Reddit and Kick; sticker packs where custom emoji do not exist (Signal, WhatsApp as `.wastickers`, Telegram stickers); and images to post for X (flags first), Bluesky and Meta's apps. Names are the set's shortcodes, `oe_` plus the CLDR name with tones as `_t1`…`_t5`, cut to each network's length cap. `platforms.json` holds the same table, steps included, for the catalog; the archives are meant to go up as release assets rather than into git.
+
 A master that exists is never paid for twice, so an interrupted run, a rate
 limit or a refusal costs only a rerun. Refusals and errors land in
 `failures.json` and the run keeps going. Rate limits and 5xx retry with
@@ -1189,6 +1194,42 @@ backoff. `--force` redraws, `--quality low|medium|high` (default `medium`),
 `gpt-image-2`). A medium glyph is about 1,800 image tokens drawn fresh and
 4,000-8,000 as an edit with references. The whole set takes hours: at the
 default concurrency, roughly eight.
+
+### `icon`
+
+The [OpenIcon](https://logicsrc.com/openicon) set: the icons a UI keeps
+reaching for, each as an SVG, PNGs and three terminal glyphs.
+
+```sh
+icon build --out ./openicon           # openicon.json, svg/, png/, sprite.svg, index.html
+icon list --category communication
+icon show email                       # names, glyphs and the SVG for one icon
+icon search money
+icon glyph mail                       # 󰇰, ✉ or @, whichever this terminal can draw
+```
+
+**370 icons**: 259 drawn here on a 24x24 grid (2px strokes, round caps,
+`currentColor`) across actions, navigation, communication, media, files,
+status, time, commerce, developer, devices and editor; and 111 brand logos,
+from GitHub, X, Bluesky and Mastodon to Stripe and npm.
+
+**Brands are never drawn.** They are fetched at build time from pinned
+releases of [Simple Icons](https://simpleicons.org) (CC0), or, for the brands
+that asked Simple Icons to remove them (Slack, LinkedIn, Microsoft, OpenAI,
+Amazon and a few more), from Font Awesome Free (CC BY 4.0). Every brand entry
+says `brand: true` and carries a trademark note.
+
+**Terminal glyphs** are the part other sets do not have. Each icon has a Nerd
+Font codepoint (resolved by name from Nerd Fonts 3.4.0's `glyphnames.json`,
+357 of 370 have one), a Unicode symbol and a 1-4 character ASCII spelling, so
+a TUI draws `mail` as 󰇰 in a patched font, ✉ in a plain one and `@` over a
+serial line. `icon glyph` picks from `$OPENICON_GLYPHS`
+(`nerd`|`unicode`|`ascii`), then `NERD_FONT=1`, then the locale. A Nerd Font
+cannot be detected from inside a terminal, so it has to be said.
+
+Aliases (`email`, `trash`, `gear`) find exactly one icon; keywords
+(`money`, `alert`) are search terms and may be shared. Sources are cached
+under `~/.cache/cli-tools/icon`.
 
 ### `favicon`
 
@@ -1795,6 +1836,62 @@ A source that fails is reported on stderr and the rest still export; the exit
 status is 3 when the output is partial. The config is found at `--config`, then
 `$USER_EXPORT_CONFIG`, then `~/.config/cli-tools/user-export.json`.
 
+### `email-cleaner`
+
+Clean a mailing list before you send to it, with the options of
+[emaillistcleaner.org](https://emaillistcleaner.org/) and none of the upload:
+
+```sh
+email-cleaner list.txt > clean.txt
+email-cleaner users.csv --invalid rejected.csv --report > clean.csv
+some-export | email-cleaner --format json     # valid, invalid with reasons, stats
+email-cleaner --no-dns < pasted.txt           # offline: no DNS lookups
+```
+
+Input is addresses separated by newlines, commas or semicolons, plain or
+`Name <addr>`, or a CSV whose header has an email column (`email`, `e-mail`,
+`mail`, `address`; comma, semicolon or tab delimited). The kept entries come
+back in the same shape: a list keeps its separator and display names, a CSV
+keeps its header and every other column byte for byte.
+
+| Check | Reason code | Removed unless |
+| --- | --- | --- |
+| Not an address | `syntax` | always removed |
+| Provider typo (`gmial.com`, `hotmial.com`, `icloud.co` ...) | `typo` | `--fix-typos` rewrites it and logs the fix |
+| Domain does not exist (NXDOMAIN) | `no-domain` | always removed |
+| No MX and no A/AAAA to fall back to | `no-mx` | always removed |
+| Takes mail but no A/AAAA on the apex or `www` | `no-website` | `--allow-no-website` |
+| Role account (`info@`, `support@`, `noreply@` ...) | `role` | `--allow-role` |
+| Disposable domain | `disposable` | `--allow-disposable` |
+| Seen before (Gmail ignores dots and `+tags`, others `+tags`) | `duplicate` | `--allow-duplicates` |
+| Placeholder (`nothanks@`, `test@test.com`, `example.com`, `.test`, `.invalid`) | `unlikely` | `--allow-unlikely` |
+
+The first of a set of duplicates is the one kept. DNS goes to one server
+(`--dns-server`, default `8.8.8.8` like the site), never the system resolver,
+with a per-domain cache, 16 lookups at a time (`-j`) and a timeout
+(`--dns-timeout`, default 4000 ms). An answer that is neither yes nor no, a
+timeout or a SERVFAIL, keeps the address and says so in the log: nobody is
+dropped for what the DNS failed to say.
+
+| Flag | Effect |
+| --- | --- |
+| `--format text\|csv\|json` | output shape (default: the input's) |
+| `--invalid FILE` | also write the rejected entries to FILE, same shape |
+| `--report` | to stderr: analysis log, a bar chart of results, special types, top 5 domains |
+| `--disposable-list FILE` | more disposable domains, one per line |
+| `--no-dns` | syntax, typo, role, disposable, duplicate and unlikely only |
+
+`--format json` prints
+`{"valid":[{input,email,name?,row?}],"invalid":[{input,email,reasons,suggestion?}],"stats":{total,valid,invalid,byReason,topDomains}}`,
+where `row` is the CSV record keyed by header. Exit status is 0 whenever the
+list was cleaned, 2 on bad input or usage.
+
+The disposable list is
+[disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains)
+(CC0), vendored in [`data/`](data/README.md). The role and placeholder lists
+are short and live in `src/email-cleaner.ts`, which also exports
+`cleanEmails(entries, options)` and `cleanText(text, options)` for other tools.
+
 ### `root-ubuntu.sh`
 
 Sets up a server the way we like them, and keeps it that way. It is the odd one
@@ -1995,7 +2092,7 @@ moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
 moshcode plugin install ai@cli-tools        # /ai:ask, /ai:tts
 moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
 moshcode plugin install myna@cli-tools      # /myna:post, :schedule, :queue, :feed
-moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send
+moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send, /mail:clean
 ```
 
 See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),

@@ -39,6 +39,8 @@ const SUMMARIES: Record<string, string> = {
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
   favicon: 'Every icon a site links, rendered from one SVG',
+  icon: 'UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set',
+  'email-cleaner': 'Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses',
   emoji: 'Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest',
   crawlproof: 'What the fleet costs and what it returns: traffic, ads and the bank behind them',
   'free-names': 'Name ideas nobody has registered yet, in one command',
