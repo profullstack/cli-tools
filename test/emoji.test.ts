@@ -129,6 +129,13 @@ describe('prompts', () => {
     expect(prompt).toContain('1F1EF 1F1F5');
   });
 
+  it('famous-design subjects carry their own brief', async () => {
+    const { DESIGN_NOTES } = await import('../src/emoji.ts');
+    const mermaid = { key: '1f9dc-200d-2640-fe0f', codepoints: ['1f9dc', '200d', '2640', 'fe0f'], char: '🧜‍♀️', name: 'mermaid', group: 'People & Body', subgroup: 'person-fantasy', version: '5.0' };
+    expect(promptFor(mermaid, STYLE)).toContain(DESIGN_NOTES['1f9dc']);
+    expect(promptFor(byKey('1f600'), STYLE)).not.toContain('Design brief');
+  });
+
   it('a tone edit changes skin and nothing else', () => {
     const prompt = tonePromptFor(byKey('1f44d-1f3fd'));
     expect(prompt).toContain('medium skin tone (Fitzpatrick type 4)');
@@ -218,6 +225,25 @@ describe('generate', () => {
     });
     expect(calls).toHaveLength(0);
     expect(again.skipped).toHaveLength(2);
+  });
+
+  it('treats a zero-byte master as missing and redraws it', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'emoji-'));
+    const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
+    await mk(join(out, 'master'), { recursive: true });
+    await wf(join(out, 'master', '1f1ef-1f1f5.png'), Buffer.alloc(0));
+    let drew = 0;
+    const caller = async () => {
+      drew += 1;
+      return { png: PNG, tokens: 1 };
+    };
+    const report = await generate(all, select(all, { only: ['1f1ef-1f1f5'] }), {
+      out, model: 'test', quality: 'low', style: STYLE, concurrency: 1, force: false, caller, log: () => {},
+    });
+    expect(report.drawn).toContain('1f1ef-1f1f5');
+    expect((await readFile(join(out, 'master', '1f1ef-1f1f5.png'))).length).toBeGreaterThan(0);
+    expect(existsSync(join(out, 'master', '1f1ef-1f1f5.png.partial'))).toBe(false);
+    expect(drew).toBeGreaterThan(0);
   });
 
   it('records a refusal and keeps going', async () => {
