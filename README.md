@@ -29,6 +29,7 @@ TypeScript, installed as executables on `PATH`.
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
+| [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -72,6 +73,8 @@ One thing here is not a `PATH` command and does not need Node:
 - **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
   npm package, installed on first use, and upstream's engine floor is higher
   than this repo's
+- **[`logicsrc`](https://logicsrc.com)**, logged in to the team — `users-dump`
+  only, which reads database locations out of the team vaults
 - **Node 24+ and `pnpm` or `npm`** — `agenticjobs` and `openmcp` only, for the
   same reason: each is an npm package installed on first use, and both ask for
   a newer Node than anything else here (`openmcp` keeps its catalog in
@@ -1595,6 +1598,58 @@ keeping a second, looser copy of those rules that would drift. The short url is
 the only thing on stdout, so it pipes.
 
 The same thing lives inside moshcode as `/shorten`; this is the copy that pipes.
+
+### `users-dump`
+
+Every user account across the fleet, as one CSV: `name,email,site,last_login,created_at,source`.
+
+```sh
+users-dump discover            # once, and again after a new app ships
+users-dump -o users.csv        # ~75 s for the whole fleet
+users-dump --only ugig.net,tsbb --json
+users-dump sources             # what a dump would read
+```
+
+It reads four kinds of database, and each needs a different key:
+
+- **Supabase.com.** Every project on the account, through the management API with
+  one token (`auth.users`, read-only). A project nobody wrote down is still
+  found. The name comes from auth metadata, then from the app's own `profiles`,
+  `user_profiles` or `users` table. An app-side `last_active_at` beats
+  `last_sign_in_at` when it is later.
+- **Turso / libSQL and SQLite Cloud.** Read over their HTTP APIs with the URL and
+  token in each app's vault. No client library.
+- **Self-hosted Supabase.** Read through the GoTrue admin API with the
+  service-role key. Hosted projects the token already reads are skipped here, so
+  rows are not doubled.
+- **Postgres and SQLite on our own boxes.** Read from a connection URL, or from a
+  file path through `ssh <host> sqlite3 -readonly -json`.
+
+`discover` pulls every prod vault in the team (about 55 s for 135), finds those
+databases and the live `SUPABASE_ACCESS_TOKEN` (only one copy is), and writes
+their *locations* to `~/.config/cli-tools/users-dump.json`: vault and variable
+names, never values. The dump pulls those vaults again at run time, so a rotated
+token keeps working and the file holds no secret. Running `discover` again keeps
+anything added or edited by hand (`site`, `skip`, `tables`). A database it cannot
+see goes in by hand:
+
+```json
+{ "site": "example.com", "kind": "sqlite", "ssh": "vienna", "path": "/srv/example/data.db" }
+{ "site": "example.com", "kind": "postgres", "url": "postgres://…" }
+```
+
+Each app designed its own schema, so the users table is found by its shape
+rather than by a query per app. It is a table called `users`, `auth_users`,
+`accounts` or `actors` that has an email column. The name is the first of
+`display_name`/`full_name`/`name`/`username`/`handle`. The last login is a
+`last_login_at`-style column, or else the newest row in `sessions`. `tables`
+in a config entry overrides the guess. One app with two account tables gives
+one row per address.
+
+The CSV goes to stdout, or to `--out` (written 0600). A summary goes to stderr
+with each source's count and, for any that failed, the reason: a paused node, no
+users table, a hostname only reachable from inside Railway. A database that
+could not be read shows up there rather than as a silent zero.
 
 ### `sysupdate`
 
