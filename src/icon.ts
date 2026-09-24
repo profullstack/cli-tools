@@ -81,6 +81,15 @@ export interface IconEntry {
   svg: string;
   png: string;
   tui: Glyphs;
+  /** The HQ style, when the set has one: see icon-hq.ts. */
+  hq?: {
+    png: string;
+    webp: string;
+    svg?: string;
+    made_by: 'ai' | 'human';
+    hex?: string;
+    hex_source?: string;
+  };
 }
 
 export interface Manifest {
@@ -99,6 +108,17 @@ export interface Manifest {
   sprite: string;
   sources: Record<string, string>;
   categories: Record<string, string>;
+  /** Present when the set ships more than the simple style. */
+  styles?: string[];
+  hq?: {
+    sizes: number[];
+    webp_sizes: number[];
+    made_by: 'ai' | 'human' | 'both';
+    ai_model: string;
+    ai_provider: string;
+    ai_prompt_url: string;
+    coverage: { total: number; done: number };
+  };
   icons: IconEntry[];
 }
 
@@ -134,7 +154,7 @@ export function cacheDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** Fetch a pinned file once; the cache is keyed by URL, so a version bump refetches. */
-async function cached(url: string, fetchImpl: typeof fetch, env: NodeJS.ProcessEnv): Promise<string> {
+export async function cached(url: string, fetchImpl: typeof fetch, env: NodeJS.ProcessEnv): Promise<string> {
   const file = join(cacheDir(env), url.replace(/^https:\/\//, '').replace(/[^a-zA-Z0-9._-]+/g, '_'));
   if (existsSync(file)) return readFile(file, 'utf8');
   const response = await fetchImpl(url);
