@@ -419,6 +419,7 @@ export function withStyle(manifest: Manifest, style: StyleSpec, entries: Map<str
     dir: style.dir,
     label: style.label,
     material: style.material,
+    ground: style.ground,
     sizes,
     webp_sizes: [...HQ_WEBP_SIZES],
     made_by: 'both',
