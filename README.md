@@ -1223,6 +1223,26 @@ serial line. `icon glyph` picks from `$OPENICON_GLYPHS`
 (`nerd`|`unicode`|`ascii`), then `NERD_FONT=1`, then the locale. A Nerd Font
 cannot be detected from inside a terminal, so it has to be said.
 
+**Two styles.** *Simple* is the line set above: canonical, the default, no
+model involved in anything but authoring. *HQ* is optional full colour at the
+OpenEmoji bar:
+
+```sh
+icon hq --out ./openicon --only mail,search   # draw a few and look
+icon hq --out ./openicon                      # the rest (resumable), then sizes and openicon.json
+icon hq --out ./openicon --no-draw            # rebuild sizes and brand colours only
+```
+
+Each UI icon is drawn by gpt-image-2 as an edit that is handed its own simple
+glyph first (keep this silhouette and meaning) and three OpenEmoji masters
+after it (this look), so the colour set is the same family as the emoji. It
+stops at once on `credit_balance_exhausted` and backs off on 429. Brands are
+never drawn: their HQ form is the simple logo in the owner's colour, Simple
+Icons' `hex` or a cited brand page. Output: `hq/png/<size>/`,
+`hq/webp/{64,128}/`, `hq/svg/` (brands), masters in `hq/master/` (keep them out
+of git), and an `hq` block per icon in `openicon.json`. A plain `icon build`
+keeps it.
+
 Aliases (`email`, `trash`, `gear`) find exactly one icon; keywords
 (`money`, `alert`) are search terms and may be shared. Sources are cached
 under `~/.cache/cli-tools/icon`.

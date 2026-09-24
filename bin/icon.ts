@@ -25,6 +25,13 @@ import {
   resolveNerd,
   strokeSvg,
 } from '../src/icon.ts';
+import { existsSync } from 'node:fs';
+import { readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { openaiImages } from '../src/emoji.ts';
+import { resolveCredentials } from '../src/credentials.ts';
+import { HQ_CONCURRENCY, HQ_STYLE, buildHq, drawHq, guardCredits, withHq } from '../src/icon-hq.ts';
 import { isMain } from '../src/is-main.ts';
 
 const USAGE = `Usage:
@@ -33,6 +40,15 @@ const USAGE = `Usage:
   icon show    <name>
   icon search  <words…>
   icon glyph   <name> [--mode nerd|unicode|ascii]
+  icon hq      [--out DIR] [--only mail,…] [--no-draw] [--force] [--concurrency N]
+               [--quality low|medium|high] [--style-dir DIR] [--dry-run]
+
+\`hq\` makes the optional HQ style: every UI icon drawn in full colour by an
+image model (needs OPENAI_API_KEY), each pinned to its own simple line glyph
+and to OpenEmoji masters for the look (--style-dir, default
+~/brand-assets/openemoji/master); brands in their owners' colours. Masters go
+to hq/master and are never redrawn; --no-draw only rebuilds sizes and the
+manifest. The simple style stays the default and canonical.
 
 A name is a key (mail) or an alias (email). \`glyph\` picks Nerd Font, then
 Unicode, then ASCII from $OPENICON_GLYPHS, $NERD_FONT, or the terminal
@@ -67,6 +83,22 @@ export function glyphMode(env: NodeJS.ProcessEnv = process.env): 'nerd' | 'unico
   return /utf-?8/i.test(locale) || env['TERM_PROGRAM'] ? 'unicode' : 'ascii';
 }
 
+/** Derive the HQ sizes and brand colours, and write the `hq` block into openicon.json. */
+export async function applyHq(out: string, sizes: number[]): Promise<number> {
+  const { Resvg } = await import('@resvg/resvg-js');
+  const entries = await buildHq({
+    out,
+    sizes,
+    log: (line) => process.stderr.write(`${line}\n`),
+    render: (svg, size) => Buffer.from(new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()),
+  });
+  const file = join(out, 'openicon.json');
+  const manifest = withHq(JSON.parse(await readFile(file, 'utf8')), entries, sizes);
+  await writeFile(file, `${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(join(out, 'hq', 'style.txt'), `${HQ_STYLE}\n`);
+  return entries.size;
+}
+
 if (isMain(import.meta.url)) {
   process.stdout.on('error', (error: NodeJS.ErrnoException) => {
     if (error.code === 'EPIPE') process.exit(0);
@@ -74,8 +106,8 @@ if (isMain(import.meta.url)) {
   });
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
-      boolean: ['--json', '--help'],
-      string: ['-o', '--out', '--sizes', '--color', '--only', '--category', '--mode'],
+      boolean: ['--json', '--help', '--no-draw', '--force', '--dry-run'],
+      string: ['-o', '--out', '--sizes', '--color', '--only', '--category', '--mode', '--concurrency', '--quality', '--style-dir'],
     });
     const [verb, ...rest] = positional;
     if (flags.has('--help') || !verb) {
@@ -101,6 +133,8 @@ if (isMain(import.meta.url)) {
           only: csv(values, '--only'),
           log: (line) => process.stderr.write(`${line}\n`),
         });
+        // An existing HQ style survives a rebuild of the simple one.
+        if (existsSync(join(out, 'hq', 'png'))) await applyHq(out, sizes);
         const nerd = manifest.icons.filter((i) => i.tui.nerd).length;
         process.stdout.write(
           `${manifest.icons.length} icons in ${out} (${nerd} with a Nerd Font glyph); open ${out}/index.html\n`,
@@ -150,6 +184,47 @@ if (isMain(import.meta.url)) {
         } else {
           process.stdout.write(`${mode === 'ascii' ? icon.ascii : icon.unicode}\n`);
         }
+        break;
+      }
+      case 'hq': {
+        const out = values.get('-o') ?? values.get('--out') ?? DEFAULT_OUT;
+        const manifestFile = join(out, 'openicon.json');
+        if (!existsSync(manifestFile)) throw new UsageError(`no ${manifestFile}; run \`icon build --out ${out}\` first`);
+        const keys = csv(values, '--only').length
+          ? csv(values, '--only').map((n) => find(n)?.key ?? n)
+          : GENERIC.map((i) => i.key);
+        const drawable = keys.filter((k) => GENERIC.some((i) => i.key === k));
+        const quality = values.get('--quality') ?? 'medium';
+        if (!['low', 'medium', 'high'].includes(quality)) throw new UsageError('--quality must be low, medium or high');
+        const pending = drawable.filter((k) => flags.has('--force') || !existsSync(join(out, 'hq', 'master', `${k}.png`)));
+        if (flags.has('--dry-run')) {
+          process.stdout.write(`${flags.has('--no-draw') ? 0 : pending.length} icons to draw, then sizes, brand colours and openicon.json in ${out}\n`);
+          break;
+        }
+        if (!flags.has('--no-draw') && pending.length) {
+          const key = resolveCredentials()['OPENAI_API_KEY'];
+          if (!key) throw new Error('no OpenAI key: export OPENAI_API_KEY or run `cli-tools config set openai`');
+          const { Resvg } = await import('@resvg/resvg-js');
+          const report = await drawHq({
+            out,
+            keys: drawable,
+            caller: guardCredits(openaiImages(key)),
+            styleDir: values.get('--style-dir') ?? join(process.env['HOME'] ?? '', 'brand-assets', 'openemoji', 'master'),
+            concurrency: Number(values.get('--concurrency') ?? HQ_CONCURRENCY),
+            quality,
+            force: flags.has('--force'),
+            log: (line) => process.stderr.write(`${line}\n`),
+            render: (svg, size) => Buffer.from(new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()),
+          });
+          process.stderr.write(`drew ${report.drawn.length} in ${report.calls} calls, ${report.failed.length} failed\n`);
+          if (report.stoppedForCredit) {
+            process.stderr.write(`stopped: the OpenAI account is out of credit (${report.stoppedForCredit})\n`);
+            process.exitCode = 2;
+          }
+        }
+        const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+        const done = await applyHq(out, manifest.sizes);
+        process.stdout.write(`${done}/${manifest.icons.length} icons have the HQ style in ${out}\n`);
         break;
       }
       default:
