@@ -21,6 +21,7 @@ TypeScript, installed as executables on `PATH`.
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`emoji`](#emoji) | Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
+| [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
@@ -1189,6 +1190,42 @@ backoff. `--force` redraws, `--quality low|medium|high` (default `medium`),
 `gpt-image-2`). A medium glyph is about 1,800 image tokens drawn fresh and
 4,000-8,000 as an edit with references. The whole set takes hours: at the
 default concurrency, roughly eight.
+
+### `icon`
+
+The [OpenIcon](https://logicsrc.com/openicon) set: the icons a UI keeps
+reaching for, each as an SVG, PNGs and three terminal glyphs.
+
+```sh
+icon build --out ./openicon           # openicon.json, svg/, png/, sprite.svg, index.html
+icon list --category communication
+icon show email                       # names, glyphs and the SVG for one icon
+icon search money
+icon glyph mail                       # 󰇰, ✉ or @, whichever this terminal can draw
+```
+
+**370 icons**: 259 drawn here on a 24x24 grid (2px strokes, round caps,
+`currentColor`) across actions, navigation, communication, media, files,
+status, time, commerce, developer, devices and editor; and 111 brand logos,
+from GitHub, X, Bluesky and Mastodon to Stripe and npm.
+
+**Brands are never drawn.** They are fetched at build time from pinned
+releases of [Simple Icons](https://simpleicons.org) (CC0), or, for the brands
+that asked Simple Icons to remove them (Slack, LinkedIn, Microsoft, OpenAI,
+Amazon and a few more), from Font Awesome Free (CC BY 4.0). Every brand entry
+says `brand: true` and carries a trademark note.
+
+**Terminal glyphs** are the part other sets do not have. Each icon has a Nerd
+Font codepoint (resolved by name from Nerd Fonts 3.4.0's `glyphnames.json`,
+357 of 370 have one), a Unicode symbol and a 1-4 character ASCII spelling, so
+a TUI draws `mail` as 󰇰 in a patched font, ✉ in a plain one and `@` over a
+serial line. `icon glyph` picks from `$OPENICON_GLYPHS`
+(`nerd`|`unicode`|`ascii`), then `NERD_FONT=1`, then the locale. A Nerd Font
+cannot be detected from inside a terminal, so it has to be said.
+
+Aliases (`email`, `trash`, `gear`) find exactly one icon; keywords
+(`money`, `alert`) are search terms and may be shared. Sources are cached
+under `~/.cache/cli-tools/icon`.
 
 ### `favicon`
 
