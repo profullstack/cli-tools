@@ -33,6 +33,7 @@ TypeScript, installed as executables on `PATH`.
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
 | [`user-export`](#user-export) | Every user across many databases, as one CSV |
+| [`email-cleaner`](#email-cleaner) | Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -1832,6 +1833,62 @@ A source that fails is reported on stderr and the rest still export; the exit
 status is 3 when the output is partial. The config is found at `--config`, then
 `$USER_EXPORT_CONFIG`, then `~/.config/cli-tools/user-export.json`.
 
+### `email-cleaner`
+
+Clean a mailing list before you send to it, with the options of
+[emaillistcleaner.org](https://emaillistcleaner.org/) and none of the upload:
+
+```sh
+email-cleaner list.txt > clean.txt
+email-cleaner users.csv --invalid rejected.csv --report > clean.csv
+some-export | email-cleaner --format json     # valid, invalid with reasons, stats
+email-cleaner --no-dns < pasted.txt           # offline: no DNS lookups
+```
+
+Input is addresses separated by newlines, commas or semicolons, plain or
+`Name <addr>`, or a CSV whose header has an email column (`email`, `e-mail`,
+`mail`, `address`; comma, semicolon or tab delimited). The kept entries come
+back in the same shape: a list keeps its separator and display names, a CSV
+keeps its header and every other column byte for byte.
+
+| Check | Reason code | Removed unless |
+| --- | --- | --- |
+| Not an address | `syntax` | always removed |
+| Provider typo (`gmial.com`, `hotmial.com`, `icloud.co` ...) | `typo` | `--fix-typos` rewrites it and logs the fix |
+| Domain does not exist (NXDOMAIN) | `no-domain` | always removed |
+| No MX and no A/AAAA to fall back to | `no-mx` | always removed |
+| Takes mail but no A/AAAA on the apex or `www` | `no-website` | `--allow-no-website` |
+| Role account (`info@`, `support@`, `noreply@` ...) | `role` | `--allow-role` |
+| Disposable domain | `disposable` | `--allow-disposable` |
+| Seen before (Gmail ignores dots and `+tags`, others `+tags`) | `duplicate` | `--allow-duplicates` |
+| Placeholder (`nothanks@`, `test@test.com`, `example.com`, `.test`, `.invalid`) | `unlikely` | `--allow-unlikely` |
+
+The first of a set of duplicates is the one kept. DNS goes to one server
+(`--dns-server`, default `8.8.8.8` like the site), never the system resolver,
+with a per-domain cache, 16 lookups at a time (`-j`) and a timeout
+(`--dns-timeout`, default 4000 ms). An answer that is neither yes nor no, a
+timeout or a SERVFAIL, keeps the address and says so in the log: nobody is
+dropped for what the DNS failed to say.
+
+| Flag | Effect |
+| --- | --- |
+| `--format text\|csv\|json` | output shape (default: the input's) |
+| `--invalid FILE` | also write the rejected entries to FILE, same shape |
+| `--report` | to stderr: analysis log, a bar chart of results, special types, top 5 domains |
+| `--disposable-list FILE` | more disposable domains, one per line |
+| `--no-dns` | syntax, typo, role, disposable, duplicate and unlikely only |
+
+`--format json` prints
+`{"valid":[{input,email,name?,row?}],"invalid":[{input,email,reasons,suggestion?}],"stats":{total,valid,invalid,byReason,topDomains}}`,
+where `row` is the CSV record keyed by header. Exit status is 0 whenever the
+list was cleaned, 2 on bad input or usage.
+
+The disposable list is
+[disposable-email-domains](https://github.com/disposable-email-domains/disposable-email-domains)
+(CC0), vendored in [`data/`](data/README.md). The role and placeholder lists
+are short and live in `src/email-cleaner.ts`, which also exports
+`cleanEmails(entries, options)` and `cleanText(text, options)` for other tools.
+
 ### `root-ubuntu.sh`
 
 Sets up a server the way we like them, and keeps it that way. It is the odd one
@@ -2032,7 +2089,7 @@ moshcode plugin install domain@cli-tools    # /domain:free, /domain:lookup
 moshcode plugin install ai@cli-tools        # /ai:ask, /ai:tts
 moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
 moshcode plugin install myna@cli-tools      # /myna:post, :schedule, :queue, :feed
-moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send
+moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send, /mail:clean
 ```
 
 See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),
