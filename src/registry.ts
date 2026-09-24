@@ -56,6 +56,7 @@ const SUMMARIES: Record<string, string> = {
   'gh-pulse': 'What moved on GitHub, last hour to all time, ranked, with traffic: by email, TUI or JSON',
   hqtui: 'Every vital of this box, in the terminal: sockets, HTTP, sessions, services',
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
+  scorecard: 'One weekly number for the whole fleet: traffic, channels, posts and ads, week over week',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
   sysupdate: 'Update this box: apt lists, apt packages, snaps',
   'user-export': 'Every user across many databases, as one CSV',
