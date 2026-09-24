@@ -90,7 +90,21 @@ export function hqColorFor(icon: IconDef): string {
   return CATEGORY_COLORS[icon.category] ?? CATEGORY_COLORS.misc!;
 }
 
+/** Keys whose names mislead a model: say what the control is. */
+const DESCRIBE: Record<string, string> = {
+  'radio-off': 'an empty, unselected radio button: a single ring with nothing inside (a form control, not a radio set)',
+  'radio-on': 'a selected radio button: a ring with a solid dot in the middle (a form control)',
+  'checkbox-empty': 'an empty, unchecked checkbox (a form control)',
+  checkbox: 'a checked checkbox (a form control)',
+  'toggle-on': 'a toggle switch in the on position (a form control)',
+  'toggle-off': 'a toggle switch in the off position (a form control)',
+  online: 'an online presence indicator: a solid dot inside a ring',
+};
+
 export function hqPromptFor(icon: IconDef): string {
+  if (DESCRIBE[icon.key]) {
+    return `${HQ_STYLE}\n\nThe icon: "${icon.key}", which is ${DESCRIBE[icon.key]}.\nColour: ${hqColorFor(icon)}.`;
+  }
   const words = [humanName(icon.key).toLowerCase(), ...(icon.aliases ?? []), ...(icon.keywords ?? [])].slice(0, 6);
   return `${HQ_STYLE}\n\nThe icon: "${icon.key}" (${words.join(', ')}), category ${icon.category}.\nColour: ${hqColorFor(icon)}.`;
 }
