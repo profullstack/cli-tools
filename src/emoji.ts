@@ -31,6 +31,8 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
+import { shortcodeOf } from './emoji-platforms.ts';
+
 export const EMOJI_TEST_URL = 'https://unicode.org/Public/emoji/latest/emoji-test.txt';
 export const DEFAULT_OUT = './openemoji';
 export const DEFAULT_MODEL = 'gpt-image-2';
@@ -209,7 +211,7 @@ export function tonePromptFor(entry: Entry): string {
     tones.length === 1
       ? `Change the skin of every person or hand in the image to ${tones[0]}.`
       : `There are ${tones.length} people; from left to right their skin is: ${tones.join('; ')}.`;
-  return `This is one glyph of an emoji typeface: "${entry.name}". ${who} Change skin only. Keep everything else identical: pose, outline, hair colour, clothing, lighting, composition, size and the fully transparent background.`;
+  return `This is one glyph of an emoji typeface: "${entry.name}", a wholesome, non-sexual, fully clothed cartoon like the emoji on every phone keyboard. ${who} Change skin only. Keep everything else identical: pose, outline, hair colour, clothing, lighting, composition, size and the fully transparent background.`;
 }
 
 // ---------------------------------------------------------------- the API
@@ -732,6 +734,8 @@ export interface Manifest {
     subgroup: string;
     unicode: string;
     keywords?: string[];
+    /** The set's own names (rule 3): `oe_` and the CLDR name, tones as _t1…_t5. */
+    shortcodes?: string[];
     base?: string;
     /** Present only when the glyph is drawn: an entry without files is listed, not drawn. */
     svg?: string;
@@ -795,6 +799,7 @@ export function manifestFor(
         subgroup: e.subgroup,
         unicode: e.version,
         ...(keywords?.length ? { keywords } : {}),
+        shortcodes: [shortcodeOf(e.name)],
         ...(baseKeyOf(e, known) ? { base: baseKeyOf(e, known)! } : {}),
         ...(drawnHere && options.svg ? { svg: `svg/${e.key}.svg` } : {}),
         ...(drawnHere ? { png: `png/{size}/${e.key}.png` } : {}),
