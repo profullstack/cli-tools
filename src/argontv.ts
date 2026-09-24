@@ -217,7 +217,10 @@ export async function reseller(
       'content-type': 'application/json',
       authorization: `Bearer ${key}`,
     },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    // Spread rather than `body: undefined`: under exactOptionalPropertyTypes
+    // an optional property may be absent or a string, but not present-and-
+    // undefined, and a GET with a body key at all is not what we mean.
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     signal: AbortSignal.timeout(30_000),
   });
   const data = await res.json().catch(() => ({}));
