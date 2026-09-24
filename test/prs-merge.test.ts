@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { Gh, parseChecks, parsePullRequest, GhError } from '../src/gh.ts';
+import {
+  Gh,
+  parseChecks,
+  parseMergeAsync,
+  parsePullRequest,
+  parsePullRequestUrl,
+  GhError,
+} from '../src/gh.ts';
 import type { RunResult } from '../src/exec.ts';
 import {
   defaults,
@@ -32,10 +39,15 @@ function stubGh(options: {
   steps: StubStep[];
   updateBranchFails?: boolean;
   mergeFails?: boolean;
+  /** Refuse `pr merge` the way GitHub refuses a PR that is part of a stack. */
+  stacked?: boolean;
+  /** How many polls the asynchronous merge takes before it reports merged. */
+  asyncPolls?: number;
 }) {
   const calls: string[] = [];
   let viewIndex = 0;
   let checkIndex = 0;
+  let asyncPolls = options.asyncPolls ?? 0;
 
   const step = (index: number): StubStep =>
     options.steps[Math.min(index, options.steps.length - 1)]!;
@@ -83,9 +95,27 @@ function stubGh(options: {
     }
 
     if (args[0] === 'pr' && args[1] === 'merge') {
+      if (options.stacked) {
+        return {
+          code: 1,
+          stdout: '',
+          stderr:
+            'GraphQL: This pull request is part of a stack and must be merged ' +
+            'using the asynchronous merge REST API. (mergePullRequest)',
+        };
+      }
       return options.mergeFails
         ? { code: 1, stdout: '', stderr: 'refused' }
         : ok('Merged');
+    }
+
+    // The asynchronous merge endpoint: the PUT enqueues, each GET polls.
+    if (args[0] === 'api' && args.some((a) => a.includes('merge-async'))) {
+      if (asyncPolls > 0) {
+        asyncPolls -= 1;
+        return ok(JSON.stringify({ status: 'pending', details: { uuid: 'u-1' } }));
+      }
+      return ok(JSON.stringify({ status: 'merged', details: { sha: 'cafe' } }));
     }
 
     if (args[0] === 'pr' && args[1] === 'ready') return ok('');
@@ -282,6 +312,26 @@ describe('sweep', () => {
     expect(summary.merged).toBe(0);
   });
 
+  it('merges a stacked PR through the asynchronous merge endpoint', async () => {
+    const { gh, calls } = stubGh({ steps: [{}], stacked: true });
+    const { summary } = await runSweep(gh, baseOptions());
+
+    expect(summary.merged).toBe(1);
+    expect(summary.failed).toBe(0);
+    expect(calls.some((c) => c.includes('merge-async'))).toBe(true);
+  });
+
+  it('pins the head commit on the asynchronous merge too', async () => {
+    const { gh, calls } = stubGh({ steps: [{}], stacked: true });
+    await runSweep(gh, baseOptions());
+
+    const put = calls.find((c) => c.startsWith('api --method PUT'));
+    expect(put).toContain('sha=deadbeef');
+    expect(put).toContain('merge_method=squash');
+    // Still no admin override on this path.
+    expect(calls.some((c) => c.includes('--admin'))).toBe(false);
+  });
+
   it('marks a draft ready, then judges it normally', async () => {
     const { gh, calls } = stubGh({ steps: [{ isDraft: true }, { isDraft: false }] });
     const { summary } = await runSweep(gh, baseOptions());
@@ -318,5 +368,122 @@ describe('defaults', () => {
   it('waits ten minutes and polls every twenty seconds', () => {
     expect(defaults.fixWaitMs).toBe(600_000);
     expect(defaults.pollMs).toBe(20_000);
+  });
+});
+
+describe('asynchronous merge', () => {
+  const PR = 'https://github.com/acme/repo/pull/7';
+
+  /** A `gh` that refuses the mutation, then answers the REST endpoint. */
+  function stubAsync(replies: string[], { refuse = true } = {}) {
+    const calls: string[] = [];
+    let index = 0;
+
+    const exec = async (_f: string, args: readonly string[]): Promise<RunResult> => {
+      calls.push(args.join(' '));
+
+      if (args[0] === 'pr' && args[1] === 'merge') {
+        return refuse
+          ? {
+              code: 1,
+              stdout: '',
+              stderr: 'must be merged using the asynchronous merge REST API. (mergePullRequest)',
+            }
+          : { code: 0, stdout: 'Merged', stderr: '' };
+      }
+
+      const reply = replies[Math.min(index, replies.length - 1)]!;
+      index += 1;
+      return { code: 0, stdout: reply, stderr: '' };
+    };
+
+    return { gh: new Gh({ exec }), calls };
+  }
+
+  it('polls the uuid until the merge settles', async () => {
+    const { gh, calls } = stubAsync([
+      JSON.stringify({ status: 'pending', details: { uuid: 'u-1' } }),
+      JSON.stringify({ status: 'pending', details: { uuid: 'u-1' } }),
+      JSON.stringify({ status: 'merged', details: { sha: 'cafe' } }),
+    ]);
+
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1 });
+
+    expect(result.code).toBe(0);
+    expect(calls.filter((c) => c.startsWith('api repos/acme/repo/pulls/7/merge-async/u-1')))
+      .toHaveLength(2);
+  });
+
+  it('treats enqueued as merged, because a merge queue owns it from there', async () => {
+    const { gh } = stubAsync([JSON.stringify({ status: 'enqueued', details: { uuid: 'u-1' } })]);
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1 });
+
+    expect(result.code).toBe(0);
+  });
+
+  it('reports a failed asynchronous merge with the reason GitHub gave', async () => {
+    const { gh } = stubAsync([
+      JSON.stringify({ status: 'failed', details: { message: 'head moved' } }),
+    ]);
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1 });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('head moved');
+  });
+
+  it('gives up rather than polling forever', async () => {
+    const { gh } = stubAsync([JSON.stringify({ status: 'pending', details: { uuid: 'u-1' } })]);
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1, attempts: 3 });
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('never settled');
+  });
+
+  it('does not reach for the endpoint when the refusal is a different one', async () => {
+    const calls: string[] = [];
+    const gh = new Gh({
+      exec: async (_f, args) => {
+        calls.push(args.join(' '));
+        return { code: 1, stdout: '', stderr: 'Pull request is not mergeable' };
+      },
+    });
+
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1 });
+
+    expect(result.code).toBe(1);
+    expect(calls.some((c) => c.includes('merge-async'))).toBe(false);
+  });
+
+  it('never merges twice when the mutation already worked', async () => {
+    const { gh, calls } = stubAsync([], { refuse: false });
+    const result = await gh.squashMerge(PR, 'deadbeef', { pollMs: 1 });
+
+    expect(result.code).toBe(0);
+    expect(calls.some((c) => c.includes('merge-async'))).toBe(false);
+  });
+});
+
+describe('parsePullRequestUrl', () => {
+  it('reads owner, repo and number', () => {
+    expect(parsePullRequestUrl('https://github.com/acme/repo/pull/7')).toEqual({
+      slug: 'acme/repo',
+      number: '7',
+    });
+  });
+
+  it('returns nothing for something that is not a PR url', () => {
+    expect(parsePullRequestUrl('https://example.com/acme/repo')).toBeUndefined();
+  });
+});
+
+describe('parseMergeAsync', () => {
+  it('lifts status, uuid and message out of the reply', () => {
+    expect(
+      parseMergeAsync(JSON.stringify({ status: 'failed', details: { message: 'no' } })),
+    ).toEqual({ status: 'failed', uuid: undefined, message: 'no' });
+  });
+
+  it('returns nothing rather than inventing a status', () => {
+    expect(parseMergeAsync('not json')).toBeUndefined();
   });
 });

@@ -124,6 +124,52 @@ export function parseChecks(raw: unknown, where = 'gh pr checks'): Check[] {
   });
 }
 
+/**
+ * The refusal GitHub returns from the GraphQL merge mutation for a pull
+ * request that belongs to a stack. Matched as a substring because the rest of
+ * the sentence carries a docs URL that is not ours to depend on.
+ */
+export const STACK_REFUSAL = 'asynchronous merge REST API';
+
+/** `https://github.com/owner/repo/pull/7` → `{ slug: 'owner/repo', number: 7 }`. */
+export function parsePullRequestUrl(
+  url: string,
+): { slug: string; number: string } | undefined {
+  const match = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(url);
+  return match ? { slug: match[1]!, number: match[2]! } : undefined;
+}
+
+export interface MergeAsyncState {
+  status?: string | undefined;
+  uuid?: string | undefined;
+  message?: string | undefined;
+}
+
+/**
+ * Read one asynchronous-merge reply. Unparseable output is not an error here:
+ * the caller treats a missing uuid as "stop polling" and reports that the
+ * merge never settled, which is truer than inventing a status.
+ */
+export function parseMergeAsync(stdout: string): MergeAsyncState | undefined {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(stdout);
+  } catch {
+    return undefined;
+  }
+
+  if (typeof raw !== 'object' || raw === null) return undefined;
+
+  const record = raw as Record<string, unknown>;
+  const details = (record.details ?? {}) as Record<string, unknown>;
+
+  return {
+    status: typeof record.status === 'string' ? record.status : undefined,
+    uuid: typeof details.uuid === 'string' ? details.uuid : undefined,
+    message: typeof details.message === 'string' ? details.message : undefined,
+  };
+}
+
 export interface GhOptions {
   /** Swap in a fake for tests. */
   exec?: typeof run;
@@ -291,8 +337,89 @@ export class Gh {
    * lands on a commit nothing verified.
    *
    * Deliberately no `--admin`. Branch protections stay enforced.
+   *
+   * `gh pr merge` calls the GraphQL mergePullRequest mutation, and GitHub
+   * refuses that mutation outright for a PR that belongs to a stack, naming
+   * the asynchronous merge REST endpoint instead. Nothing is wrong with such
+   * a PR — it reports MERGEABLE and CLEAN — so there is no repair to attempt
+   * and no honest way to call it a refusal. Fall back to that endpoint.
    */
-  async squashMerge(url: string, headSha: string): Promise<RunResult> {
-    return this.call(['pr', 'merge', url, '--squash', '--match-head-commit', headSha]);
+  async squashMerge(
+    url: string,
+    headSha: string,
+    { pollMs = 2_000, attempts = 30 }: { pollMs?: number; attempts?: number } = {},
+  ): Promise<RunResult> {
+    const direct = await this.call([
+      'pr',
+      'merge',
+      url,
+      '--squash',
+      '--match-head-commit',
+      headSha,
+    ]);
+
+    if (direct.code === 0) return direct;
+
+    // Keyed on the message rather than on the base branch: GitHub still calls
+    // a PR stacked after it has retargeted it onto the default branch.
+    if (!`${direct.stderr}${direct.stdout}`.includes(STACK_REFUSAL)) return direct;
+
+    return this.mergeAsync(url, headSha, { pollMs, attempts });
+  }
+
+  /**
+   * The asynchronous merge endpoint enqueues the squash and hands back a uuid
+   * to poll. The head stays pinned and no `--admin` is passed, so the PR is
+   * held to exactly the rules it would have been held to above.
+   */
+  private async mergeAsync(
+    url: string,
+    headSha: string,
+    { pollMs, attempts }: { pollMs: number; attempts: number },
+  ): Promise<RunResult> {
+    const target = parsePullRequestUrl(url);
+    if (!target) {
+      return { code: 1, stdout: '', stderr: `cannot read owner/repo from ${url}` };
+    }
+
+    const endpoint = `repos/${target.slug}/pulls/${target.number}/merge-async`;
+
+    let response = await this.call([
+      'api',
+      '--method',
+      'PUT',
+      endpoint,
+      '-f',
+      'merge_method=squash',
+      '-f',
+      `sha=${headSha}`,
+    ]);
+
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (response.code !== 0) return response;
+
+      const state = parseMergeAsync(response.stdout);
+
+      // `enqueued` means a merge queue owns it from here, which is as merged
+      // as this tool can make it.
+      if (state?.status === 'merged' || state?.status === 'enqueued') {
+        return {
+          code: 0,
+          stdout: `Merged ${url} via the asynchronous merge API`,
+          stderr: '',
+        };
+      }
+
+      if (state?.status === 'failed') {
+        return { code: 1, stdout: '', stderr: state.message ?? 'async merge failed' };
+      }
+
+      if (!state?.uuid) break;
+
+      await sleep(pollMs);
+      response = await this.call(['api', `${endpoint}/${state.uuid}`]);
+    }
+
+    return { code: 1, stdout: '', stderr: `async merge never settled for ${url}` };
   }
 }
