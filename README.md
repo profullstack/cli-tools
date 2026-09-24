@@ -29,6 +29,7 @@ TypeScript, installed as executables on `PATH`.
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
+| [`user-export`](#user-export) | Every user across many databases, as one CSV |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -1636,6 +1637,38 @@ one still running is not the one now on disk.
 
 Debian and Ubuntu only; it refuses a machine with no `apt` rather than running
 two thirds of a three-step plan on a box it was never meant for.
+
+### `user-export`
+
+Every user account across many databases, as one CSV of
+`site,name,email,last_login`:
+
+```sh
+user-export --example > ~/.config/cli-tools/user-export.json   # then edit it
+user-export -o users.csv                  # all sources; file is created mode 600
+user-export --only app.com,blog.example   # just these sites
+user-export --source > users.csv          # add the source each row came from
+```
+
+The config lists sources, and nothing in the command knows whose they are:
+
+| `type` | Reads | Needs |
+| --- | --- | --- |
+| `supabase-management` | `auth.users` on every project an access token can see | `token`; optional `include`, `exclude`, `sites` (project → label), `queries` (project → SQL) |
+| `supabase-auth` | one instance, cloud or self-hosted, via the GoTrue admin API | `site`, `url`, `serviceKey` |
+| `libsql` | Turso / libSQL over HTTP (no client library) | `site`, `url`, `token`, `query` |
+| `sqlite` | a file, opened read-only | `site`, `path`, `query` |
+| `postgres` | any Postgres URL, in a read-only transaction | `site`, `url`, `query` |
+
+Custom queries alias their columns to `name`, `email` and `last_login`. Secret
+fields are references, so the config can be shared while the values are not:
+`env:NAME` reads the environment, and `vault:<project>/<env>/<KEY>` pulls a
+[logicsrc](https://logicsrc.com) team vault (team from `"vaultTeam"`, or
+`vault:<team>/<project>/<env>/<KEY>`), once per vault, decrypted only in memory.
+
+A source that fails is reported on stderr and the rest still export; the exit
+status is 3 when the output is partial. The config is found at `--config`, then
+`$USER_EXPORT_CONFIG`, then `~/.config/cli-tools/user-export.json`.
 
 ### `root-ubuntu.sh`
 

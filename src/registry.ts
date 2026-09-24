@@ -54,6 +54,7 @@ const SUMMARIES: Record<string, string> = {
   porkbun: 'Read and change DNS at Porkbun, and un-park a domain',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
   sysupdate: 'Update this box: apt lists, apt packages, snaps',
+  'user-export': 'Every user across many databases, as one CSV',
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
   torrent: 'Make a torrent out of a directory, and get it seeded',
   tts: 'Read text aloud and keep the audio',
