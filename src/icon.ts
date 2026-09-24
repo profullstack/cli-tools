@@ -365,6 +365,20 @@ export function stylesOf(icon: IconEntry): Record<string, StyleFiles> {
   return { ...(icon.hq ? { hq: icon.hq } : {}), ...icon.styles };
 }
 
+/**
+ * Rewrite index.html from a manifest and the SVGs already on disk.
+ *
+ * `build` writes the page too, but it writes it before any colour style has
+ * been applied, so the page it makes shows the line set alone. A build that
+ * then derives styles calls this again with the finished manifest, which is
+ * the only version that has artwork to switch to.
+ */
+export async function writePreview(out: string, manifest: Manifest): Promise<void> {
+  const svgs = new Map<string, string>();
+  for (const icon of manifest.icons) svgs.set(icon.key, await readFile(join(out, icon.svg), 'utf8'));
+  await writeFile(join(out, 'index.html'), previewFor(manifest, svgs));
+}
+
 export function previewFor(manifest: Manifest, svgs: Map<string, string>): string {
   // The colour styles the set has actually derived files for, in its own order.
   const colour = (manifest.styles ?? []).filter((id) => id !== 'simple' && manifest.icons.some((i) => stylesOf(i)[id]));

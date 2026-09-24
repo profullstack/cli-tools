@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { find, glyphMode, search } from '../bin/icon.ts';
 import { BRANDS } from '../src/icon-brands.ts';
 import { GENERIC } from '../src/icon-set.ts';
-import { KEY_PATTERN, brandSvg, build, checkNames, humanName, resolveNerd, strokeSvg } from '../src/icon.ts';
+import { KEY_PATTERN, brandSvg, build, checkNames, humanName, previewFor, resolveNerd, strokeSvg } from '../src/icon.ts';
 
 const ALL = [...GENERIC, ...BRANDS];
 
@@ -128,5 +128,42 @@ describe('build', () => {
     expect(existsSync(join(out, 'png', '32', 'mail.png'))).toBe(true);
     expect(await readFile(join(out, 'sprite.svg'), 'utf8')).toContain('<symbol id="oi-mail"');
     expect(await readFile(join(out, 'svg', 'github.svg'), 'utf8')).toContain('<title>GitHub</title>');
+  });
+});
+
+describe('previewFor', () => {
+  const manifest = (styled: boolean) =>
+    ({
+      openicon: '0.1',
+      icons: [
+        {
+          key: 'mail',
+          category: 'communication',
+          svg: 'svg/mail.svg',
+          tui: { unicode: '✉', ascii: '@' },
+          ...(styled
+            ? { styles: { 'agentic-matte': { png: 'styles/agentic-matte/png/{size}/mail.png', webp: 'styles/agentic-matte/webp/{size}/mail.webp', made_by: 'ai' } } }
+            : {}),
+        },
+      ],
+      categories: { communication: 'Communication' },
+      styles: ['simple', 'agentic-matte'],
+      style_info: { 'agentic-matte': { label: 'Agentic Matte', material: 'Flat tonal planes.' } },
+    }) as unknown as Parameters<typeof previewFor>[0];
+
+  const svgs = new Map([['mail', '<svg viewBox="0 0 24 24"><path d="M0 0h24v24H0z"/></svg>']]);
+
+  it('offers a style switcher only once the icons carry that style', () => {
+    // The page `build` writes comes before any style is applied: nothing to switch to.
+    const bare = previewFor(manifest(false), svgs);
+    expect(bare).not.toContain('style-agentic-matte');
+
+    const withStyles = previewFor(manifest(true), svgs);
+    expect(withStyles).toContain('id="style-agentic-matte"');
+    expect(withStyles).toContain('Agentic Matte');
+    expect(withStyles).toContain('styles/agentic-matte/webp/64/mail.webp');
+    // Simple is what a page opens on, and the switch needs no script.
+    expect(withStyles).toContain('id="style-simple" checked');
+    expect(withStyles).not.toContain('<script');
   });
 });

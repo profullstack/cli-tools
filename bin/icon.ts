@@ -24,6 +24,7 @@ import {
   loadNerd,
   resolveNerd,
   strokeSvg,
+  writePreview,
 } from '../src/icon.ts';
 import { existsSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -155,8 +156,12 @@ if (isMain(import.meta.url)) {
           only: csv(values, '--only'),
           log: (line) => process.stderr.write(`${line}\n`),
         });
-        // Existing colour styles survive a rebuild of the simple one.
-        for (const style of stylesPresent(out)) await applyHq(out, sizes, style);
+        // Existing colour styles survive a rebuild of the simple one. The
+        // preview is written again afterwards: the one `build` wrote was made
+        // before the styles went into the manifest, so it had nothing to show.
+        const present = stylesPresent(out);
+        for (const style of present) await applyHq(out, sizes, style);
+        if (present.length) await writePreview(out, JSON.parse(await readFile(join(out, 'openicon.json'), 'utf8')));
         const nerd = manifest.icons.filter((i) => i.tui.nerd).length;
         process.stdout.write(
           `${manifest.icons.length} icons in ${out} (${nerd} with a Nerd Font glyph); open ${out}/index.html\n`,
