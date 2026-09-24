@@ -111,6 +111,36 @@ downloads the release tarball and checks the published sha256, and if any of
 that fails it warns and moves on rather than failing an install that otherwise
 worked. Authenticate it once with `stripe login`.
 
+It also puts [**tea**](https://gitea.com/gitea/tea) on PATH, for the same
+reason. `git.profullstack.com` runs Forgejo, which serves a Gitea-compatible
+`/api/v1`; `gh` cannot talk to it, because `gh` only speaks GitHub.com and
+GitHub Enterprise. tea is the CLI that does — issues, pull requests, releases,
+labels, milestones, notifications and `tea clone` against our own forge instead
+of a browser tab. It is vendored under `~/.local/share/cli-tools/vendor/tea` and
+linked into `~/.local/bin` on the same terms as the Stripe CLI: a `tea` already
+on PATH from somewhere else is left alone, `TEA_CLI_VERSION` pins a version,
+`CLI_TOOLS_SKIP_TEA=1` skips it, and a download that fails its published sha256
+or will not execute warns rather than failing the install.
+
+Authenticate once per forge:
+
+```sh
+tea login add --name agentgit --url https://git.profullstack.com --token <token>
+```
+
+The token comes from `https://git.profullstack.com/user/settings/applications`
+— `repo`, `issue` and `user` scopes cover the day-to-day. tea persists it
+under `$XDG_CONFIG_HOME/tea` (`~/.config/tea/config.yml` by default); it belongs
+there and in the vault, never in a shell rc and never in a repository. After that, `tea` picks the right login
+from the remote of whatever checkout you are standing in, so the same commands
+work across forges:
+
+```sh
+tea issues           # open issues on this repo
+tea pr create        # open a pull request from the current branch
+tea releases create  # cut a release
+```
+
 It also installs the **Profullstack skill**, by running the one-liner the site
 publishes:
 
