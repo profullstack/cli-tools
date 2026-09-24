@@ -8,8 +8,9 @@ import { describe, expect, it } from 'vitest';
 import type { ImageRequest } from '../src/emoji.ts';
 import { BRANDS } from '../src/icon-brands.ts';
 import {
-  CreditError, FA_BRAND_COLORS, STYLE_REFS, buildHq, drawHq, guardCredits, hqPromptFor, withHq,
+  CreditError, FA_BRAND_COLORS, STYLE_REFS, buildHq, drawHq, guardCredits, hqPromptFor, withHq, withStyle,
 } from '../src/icon-hq.ts';
+import { resolveStyle } from '../src/icon-styles.ts';
 import { GENERIC } from '../src/icon-set.ts';
 import type { Manifest } from '../src/icon.ts';
 
@@ -147,6 +148,71 @@ describe('withHq', () => {
     expect(next.hq).toMatchObject({ sizes: [16], webp_sizes: [64, 128], coverage: { total: 2, done: 1 } });
     expect(next.icons[0]).toMatchObject({ svg: 'svg/mail.svg', hq: { made_by: 'ai' } });
     expect(next.icons[1]!.hq).toBeUndefined();
+  });
+});
+
+describe('styles', () => {
+  it('agentic takes no emoji reference and names its own material', () => {
+    const mail = GENERIC.find((i) => i.key === 'mail')!;
+    const matte = resolveStyle('agentic');
+    expect(matte.id).toBe('agentic-matte');
+    expect(matte.emojiRefs).toEqual([]);
+    const prompt = matte.promptFor(mail);
+    expect(prompt).toContain('keep its exact silhouette');
+    expect(prompt).toContain('FLAT tonal planes');
+    expect(prompt).toContain('no specular highlight');
+    expect(prompt).toContain('Accent colour: sky blue #1E88E5');
+    // The gloss vocabulary belongs to the HQ style and must not leak in.
+    expect(prompt).not.toContain('glossy 3D emoji');
+    expect(resolveStyle('hq').promptFor(mail)).toContain('glossy 3D emoji');
+  });
+
+  it('each agentic style is drawn and derived under its own directory', async () => {
+    const { out, styleDir } = await setup();
+    const style = resolveStyle('agentic-emissive');
+    await drawHq({ ...base(out, styleDir, async () => ({ png: PNG, tokens: 1 })), style, keys: ['mail'] });
+    expect(existsSync(join(out, 'styles', 'agentic-emissive', 'master', 'mail.png'))).toBe(true);
+    expect(existsSync(join(out, 'hq', 'master', 'mail.png'))).toBe(false);
+  });
+
+  it('an unreadable master is left out rather than derived into broken sizes', async () => {
+    const { out } = await setup();
+    const style = resolveStyle('agentic-matte');
+    await mkdir(join(out, style.dir, 'master'), { recursive: true });
+    await writeFile(join(out, style.dir, 'master', 'mail.png'), await sharpSquare());
+    // What a run that filled the disk leaves behind: a plausible file that is not an image.
+    await writeFile(join(out, style.dir, 'master', 'phone.png'), Buffer.alloc(512));
+
+    const lines: string[] = [];
+    const entries = await buildHq({
+      out, sizes: [16], style, log: (l) => lines.push(l), render: () => PNG, simpleIconsHex: new Map(),
+    });
+    expect(entries.has('mail')).toBe(true);
+    expect(entries.has('phone')).toBe(false);
+    expect(lines.join('\n')).toContain('BROKEN master agentic-matte/phone');
+  });
+});
+
+describe('withStyle', () => {
+  it('keeps every style in one manifest, and hq keeps its old name too', () => {
+    const manifest = {
+      openicon: '0.1', sizes: [16], icons: [{ key: 'mail', svg: 'svg/mail.svg', png: 'png/{size}/mail.png' }],
+    } as unknown as Manifest;
+    const entry = (dir: string) => new Map([['mail', { png: `${dir}/png/{size}/mail.png`, webp: `${dir}/webp/{size}/mail.webp`, made_by: 'ai' as const }]]);
+
+    const withBoth = withStyle(
+      withHq(manifest, entry('hq'), [16]),
+      resolveStyle('agentic-matte'),
+      entry('styles/agentic-matte'),
+      [16],
+    );
+
+    expect(withBoth.styles).toEqual(['simple', 'hq', 'agentic-matte']);
+    expect(Object.keys(withBoth.style_info!)).toEqual(['hq', 'agentic-matte']);
+    expect(withBoth.style_info!['agentic-matte']).toMatchObject({ dir: 'styles/agentic-matte', label: 'Agentic Matte' });
+    // Both names, one object: a reader from the first HQ release still works.
+    expect(withBoth.icons[0]!.hq).toEqual(withBoth.icons[0]!.styles!.hq);
+    expect(withBoth.icons[0]!.styles!['agentic-matte']!.png).toBe('styles/agentic-matte/png/{size}/mail.png');
   });
 });
 
