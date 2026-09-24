@@ -30,6 +30,7 @@ TypeScript, installed as executables on `PATH`.
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
+| [`user-export`](#user-export) | Every user across many databases, as one CSV |
 
 One thing here is not a `PATH` command and does not need Node:
 
@@ -1691,6 +1692,52 @@ one still running is not the one now on disk.
 
 Debian and Ubuntu only; it refuses a machine with no `apt` rather than running
 two thirds of a three-step plan on a box it was never meant for.
+
+### `user-export`
+
+Every user account across many databases, as one CSV of
+`site,name,email,last_login`:
+
+```sh
+user-export --example > ~/.config/cli-tools/user-export.json   # then edit it
+user-export -o users.csv                  # all sources; file is created mode 600
+user-export --only app.com,blog.example   # just these sites
+user-export --source > users.csv          # add the source each row came from
+```
+
+The config lists sources, and nothing in the command knows whose they are:
+
+| `type` | Reads | Needs |
+| --- | --- | --- |
+| `supabase-management` | `auth.users` on every project an access token can see | `token`; optional `include`, `exclude`, `sites` (project → label), `queries` (project → SQL) |
+| `supabase-auth` | one instance, cloud or self-hosted, via the GoTrue admin API | `site`, `url`, `serviceKey` |
+| `libsql` | Turso / libSQL over HTTP (no client library) | `site`, `url`, `token`, `query` |
+| `sqlite` | a file, opened read-only | `site`, `path`, `query`; optional `via` |
+| `postgres` | any Postgres, in a read-only transaction | `site`, `query`, `url` and/or `via` |
+| `exec` | any command that prints a JSON array or a CSV with a header | `site`, `command` |
+
+Custom queries alias their columns to `name`, `email` and `last_login`.
+
+A database that only answers from inside its own host (a platform's private
+network, a SQLite file on a container volume) is read through `via`, a prefix
+that runs one shell command there: `ssh db.internal`, `railway ssh -p <project>
+-s <service> -e production`, `docker exec my-app sh -c`. The reader goes through
+it: psql with `default_transaction_read_only=on` and the rows as one
+`json_agg`, or a few lines of bun/node that open the SQLite file read-only.
+Nothing is installed on the far side and the query is base64, so no quoting
+survives into the remote shell.
+
+Secret fields are references, so the config can be shared while the values are
+not: `env:NAME` reads the environment, `vault:<project>/<env>/<KEY>` pulls a
+[logicsrc](https://logicsrc.com) team vault (team from `"vaultTeam"`, or
+`vault:<team>/<project>/<env>/<KEY>`), once per vault, decrypted only in memory,
+and `cmd:<shell>` takes a command's trimmed stdout — for keys that already live
+in a platform, e.g. `cmd:railway variable list -p <id> -s web -e production
+--json | jq -r .TURSO_AUTH_TOKEN`.
+
+A source that fails is reported on stderr and the rest still export; the exit
+status is 3 when the output is partial. The config is found at `--config`, then
+`$USER_EXPORT_CONFIG`, then `~/.config/cli-tools/user-export.json`.
 
 ### `root-ubuntu.sh`
 
