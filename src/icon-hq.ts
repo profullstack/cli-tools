@@ -40,15 +40,59 @@ export const STYLE_REFS = ['1f4bb.png', '1f48e.png', '1f4a1.png'] as const;
 export const HQ_ANCHORS = ['mail', 'settings', 'search', 'delete', 'lock', 'calendar', 'cart', 'terminal', 'bell', 'folder'] as const;
 
 export const HQ_STYLE = `Design one icon for a premium, original colour icon set that sits beside a glossy 3D emoji set as one family.
-The FIRST reference image is this icon's line drawing: keep its exact silhouette, parts and meaning, and turn it into a solid, full-colour object. Do not add or remove parts, do not change what it depicts, do not add text.
+The FIRST reference image is this icon's line drawing: keep its exact silhouette, parts and meaning, and turn it into a solid, full-colour object. Where the line drawing outlines a shape (a triangle, a funnel, a square, a pin, a basket), fill that shape: a solid glass or enamel body, never a hollow tube tracing the outline. Only pure strokes (arrows, bars, plus and minus signs, chevrons) stay as rounded solid bars. Do not add or remove parts, do not change what it depicts, do not add text.
 The OTHER reference images are the style to match exactly: soft-volume 3D with vector clarity, smooth rich gradients that model the form, one warm key light from the upper left with a crisp specular highlight, gentle ambient occlusion, a subtle darker rim on the lower-right edge, saturated harmonious colour. Do not copy their subjects.
-Colour follows meaning, the way a well-designed app icon set does, not the reference images: blue for information, links, search and communication; green for success, money and go; red only for delete, danger, errors and alerts; amber for warnings and notifications; purple for creative and AI; teal for time and navigation; real materials where the object has them (steel for tools and locks, paper white, wood, glass). The set as a whole must use the full spectrum, never mostly red and orange.
+Use the colour named below as the dominant colour, with small natural accents (white paper, steel, glass, gold) only where the object has them. Ignore the reference images' colours.
 Composition: the single object, centred, filling about 84% of the square, front or slight three-quarter view, nothing cropped. Fully transparent background, no ground shadow, no badge, no frame, no backdrop.
 It must stay instantly readable at 20 pixels. Every design is original: never resemble a logo, mascot or product from any brand, film or game.`;
 
+/**
+ * Colour is decided here, not by the model: left to itself it drifts to one
+ * hue for the whole set (orange with warm references, blue with cool ones).
+ * Each category has its own colour, so a page of icons reads as grouped, and
+ * meaning overrides the category where colour carries meaning.
+ */
+export const CATEGORY_COLORS: Record<string, string> = {
+  action: 'deep indigo-violet (#5B4BDB) glass',
+  navigation: 'teal (#0FA3A3) glass',
+  communication: 'sky blue (#1E88E5) glass',
+  media: 'magenta-pink (#E0337A) glass',
+  file: 'warm amber-yellow (#F5B422) with white paper',
+  status: 'cobalt blue (#2F6FEB) glass',
+  time: 'cyan (#12A8C9) glass with white faces',
+  commerce: 'emerald green (#1FA35C) glass',
+  dev: 'graphite slate (#39424E) with electric lime (#9BE22E) accents',
+  device: 'brushed silver aluminium with dark glass screens and a blue glow',
+  editor: 'violet-purple (#8E44D9) glass',
+  misc: "the object's own natural colours",
+};
+
+const OVERRIDES: Array<[string[], string]> = [
+  [['add', 'plus-circle', 'check', 'check-circle', 'checkbox', 'toggle-on', 'online', 'user-plus', 'user-check', 'shield-check', 'calendar-check', 'clipboard-check', 'download', 'cloud-download', 'folder-plus', 'file-plus', 'calendar-plus', 'battery-charging'], 'fresh green (#22B35A) glass'],
+  [['delete', 'close', 'x-circle', 'error', 'ban', 'minus-circle', 'user-minus', 'phone-off', 'mic-off', 'bell-off', 'volume-off', 'wifi-off', 'unlink', 'bug', 'power'], 'coral red (#E5484D) glass'],
+  [['warning', 'bell', 'alarm', 'star', 'key', 'lightbulb', 'zap', 'award', 'trophy', 'sun', 'megaphone', 'coins', 'dollar'], 'warm gold-amber (#F5A524) glass'],
+  [['heart'], 'glossy red (#E0245E)'],
+  [['lock', 'unlock', 'shield', 'fingerprint'], 'steel blue-grey (#5B6B82) metal with a gold keyhole or accent'],
+  [['sparkles', 'palette', 'brush', 'pen-tool', 'theme'], 'purple-to-magenta (#8E44D9 to #E0337A) glass'],
+  [['info', 'help'], 'cobalt blue (#2F6FEB) glass'],
+  [['moon'], 'midnight indigo (#3949AB) with a pale gold rim'],
+  [['leaf'], 'leaf green (#3BAA35)'],
+  [['droplet'], 'clear water blue (#2AA7F0)'],
+  [['coffee'], 'white ceramic with a coffee-brown (#6F4E37) interior'],
+  [['rocket'], 'white and silver with a teal window and a small orange flame'],
+  [['thermometer'], 'glass with a red (#E5484D) mercury bulb'],
+  [['umbrella', 'anchor', 'building', 'briefcase'], 'navy (#24407A) with brass accents'],
+  [['rss'], 'orange (#F57C00) glass'],
+];
+
+export function hqColorFor(icon: IconDef): string {
+  for (const [keys, color] of OVERRIDES) if (keys.includes(icon.key)) return color;
+  return CATEGORY_COLORS[icon.category] ?? CATEGORY_COLORS.misc!;
+}
+
 export function hqPromptFor(icon: IconDef): string {
   const words = [humanName(icon.key).toLowerCase(), ...(icon.aliases ?? []), ...(icon.keywords ?? [])].slice(0, 6);
-  return `${HQ_STYLE}\n\nThe icon: "${icon.key}" (${words.join(', ')}), category ${icon.category}.`;
+  return `${HQ_STYLE}\n\nThe icon: "${icon.key}" (${words.join(', ')}), category ${icon.category}.\nColour: ${hqColorFor(icon)}.`;
 }
 
 /**
