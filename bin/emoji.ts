@@ -24,10 +24,12 @@ import {
   DEFAULT_OUT,
   DEFAULT_QUALITY,
   DEFAULT_SIZES,
+  DEFAULT_WEBP_SIZES,
   STYLE,
   build,
   generate,
   loadEmojiTest,
+  loadKeywords,
   openaiImages,
   parseEmojiTest,
   select,
@@ -38,7 +40,7 @@ import { isMain } from '../src/is-main.ts';
 const USAGE = `Usage:
   emoji list      [--group G] [--only …] [--json]
   emoji generate  [--out DIR] [selection] [--quality Q] [--concurrency N] [--style FILE] [--force] [--dry-run]
-  emoji build     [--out DIR] [--sizes 16,32,…] [--no-svg] [--no-font]
+  emoji build     [--out DIR] [--sizes 16,32,…] [--webp 64,128] [--no-svg] [--no-font]
   emoji all       generate, then build
   emoji status    [--out DIR]
 
@@ -73,7 +75,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['--json', '--force', '--dry-run', '--refresh', '--components', '--no-svg', '--no-font', '--help'],
-      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes'],
+      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes', '--webp'],
     });
     const verb = positional[0];
     if (flags.has('--help') || !verb) {
@@ -131,7 +133,15 @@ if (isMain(import.meta.url)) {
             return Number(s);
           })
         : [...DEFAULT_SIZES];
+      const webpSizes = values.has('--webp')
+        ? csv(values, '--webp').map((s) => {
+            if (!/^\d+$/.test(s) || Number(s) < 8 || Number(s) > 1024) throw new UsageError(`bad webp size: ${s}`);
+            return Number(s);
+          })
+        : [...DEFAULT_WEBP_SIZES];
       const manifest = await build(all, {
+        webpSizes,
+        keywords: await loadKeywords({ log }),
         out,
         sizes,
         svg: !flags.has('--no-svg'),

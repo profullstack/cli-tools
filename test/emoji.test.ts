@@ -238,6 +238,8 @@ describe('generate', () => {
 describe('manifest', () => {
   const manifest = manifestFor(all, ['1f600', '1f44d', '1f44d-1f3fd'], {
     sizes: [32, 128],
+    webpSizes: [64],
+    keywords: new Map([['❤', ['love', 'heart']]]),
     svg: true,
     fonts: [{ format: 'cbdt', path: 'font/OpenEmoji-CBDT.ttf' }],
     unicodeVersion: '18.0',
@@ -251,7 +253,7 @@ describe('manifest', () => {
       made_by: 'ai',
       disclosure: 'ai-generated',
       ai_model: 'gpt-image-2',
-      formats: ['png', 'svg', 'cbdt'],
+      formats: ['png', 'webp', 'svg', 'cbdt'],
     });
     expect(manifest.coverage).toMatchObject({ total: all.length, drawn: 3 });
     expect(manifest.coverage.missing).toContain('1f1ef-1f1f5');
@@ -263,6 +265,16 @@ describe('manifest', () => {
       svg: 'svg/1f44d-1f3fd.svg',
       png: 'png/{size}/1f44d-1f3fd.png',
     });
+  });
+
+  it('lists every emoji, and only drawn ones carry files', () => {
+    expect(manifest.emoji).toHaveLength(all.length);
+    const heart = manifest.emoji.find((e) => e.key === '2764-fe0f')!;
+    expect(heart.png).toBeUndefined();
+    expect(heart.svg).toBeUndefined();
+    // CLDR spells it without FE0F; the lookup still finds it.
+    expect(heart.keywords).toEqual(['love', 'heart']);
+    expect(manifest.emoji.find((e) => e.key === '1f600')!.webp).toBe('webp/{size}/1f600.webp');
   });
 
   it('the stylesheet points at the fonts and falls back to the system set', () => {
