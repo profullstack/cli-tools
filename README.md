@@ -635,7 +635,7 @@ Week over week needs a previous week. Snapshots go in
 against instead of printing changes against zero. A weekly entry:
 
 ```
-0 9 * * 5 $HOME/.local/bin/scorecard --send >>$HOME/.local/share/scorecard/cron.log 2>&1
+30 13 * * 5 export PATH=$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/bin:/usr/bin:/bin; $HOME/.local/bin/scorecard --send >>$HOME/.local/share/scorecard/cron.log 2>&1
 ```
 
 ### `gh-prs-fix-all`
