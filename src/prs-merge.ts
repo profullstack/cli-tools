@@ -1,4 +1,4 @@
-import { Gh, type Check, type PullRequest } from './gh.ts';
+import { Gh, type Check, type MergeState, type PullRequest } from './gh.ts';
 import { sleep } from './exec.ts';
 
 export interface MergeOptions {
@@ -30,8 +30,8 @@ export type Line =
   | { kind: 'readied'; url: string; title: string }
   | { kind: 'would-ready'; url: string; title: string }
   | { kind: 'fixing'; url: string; text: string }
-  | { kind: 'waiting'; url: string; pending: number }
-  | { kind: 'fixme'; url: string; text: string }
+  | { kind: 'waiting'; parked: number; secondsLeft: number }
+  | { kind: 'fixme'; url: string; text: string; title: string }
   | { kind: 'skip'; url: string; reason: string; title: string }
   | { kind: 'failed'; url: string; reason: string }
   | { kind: 'warn'; text: string };
@@ -45,12 +45,33 @@ export const defaults = {
 const isBad = (check: Check): boolean =>
   check.bucket !== 'pass' && check.bucket !== 'skipping';
 
+const isPending = (check: Check): boolean => check.bucket === 'pending';
+
+/**
+ * Aggregate states in which GitHub will accept a squash merge.
+ *
+ * CLEAN is the obvious one. HAS_HOOKS is CLEAN with pre-receive hooks. UNSTABLE
+ * means mergeable with a non-required context that is not green — GitHub takes
+ * the merge, and the check gate below is the stricter test anyway, so treating
+ * UNSTABLE as a blocker only skipped PRs that were ready. That was the bug: a
+ * manifest refresh sat unmerged with two green checks and nothing wrong with it.
+ */
+const MERGE_STATE_OK: ReadonlySet<MergeState> = new Set<MergeState>([
+  'CLEAN',
+  'HAS_HOOKS',
+  'UNSTABLE',
+]);
+
 /**
  * Why this PR cannot be merged, or empty when it can.
  *
  * One function so `--fix` re-judges with the same rules rather than a copy of
  * them. In the bash version this logic was inline in the loop, which is why
  * adding a re-check meant duplicating it.
+ *
+ * Checks are judged before the aggregate state deliberately: when both are
+ * unhappy, the name of the red check is the useful sentence and
+ * `mergeStateStatus=UNSTABLE` is the useless one.
  */
 export function reasonNotMergeable(
   pr: PullRequest,
@@ -60,7 +81,6 @@ export function reasonNotMergeable(
   if (pr.state !== 'OPEN') return `state=${pr.state}`;
   if (pr.isDraft) return 'draft';
   if (pr.mergeable !== 'MERGEABLE') return `mergeable=${pr.mergeable}`;
-  if (pr.mergeStateStatus !== 'CLEAN') return `mergeStateStatus=${pr.mergeStateStatus}`;
   if (checks.length === 0 && !allowNoChecks) return 'no CI checks found';
 
   const bad = checks.filter(isBad);
@@ -68,17 +88,49 @@ export function reasonNotMergeable(
     return `checks not green: ${bad.map((c) => `${c.name}=${c.bucket}`).join(', ')}`;
   }
 
+  // UNSTABLE is only trustworthy because the checks above were read and were
+  // green. With nothing to read there is no second opinion, so hold out for a
+  // state GitHub itself calls clean.
+  if (checks.length === 0 && pr.mergeStateStatus === 'UNSTABLE') {
+    return 'mergeStateStatus=UNSTABLE with no checks to confirm it';
+  }
+
+  if (!MERGE_STATE_OK.has(pr.mergeStateStatus)) {
+    return `mergeStateStatus=${pr.mergeStateStatus}`;
+  }
+
   return '';
+}
+
+/**
+ * Can `gh pr update-branch` help?
+ *
+ * It merges the base into the head, which is possible only when the two do not
+ * conflict. DIRTY is GitHub's settled verdict that they do, so asking anyway
+ * spends a round trip to be told "Cannot update PR branch due to conflicts" and
+ * then prints the refusal as though it were news.
+ */
+export function isUpdatable(pr: PullRequest): boolean {
+  if (pr.mergeStateStatus === 'DIRTY') return false;
+  return (
+    pr.mergeStateStatus === 'BEHIND' ||
+    pr.mergeStateStatus === 'UNKNOWN' ||
+    pr.mergeable === 'CONFLICTING'
+  );
 }
 
 /** A blocker `--fix` is willing to act on. */
 export function isRepairable(pr: PullRequest, checks: Check[]): boolean {
-  if (checks.some((check) => check.bucket === 'pending')) return true;
-  return (
-    pr.mergeStateStatus === 'BEHIND' ||
-    pr.mergeStateStatus === 'DIRTY' ||
-    pr.mergeable === 'CONFLICTING'
-  );
+  if (checks.some(isPending)) return true;
+  return isUpdatable(pr);
+}
+
+/** A PR set aside until its checks finish, so it does not hold up the sweep. */
+interface Parked {
+  url: string;
+  title: string;
+  /** Already counted in `fixed` — a branch update repaired it before parking. */
+  repaired: boolean;
 }
 
 export async function sweep(
@@ -135,12 +187,44 @@ export async function sweep(
     if (options.fix) {
       emit({
         kind: 'mode',
-        text: 'MODE: FIX — repairable blockers will be repaired once, then re-judged.',
+        text: 'MODE: FIX — repairable blockers are repaired once; PRs whose checks ' +
+          'are still running are parked and judged at the end.',
       });
     }
   } else {
     emit({ kind: 'mode', text: 'MODE: DRY RUN — nothing will be merged. Add --apply to merge.' });
   }
+
+  /** Judge a PR believed to be settled, and merge it when it is eligible. */
+  const judgeAndMerge = async (pr: PullRequest, checks: Check[]): Promise<void> => {
+    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+
+    if (reason) {
+      emit({ kind: 'skip', url: pr.url, reason, title: pr.title });
+      summary.skipped += 1;
+      return;
+    }
+
+    emit({ kind: 'ready', url: pr.url, title: pr.title, checks: checks.length });
+    summary.ready += 1;
+
+    if (!options.apply) return;
+
+    const merged = await gh.squashMerge(pr.url, pr.headRefOid);
+    if (merged.code === 0) {
+      emit({ kind: 'merged', url: pr.url });
+      summary.merged += 1;
+    } else {
+      emit({
+        kind: 'failed',
+        url: pr.url,
+        reason: `GitHub refused the merge: ${merged.stderr.trim() || merged.stdout.trim()}`,
+      });
+      summary.failed += 1;
+    }
+  };
+
+  const parked: Parked[] = [];
 
   for (const url of urls) {
     let pr: PullRequest;
@@ -194,124 +278,154 @@ export async function sweep(
       }
     }
 
-    let checks = await gh.checks(url);
-    let reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+    const checks = await gh.checks(url);
+    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
 
-    if (reason && options.fix && isRepairable(pr, checks)) {
-      const repaired = await repair({ url, checks, reason, options, gh, emit });
+    if (reason && options.fix) {
+      // Checks still running. The PR is not blocked, it is unfinished — the
+      // only defect is that we looked too early. Set it aside rather than
+      // standing here: every PR behind it in the sweep is merge-ready now and
+      // should not wait out someone else's test suite.
+      if (checks.some(isPending)) {
+        emit({ kind: 'fixing', url, text: 'checks still running; parked for the second pass' });
+        parked.push({ url, title: pr.title, repaired: false });
+        continue;
+      }
 
-      if (repaired) {
-        summary.fixed += 1;
-        try {
-          pr = await gh.pullRequest(url);
-          checks = await gh.checks(url);
-          reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
-        } catch (error) {
-          emit({
-            kind: 'warn',
-            text: `could not re-read ${url} after repair — ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          });
+      if (isUpdatable(pr)) {
+        // Base branch moved. GitHub merges it in without a local checkout, and
+        // only when the result needs no human judgement.
+        emit({ kind: 'fixing', url, text: `${reason}; asking GitHub to merge the base branch in` });
+        const updated = await gh.updateBranch(url);
+
+        if (updated.code === 0) {
+          summary.fixed += 1;
+          // New head, so every check re-runs. Park it for the same reason.
+          parked.push({ url, title: pr.title, repaired: true });
+          continue;
         }
+
+        const message = (updated.stderr.trim() || updated.stdout.trim()).replace(/\s+/g, ' ');
+        emit({
+          kind: 'fixme',
+          url,
+          text: `GitHub could not merge the base in: ${message}`,
+          title: pr.title,
+        });
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (pr.mergeStateStatus === 'DIRTY') {
+        // A real conflict. Say so once — as FIXME, not as a second SKIP line
+        // repeating it — and leave it alone: choosing between two authors'
+        // intent is not a batch operation.
+        emit({
+          kind: 'fixme',
+          url,
+          text: `${reason}; the branch conflicts with its base and needs resolving by hand`,
+          title: pr.title,
+        });
+        summary.skipped += 1;
+        continue;
       }
     }
 
-    if (reason) {
-      emit({ kind: 'skip', url, reason, title: pr.title });
-      summary.skipped += 1;
-      continue;
-    }
+    await judgeAndMerge(pr, checks);
+  }
 
-    emit({ kind: 'ready', url, title: pr.title, checks: checks.length });
-    summary.ready += 1;
-
-    if (!options.apply) continue;
-
-    const merged = await gh.squashMerge(url, pr.headRefOid);
-    if (merged.code === 0) {
-      emit({ kind: 'merged', url });
-      summary.merged += 1;
-    } else {
-      emit({
-        kind: 'failed',
-        url,
-        reason: `GitHub refused the merge: ${merged.stderr.trim() || merged.stdout.trim()}`,
-      });
-      summary.failed += 1;
-    }
+  if (parked.length > 0) {
+    await drainParked(parked, options, gh, emit, summary, judgeAndMerge);
   }
 
   return summary;
 }
 
 /**
- * One repair attempt. Returns true when something was done.
+ * Second pass: wait out the PRs whose checks were still running.
  *
- * Deliberately not a loop: if a repair did not make the PR mergeable, doing it
- * again will not either, and a tool that keeps trying turns a sweep into an
- * afternoon of API calls.
+ * The deadline is shared by the whole queue rather than spent per PR. Ten
+ * minutes each turns a sweep of five unfinished PRs into fifty minutes of
+ * sleeping, and they are all running their suites at the same time anyway.
  */
-async function repair(args: {
-  url: string;
-  checks: Check[];
-  reason: string;
-  options: MergeOptions;
-  gh: Gh;
-  emit: (line: Line) => void;
-}): Promise<boolean> {
-  const { url, checks, reason, options, gh, emit } = args;
-
-  // Checks still running. The PR is not blocked, it is unfinished — the only
-  // defect is that we looked too early. This is the common false skip.
-  if (checks.some((check) => check.bucket === 'pending')) {
-    emit({
-      kind: 'fixing',
-      url,
-      text: `checks still running; waiting up to ${Math.round(options.fixWaitMs / 1000)}s`,
-    });
-    await waitForChecks(url, options, gh, emit);
-    return true;
-  }
-
-  // Base branch moved. GitHub merges it in without a local checkout, and only
-  // when the result needs no human judgement.
-  emit({ kind: 'fixing', url, text: `${reason}; asking GitHub to merge the base branch in` });
-
-  const updated = await gh.updateBranch(url);
-
-  if (updated.code !== 0) {
-    // A real conflict. Print what GitHub said and leave it alone: choosing
-    // between two authors' intent is not a batch operation.
-    const message = (updated.stderr.trim() || updated.stdout.trim()).replace(/\s+/g, ' ');
-    emit({ kind: 'fixme', url, text: `GitHub could not merge the base in: ${message}` });
-    return false;
-  }
-
-  // New head, so every check re-runs. Waiting here is what makes the repair
-  // worth anything — otherwise the re-judge sees a pending suite and skips for
-  // the very reason we just set in motion.
-  await waitForChecks(url, options, gh, emit);
-  return true;
-}
-
-async function waitForChecks(
-  url: string,
+async function drainParked(
+  queue: Parked[],
   options: MergeOptions,
   gh: Gh,
   emit: (line: Line) => void,
+  summary: Summary,
+  judgeAndMerge: (pr: PullRequest, checks: Check[]) => Promise<void>,
 ): Promise<void> {
   const deadline = Date.now() + options.fixWaitMs;
+  let remaining = queue;
 
   for (;;) {
-    const checks = await gh.checks(url);
-    const pending = checks.filter((check) => check.bucket === 'pending').length;
+    const stillRunning: Parked[] = [];
 
-    if (pending === 0) return;
-    if (Date.now() >= deadline) return;
+    for (const item of remaining) {
+      let checks: Check[];
+      try {
+        checks = await gh.checks(item.url);
+      } catch (error) {
+        emit({
+          kind: 'warn',
+          text: `could not re-read checks for ${item.url} — ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        });
+        stillRunning.push(item);
+        continue;
+      }
 
-    emit({ kind: 'waiting', url, pending });
-    await sleep(options.pollMs);
+      if (checks.some(isPending)) {
+        stillRunning.push(item);
+        continue;
+      }
+
+      // Settled. Re-read the PR, because the run that just finished may have
+      // moved the aggregate state as well as the checks. A PR whose branch was
+      // updated first is already counted; waiting it out is the same repair
+      // seen through, not a second one.
+      if (!item.repaired) summary.fixed += 1;
+      try {
+        const pr = await gh.pullRequest(item.url);
+        await judgeAndMerge(pr, checks);
+      } catch (error) {
+        emit({
+          kind: 'skip',
+          url: item.url,
+          reason: `could not re-read PR metadata after its checks finished — ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          title: item.title,
+        });
+        summary.skipped += 1;
+      }
+    }
+
+    remaining = stillRunning;
+    if (remaining.length === 0) return;
+
+    const msLeft = deadline - Date.now();
+    if (msLeft <= 0) {
+      for (const item of remaining) {
+        emit({
+          kind: 'skip',
+          url: item.url,
+          reason: `checks still running after ${Math.round(options.fixWaitMs / 1000)}s`,
+          title: item.title,
+        });
+        summary.skipped += 1;
+      }
+      return;
+    }
+
+    emit({
+      kind: 'waiting',
+      parked: remaining.length,
+      secondsLeft: Math.round(msLeft / 1000),
+    });
+    await sleep(Math.min(options.pollMs, msLeft));
   }
 }
 
@@ -330,9 +444,9 @@ export function render(line: Line): string {
     case 'fixing':
       return `FIXING ${line.url} — ${line.text}`;
     case 'waiting':
-      return `      … ${line.pending} check(s) still running on ${line.url}; waiting`;
+      return `      … ${line.parked} PR(s) still running checks; ${line.secondsLeft}s left`;
     case 'fixme':
-      return `FIXME ${line.url} — ${line.text}`;
+      return `FIXME ${line.url} — ${line.text} — ${line.title}`;
     case 'skip':
       return `SKIP  ${line.url} — ${line.reason} — ${line.title}`;
     case 'failed':

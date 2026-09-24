@@ -36,9 +36,16 @@ Options:
 
 Eligibility:
   - PR is open, and not a draft (or was successfully marked ready)
-  - mergeable is MERGEABLE and mergeStateStatus is CLEAN
+  - mergeable is MERGEABLE
   - at least one CI check exists, unless --allow-no-checks
   - every check is pass or skipping
+  - mergeStateStatus is CLEAN, HAS_HOOKS or UNSTABLE
+
+    UNSTABLE means mergeable with a non-required context that is not green.
+    GitHub takes the merge, and the check rule above is the stricter test, so
+    refusing UNSTABLE only ever skipped PRs that were ready. With no checks to
+    read there is no second opinion and UNSTABLE is not accepted.
+
   - the head commit has not changed when the merge is submitted
 
 Fixing (--fix):
@@ -46,15 +53,22 @@ Fixing (--fix):
   wrong moment. Requires --apply, since every repair writes.
 
   Repaired:
-    checks still running    waits for them to settle, up to --fix-wait
-    mergeStateStatus=BEHIND asks GitHub to merge the base branch in
-    mergeable=CONFLICTING   same request; it succeeds when the base merely
-                            moved underneath the branch
+    checks still running    parks the PR and judges it in a second pass, so
+                            the rest of the sweep merges now instead of
+                            queueing behind one unfinished test suite
+    mergeStateStatus=BEHIND asks GitHub to merge the base branch in, then
+                            parks it too, since the new head re-runs every check
+
+  --fix-wait is the budget for the second pass as a whole, not per PR: the
+  parked PRs are polled together and they are all running their suites at the
+  same time anyway.
 
   Never repaired:
-    A conflict GitHub declines to merge is left alone and its message printed.
-    Resolving one means choosing between two authors' intent. A check that ran
-    and failed is a result, not an obstacle.
+    mergeStateStatus=DIRTY is GitHub's settled verdict that the branch
+    conflicts with its base. update-branch cannot merge over a conflict, so it
+    is not attempted; the PR is reported once as FIXME and left alone.
+    Resolving a conflict means choosing between two authors' intent. A check
+    that ran and failed is a result, not an obstacle.
 `;
 
 async function main(argv: string[]): Promise<number> {
