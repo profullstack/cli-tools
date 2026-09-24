@@ -9,6 +9,9 @@ kind of password it wants and checking both logins before storing anything.
 `/mail:inbox` lists, searches and reads over IMAP, and marks, files or deletes.
 `/mail:send` replies in the original's thread or sends a new message, over the
 account's SMTP with Resend as the fallback, or files it as a draft.
+`/mail:clean` cleans a mailing list before a send with `email-cleaner`:
+bad syntax, dead domains, role, disposable, duplicate and placeholder
+addresses out, in the same format the list came in.
 
 ## Install
 
