@@ -1201,7 +1201,7 @@ icon build --out ./openicon           # openicon.json, svg/, png/, sprite.svg, i
 icon list --category communication
 icon show email                       # names, glyphs and the SVG for one icon
 icon search money
-icon glyph mail                       # 󰇮, ✉ or @, whichever this terminal can draw
+icon glyph mail                       # 󰇰, ✉ or @, whichever this terminal can draw
 ```
 
 **370 icons**: 259 drawn here on a 24x24 grid (2px strokes, round caps,
@@ -1218,7 +1218,7 @@ says `brand: true` and carries a trademark note.
 **Terminal glyphs** are the part other sets do not have. Each icon has a Nerd
 Font codepoint (resolved by name from Nerd Fonts 3.4.0's `glyphnames.json`,
 357 of 370 have one), a Unicode symbol and a 1-4 character ASCII spelling, so
-a TUI draws `mail` as 󰇮 in a patched font, ✉ in a plain one and `@` over a
+a TUI draws `mail` as 󰇰 in a patched font, ✉ in a plain one and `@` over a
 serial line. `icon glyph` picks from `$OPENICON_GLYPHS`
 (`nerd`|`unicode`|`ascii`), then `NERD_FONT=1`, then the locale. A Nerd Font
 cannot be detected from inside a terminal, so it has to be said.
