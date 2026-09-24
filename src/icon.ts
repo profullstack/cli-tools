@@ -91,12 +91,18 @@ export interface IconEntry {
   styles?: Record<string, StyleFiles>;
 }
 
-/** Where one icon's files live in one style. `{size}` is the caller's to fill. */
+/**
+ * Where one icon's files live in one style. `{size}` is the caller's to fill.
+ *
+ * `made_by` is rule 8's vocabulary: `ai` for a drawn icon, `human` for a mark
+ * taken from its owner unchanged, and `both` for a mark re-rendered in a
+ * style's material — the geometry is the owner's, the surface is ours.
+ */
 export interface StyleFiles {
   png: string;
   webp: string;
   svg?: string;
-  made_by: 'ai' | 'human';
+  made_by: 'ai' | 'human' | 'both';
   hex?: string;
   hex_source?: string;
 }

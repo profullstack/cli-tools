@@ -96,9 +96,76 @@ describe('drawHq', () => {
     expect(report.calls).toBe(3);
   });
 
-  it('refuses to draw a brand', async () => {
+  it('refuses to draw a brand for a style that only recolours marks', async () => {
     const { out, styleDir } = await setup();
-    await expect(drawHq({ ...base(out, styleDir, async () => ({ png: PNG, tokens: 1 })), keys: ['github'] })).rejects.toThrow(/not a drawn icon/);
+    await expect(drawHq({ ...base(out, styleDir, async () => ({ png: PNG, tokens: 1 })), keys: ['github'] })).rejects.toThrow(
+      /github is a brand and hq does not restyle marks/,
+    );
+  });
+
+  it('refuses a key that is in no part of the set', async () => {
+    const { out, styleDir } = await setup();
+    await expect(drawHq({ ...base(out, styleDir, async () => ({ png: PNG, tokens: 1 })), keys: ['nope'] })).rejects.toThrow(
+      /not an icon in the set/,
+    );
+  });
+
+  it('draws a brand for an agentic style, pinned to the owner mark and with no emoji reference', async () => {
+    const { out, styleDir } = await setup();
+    await mkdir(join(out, 'svg'), { recursive: true });
+    await writeFile(join(out, 'svg', 'github.svg'), '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M1 1h2v2z"/></svg>');
+    const seen: ImageRequest[] = [];
+    const report = await drawHq({
+      ...base(out, styleDir, async (r) => { seen.push(r); return { png: PNG, tokens: 1 }; }),
+      style: resolveStyle('agentic-emissive'),
+      keys: ['github'],
+      brandColors: new Map([['github', { hex: '#181717', source: 'simple-icons:github' }]]),
+    });
+    expect(report.drawn).toEqual(['github']);
+    // The mark is the only reference: an emoji master beside it invites a redraw.
+    expect(seen[0]!.references).toHaveLength(1);
+    expect(seen[0]!.prompt).toContain('Reproduce its exact geometry');
+    expect(seen[0]!.prompt).toContain('GitHub');
+    // #181717 emits nothing and has no hue to raise, so emissive is told to
+    // light it neutrally rather than left to invent a colour GitHub does not own.
+    expect(seen[0]!.prompt).toContain('neutral white light');
+    expect(seen[0]!.prompt).not.toContain('#181717');
+    // The guard that protects drawn icons from looking like logos must not
+    // survive into a prompt whose whole subject is a logo.
+    expect(seen[0]!.prompt).not.toContain('never resemble a logo');
+  });
+
+  it('names the hex in the material for a mark bright enough to carry it', async () => {
+    const { out, styleDir } = await setup();
+    await mkdir(join(out, 'svg'), { recursive: true });
+    await writeFile(join(out, 'svg', 'gitlab.svg'), '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M1 1h2v2z"/></svg>');
+    const seen: ImageRequest[] = [];
+    for (const id of ['agentic-matte', 'agentic-machined', 'agentic-emissive']) {
+      await drawHq({
+        ...base(out, styleDir, async (r) => { seen.push(r); return { png: PNG, tokens: 1 }; }),
+        style: resolveStyle(id),
+        keys: ['gitlab'],
+        force: true,
+        brandColors: new Map([['gitlab', { hex: '#FC6D26', source: 'simple-icons:gitlab' }]]),
+      });
+    }
+    // The hex has to sit inside the material paragraph, not in a sentence
+    // beside it: six pilot marks came back graphite when it did not.
+    for (const request of seen) expect(request.prompt).toContain('#FC6D26');
+    // Every style has to say the mark is filled: emissive drew neon outlines
+    // of hollow shapes until it did.
+    for (const request of seen) expect(request.prompt).toContain('SOLID');
+  });
+
+  it('fails a brand cleanly when its mark is not on disk yet', async () => {
+    const { out, styleDir } = await setup();
+    const report = await drawHq({
+      ...base(out, styleDir, async () => ({ png: PNG, tokens: 1 })),
+      style: resolveStyle('agentic-matte'),
+      keys: ['github'],
+    });
+    expect(report.drawn).toEqual([]);
+    expect(report.failed[0]!.error).toMatch(/no mark at/);
   });
 
   it('guardCredits leaves other errors alone', async () => {
@@ -127,6 +194,28 @@ describe('buildHq', () => {
     expect(existsSync(join(out, 'hq', 'webp', '64', 'mail.webp'))).toBe(true);
   });
 
+  it('a drawn brand master wins over the flat recolour, and carries no svg', async () => {
+    const { out } = await setup();
+    await mkdir(join(out, 'svg'), { recursive: true });
+    await writeFile(join(out, 'svg', 'github.svg'), '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h24v24H0z"/></svg>');
+    await writeFile(join(out, 'svg', 'slack.svg'), '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 0h24v24H0z"/></svg>');
+    const style = resolveStyle('agentic-emissive');
+    await mkdir(join(out, style.dir, 'master'), { recursive: true });
+    await writeFile(join(out, style.dir, 'master', 'github.png'), await sharpSquare());
+
+    const entries = await buildHq({
+      out, sizes: [16, 32], style, log: () => {}, render: () => PNG, simpleIconsHex: new Map([['github', '#181717']]),
+    });
+    // github was drawn into the material: raster only, and `both` because the
+    // geometry is the owner's while the surface is ours. No `svg`, or a reader
+    // would show the flat mark and never the style.
+    expect(entries.get('github')).toMatchObject({ made_by: 'both', hex: '#181717', hex_source: 'simple-icons:github' });
+    expect(entries.get('github')).not.toHaveProperty('svg');
+    expect(existsSync(join(out, style.dir, 'webp', '64', 'github.webp'))).toBe(true);
+    // slack had no master, so it keeps the old behaviour for this style.
+    expect(entries.get('slack')).toMatchObject({ made_by: 'human', svg: `${style.dir}/svg/slack.svg` });
+  });
+
   it('every Font Awesome brand has a documented colour', () => {
     for (const b of BRANDS.filter((b) => b.source === 'font-awesome')) {
       expect(FA_BRAND_COLORS[b.key]?.hex, b.key).toMatch(/^#[0-9A-F]{6}$/);
@@ -148,6 +237,22 @@ describe('withHq', () => {
     expect(next.hq).toMatchObject({ sizes: [16], webp_sizes: [64, 128], coverage: { total: 2, done: 1 } });
     expect(next.icons[0]).toMatchObject({ svg: 'svg/mail.svg', hq: { made_by: 'ai' } });
     expect(next.icons[1]!.hq).toBeUndefined();
+  });
+});
+
+describe('emission', () => {
+  it('splits marks into emitting their colour, a tint of it, or neutral white', async () => {
+    const { emissionFor } = await import('../src/icon-styles.ts');
+    // Bright enough to give off its own colour.
+    expect(emissionFor('#FC6D26')).toEqual({ kind: 'own', hex: '#FC6D26' });
+    expect(emissionFor('#CB3837')).toEqual({ kind: 'own', hex: '#CB3837' });
+    // Dark but still coloured: raise the hue rather than throw it away.
+    expect(emissionFor('#4A154B')).toEqual({ kind: 'tint', hex: '#4A154B' });
+    expect(emissionFor('#002991')).toEqual({ kind: 'tint', hex: '#002991' });
+    // Dark and grey: there is no hue to raise, so white is the honest answer.
+    expect(emissionFor('#181717')).toEqual({ kind: 'neutral' });
+    expect(emissionFor('#000000')).toEqual({ kind: 'neutral' });
+    expect(emissionFor(undefined)).toEqual({ kind: 'neutral' });
   });
 });
 
