@@ -165,7 +165,7 @@ stripe_platform() {
 	printf '%s_%s\n' "$os" "$arch"
 }
 
-stripe_sha256() {
+sha256_of() {
 	if command -v sha256sum >/dev/null 2>&1; then
 		sha256sum "$1" | cut -d' ' -f1
 	elif command -v shasum >/dev/null 2>&1; then
@@ -232,7 +232,7 @@ install_stripe() {
 	# which is the failure this actually sees.
 	if curl -fsSL "$base/$sums" -o "$tmp/sums.txt" 2>/dev/null; then
 		want="$(grep " $tarball\$" "$tmp/sums.txt" 2>/dev/null | cut -d' ' -f1)"
-		got="$(stripe_sha256 "$tmp/$tarball" 2>/dev/null || true)"
+		got="$(sha256_of "$tmp/$tarball" 2>/dev/null || true)"
 		if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
 			say "  skipped: checksum mismatch on $tarball."
 			rm -rf "$tmp"
@@ -260,6 +260,148 @@ install_stripe() {
 
 say "Installing the Stripe CLI"
 install_stripe
+
+# ── tea (Forgejo/Gitea CLI) ──────────────────────────────────────────────────
+#
+# git.profullstack.com runs Forgejo, which serves a Gitea-compatible /api/v1.
+# `gh` cannot talk to it — it only speaks GitHub.com and GitHub Enterprise — so
+# every issue, PR and release on our own forge is otherwise a browser tab. tea
+# is the CLI that does speak that API, and it belongs on the same footing as
+# the Stripe CLI: the box that has the commands should have the tool they talk
+# to the forge with.
+#
+# Vendored under $HOME_DIR/vendor/tea and linked into $PREFIX, so the name
+# exists once. A tea already on PATH from somewhere else is left alone.
+#
+# Unlike the Stripe CLI this is a bare binary rather than a tarball, so there is
+# no tar dependency — download, check the sha256, chmod, move.
+#
+# Authenticate once, per forge:
+#   tea login add --name agentgit --url https://git.profullstack.com --token <token>
+# The token comes from /user/settings/applications on the forge. It is a
+# credential: it belongs in tea's own config under $XDG_CONFIG_HOME/tea, and in
+# the vault -- not in a shell rc and not in this repository.
+
+# Last release verified against this installer. Used when the version cannot be
+# resolved from the API, which is mostly rate limiting on a shared IP.
+TEA_FALLBACK_VERSION="0.16.0"
+
+tea_platform() {
+	# Asset names look like tea-0.16.0-linux-amd64 — no tarball, no libc
+	# variants, and arm64 is arm64 on both platforms.
+	os="$(uname -s)"
+	arch="$(uname -m)"
+	case "$os" in
+		Linux) os="linux" ;;
+		Darwin) os="darwin" ;;
+		FreeBSD) os="freebsd" ;;
+		*) return 1 ;;
+	esac
+	case "$arch" in
+		x86_64 | amd64) arch="amd64" ;;
+		aarch64 | arm64) arch="arm64" ;;
+		*) return 1 ;;
+	esac
+	# There is no freebsd-arm64 build; saying so here beats a 404 later.
+	if [ "$os" = "freebsd" ] && [ "$arch" != "amd64" ]; then
+		return 1
+	fi
+	printf '%s-%s\n' "$os" "$arch"
+}
+
+tea_version_of() {
+	# `tea --version` prints "Version: <ESC>[1m0.16.0<ESC>[0m\tgolang: …" — the
+	# number arrives wrapped in ANSI bold even when stdout is not a terminal,
+	# so the escapes come off before anything tries to read a version out.
+	"$1" --version 2>/dev/null | tr -d '\033' | sed 's/\[[0-9;]*m//g' \
+		| sed -n 's/^Version: *\([0-9][0-9.]*\).*/\1/p' | head -1
+}
+
+install_tea() {
+	[ "${CLI_TOOLS_SKIP_TEA:-0}" = "1" ] && return 0
+
+	vendor="$HOME_DIR/vendor/tea"
+
+	# Someone else's tea on PATH wins, for the same reason the Stripe CLI
+	# defers: ours would only shadow it depending on the order of two
+	# directories, which is not a thing to leave to chance.
+	existing="$(command -v tea 2>/dev/null || true)"
+	if [ -n "$existing" ] && [ "$existing" != "$PREFIX/tea" ]; then
+		say "  tea already on PATH at $existing — left alone."
+		return 0
+	fi
+
+	command -v curl >/dev/null 2>&1 || { say "  skipped: curl is required."; return 0; }
+
+	platform="$(tea_platform)" || {
+		say "  skipped: no tea build for $(uname -s)/$(uname -m)."
+		return 0
+	}
+
+	version="${TEA_CLI_VERSION:-}"
+	if [ -z "$version" ]; then
+		# tea is released on gitea.com, not GitHub, so this is the Gitea API
+		# rather than the GitHub one. Plain sed for the same reason as above:
+		# jq is not a dependency anywhere else in this installer.
+		version="$(curl -fsSL https://gitea.com/api/v1/repos/gitea/tea/releases/latest 2>/dev/null \
+			| sed -n 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/p' | head -1)"
+		[ -n "$version" ] || version="$TEA_FALLBACK_VERSION"
+	fi
+	version="${version#v}"
+
+	# Already at the wanted version? Then there is nothing to download.
+	if [ -x "$vendor/tea" ] && [ "$(tea_version_of "$vendor/tea")" = "$version" ]; then
+		say "  tea $version already installed."
+		return 0
+	fi
+
+	asset="tea-${version}-${platform}"
+	base="https://gitea.com/gitea/tea/releases/download/v${version}"
+
+	tmp="$(mktemp -d)" || { say "  skipped: could not create a temp dir."; return 0; }
+
+	if ! curl -fsSL "$base/$asset" -o "$tmp/tea"; then
+		say "  skipped: could not download $asset."
+		rm -rf "$tmp"
+		return 0
+	fi
+
+	# Same caveat as the Stripe CLI: the checksum comes from the same host as
+	# the binary, so this is not a supply-chain guarantee — it catches a
+	# truncated or corrupted download, which is the failure this actually sees.
+	if curl -fsSL "$base/checksums.txt" -o "$tmp/sums.txt" 2>/dev/null; then
+		want="$(grep " $asset\$" "$tmp/sums.txt" 2>/dev/null | cut -d' ' -f1)"
+		got="$(sha256_of "$tmp/tea" 2>/dev/null || true)"
+		if [ -n "$want" ] && [ -n "$got" ] && [ "$want" != "$got" ]; then
+			say "  skipped: checksum mismatch on $asset."
+			rm -rf "$tmp"
+			return 0
+		fi
+	fi
+
+	# A downloaded binary that will not run is worse than no binary: it shadows
+	# nothing but fails at the point of use, long after this installer has said
+	# it succeeded. One exec now is cheap.
+	chmod +x "$tmp/tea"
+	if [ -z "$(tea_version_of "$tmp/tea")" ]; then
+		say "  skipped: the downloaded $asset does not run here."
+		rm -rf "$tmp"
+		return 0
+	fi
+
+	mkdir -p "$vendor"
+	# mv onto the old binary rather than writing in place: a running tea keeps
+	# its inode, and the replacement is atomic.
+	mv "$tmp/tea" "$vendor/tea"
+	rm -rf "$tmp"
+
+	mkdir -p "$PREFIX"
+	ln -sf "$vendor/tea" "$PREFIX/tea"
+	say "  tea $version -> $PREFIX/tea"
+}
+
+say "Installing tea (the Forgejo/Gitea CLI)"
+install_tea
 
 # ── Profullstack skill ──────────────────────────────────────────────────
 #
@@ -311,4 +453,5 @@ say "Installed. Try:"
 say "  cli-tools list             # what landed, and what is on PATH"
 say "  cli-tools aliases --install  # the moshcode pit aliases"
 say "  stripe login               # authenticate the Stripe CLI"
+say "  tea login add --name agentgit --url https://git.profullstack.com  # the forge"
 say "  /profullstack              # the agent skill, inside Claude Code"
