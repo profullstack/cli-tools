@@ -47,6 +47,7 @@ const SUMMARIES: Record<string, string> = {
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',
+  jobhunt: 'Find remote roles worth applying to, and apply through a browser, never twice',
   mail: 'The inbox from the terminal: read, search, reply, send, file, delete',
   openmcp: 'The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own',
   'gh-prs': 'Every open PR across the owners you name',

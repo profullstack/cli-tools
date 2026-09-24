@@ -1,0 +1,20 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "jobs",
+  "description": "Find remote roles worth applying to from public ATS job boards (Ashby, Greenhouse, Lever, Workable), filtered by workplace, country, title, pay and score, then apply through TronBrowser with one or more applicant profiles: fill-only dry runs, resumable background runs, Greenhouse security codes read from the inbox, a never-twice list and an audit history. Never ticks a consent or arbitration box.",
+  "version": "0.1.0",
+  "author": {
+    "name": "profullstack",
+    "url": "https://profullstack.com"
+  },
+  "homepage": "https://github.com/profullstack/cli-tools#jobhunt",
+  "license": "MIT",
+  "keywords": [
+    "jobs",
+    "job-search",
+    "ashby",
+    "greenhouse",
+    "lever",
+    "browser-automation"
+  ]
+}
