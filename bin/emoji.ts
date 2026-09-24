@@ -77,7 +77,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['--json', '--force', '--dry-run', '--refresh', '--components', '--no-svg', '--no-font', '--help'],
-      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes', '--webp', '--platform', '--repo-raw'],
+      string: ['-o', '--out', '--only', '--group', '--limit', '--model', '--quality', '--concurrency', '--style', '--sizes', '--webp', '--platform', '--download-base'],
     });
     const verb = positional[0];
     if (flags.has('--help') || !verb) {
@@ -190,7 +190,8 @@ if (isMain(import.meta.url)) {
                 (p) => wanted.includes(p.id) || PLATFORMS.some((q) => wanted.includes(q.id) && q.packsFrom === p.id),
               )
             : PLATFORMS,
-          repoRaw: values.get('--repo-raw') ?? 'https://raw.githubusercontent.com/profullstack/openemoji/main',
+          downloadBase:
+            values.get('--download-base') ?? 'https://github.com/profullstack/openemoji/releases/latest/download',
           log,
         });
         const packs = index.platforms.reduce((n, p) => n + p.packs.length, 0);

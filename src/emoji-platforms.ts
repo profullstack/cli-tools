@@ -658,7 +658,8 @@ export interface ExportedPack extends Pack {
 
 export interface PlatformIndex {
   generated: string;
-  repo_raw: string;
+  /** Where the archives download from: `${download_base}/${pack.file}`. */
+  download_base: string;
   platforms: Array<
     Omit<Platform, 'subsets' | 'maxBytes'> & {
       max_bytes: number;
@@ -675,7 +676,11 @@ export interface ExportOptions {
   out: string;
   manifest: Manifest;
   platforms: Platform[];
-  repoRaw: string;
+  /**
+   * Release-asset URL prefix. Archives are release assets, not committed
+   * files: each rebuild would otherwise add every bundle to git history.
+   */
+  downloadBase: string;
   log: (line: string) => void;
 }
 
@@ -686,7 +691,8 @@ async function encode(sharp: Sharp, source: Buffer, platform: Platform): Promise
     const data =
       platform.format === 'webp'
         ? await resized.clone().webp({ quality, alphaQuality: 90, effort: 5 }).toBuffer()
-        : await resized.clone().png({ compressionLevel: 9, palette: quality < 92, quality }).toBuffer();
+        : // Palette PNG: a quarter of the size of full colour at these sizes, no visible loss.
+          await resized.clone().png({ compressionLevel: 9, palette: true, quality }).toBuffer();
     if (data.length <= platform.maxBytes) return data;
   }
   throw new Error(`cannot fit under ${platform.maxBytes} bytes for ${platform.id}`);
@@ -698,7 +704,7 @@ export async function exportPlatforms(options: ExportOptions): Promise<PlatformI
   const byKey = new Map(manifest.emoji.map((e) => [e.key, e]));
   const root = join(out, 'platforms');
   await mkdir(root, { recursive: true });
-  const index: PlatformIndex = { generated: new Date().toISOString(), repo_raw: options.repoRaw, platforms: [] };
+  const index: PlatformIndex = { generated: new Date().toISOString(), download_base: options.downloadBase, platforms: [] };
 
   // Sources: the 512 PNG, read once per glyph and shared by every network.
   const cache = new Map<string, Buffer>();
@@ -747,14 +753,14 @@ export async function exportPlatforms(options: ExportOptions): Promise<PlatformI
         const packName = `openemoji-${platform.id}-${pack.id}`;
         const archiveFile = await writeArchive(platform, packName, pack, files, emojiLines, dir, manifest);
         const bytes = (await stat(join(dir, archiveFile))).size;
-        packs.push({ ...pack, file: `platforms/${platform.id}/${archiveFile}`, bytes });
+        packs.push({ ...pack, file: archiveFile, bytes });
         options.log(`${platform.id}: ${archiveFile} (${pack.keys.length}, ${(bytes / 1048576).toFixed(1)} MB)`);
       }
     }
 
     const { subsets: _subsets, maxBytes, ...rest } = platform;
     index.platforms.push({ ...rest, max_bytes: maxBytes, packs, renamed });
-    await writeFile(join(dir, 'README.md'), readmeFor(platform, packs));
+    await writeFile(join(dir, 'README.md'), readmeFor(platform, packs, options.downloadBase));
   }
 
   for (const platform of borrowers) {
@@ -858,7 +864,7 @@ async function writeArchive(
   return file;
 }
 
-function readmeFor(platform: Platform, packs: ExportedPack[]): string {
+function readmeFor(platform: Platform, packs: ExportedPack[], downloadBase: string): string {
   return `# OpenEmoji for ${platform.name}
 
 ${platform.kind === 'stickers' ? `${platform.name} has no custom emoji, so the set ships as sticker packs.\n\n` : platform.kind === 'media' ? `${platform.name}: no custom emoji and no sticker uploads, so the set ships as images to post.\n\n` : ''}${platform.limits}
@@ -871,7 +877,7 @@ ${platform.steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
 
 | Pack | Emoji | Size |
 |---|---|---|
-${packs.map((p) => `| [${p.title}](${p.file.replace(`platforms/${platform.id}/`, '')}) | ${p.keys.length} | ${(p.bytes / 1048576).toFixed(1)} MB |`).join('\n')}
+${packs.map((p) => `| [${p.title}](${downloadBase}/${p.file}) | ${p.keys.length} | ${(p.bytes / 1048576).toFixed(1)} MB |`).join('\n')}
 
 Every pack includes emoji.txt: each file, its emoji and its name.
 ${platform.docs.length ? `\nOfficial documentation: ${platform.docs.join(', ')}\n` : ''}
