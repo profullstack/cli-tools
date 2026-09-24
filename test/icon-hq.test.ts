@@ -34,8 +34,19 @@ describe('hq prompt', () => {
     const prompt = hqPromptFor(mail);
     expect(prompt).toContain('keep its exact silhouette');
     expect(prompt).toContain('"mail"');
-    expect(prompt).toContain('never mostly red and orange');
+    expect(prompt).toContain('Colour: sky blue');
     expect(prompt).toContain('never resemble a logo');
+  });
+});
+
+describe('hq colour', () => {
+  it('meaning overrides the category, and every category has a colour', async () => {
+    const { hqColorFor, CATEGORY_COLORS } = await import('../src/icon-hq.ts');
+    const by = (k: string) => GENERIC.find((i) => i.key === k)!;
+    expect(hqColorFor(by('delete'))).toContain('coral red');
+    expect(hqColorFor(by('add'))).toContain('green');
+    expect(hqColorFor(by('copy'))).toBe(CATEGORY_COLORS.action);
+    for (const i of GENERIC) expect(CATEGORY_COLORS[i.category], i.category).toBeTruthy();
   });
 });
 
