@@ -82,14 +82,23 @@ export interface IconEntry {
   png: string;
   tui: Glyphs;
   /** The HQ style, when the set has one: see icon-hq.ts. */
-  hq?: {
-    png: string;
-    webp: string;
-    svg?: string;
-    made_by: 'ai' | 'human';
-    hex?: string;
-    hex_source?: string;
-  };
+  hq?: StyleFiles;
+  /**
+   * Every drawn style this icon has, keyed by style id (`hq`, `agentic-matte`,
+   * …). `hq` above is the same entry under its old name, kept so readers
+   * written against the first HQ release keep working.
+   */
+  styles?: Record<string, StyleFiles>;
+}
+
+/** Where one icon's files live in one style. `{size}` is the caller's to fill. */
+export interface StyleFiles {
+  png: string;
+  webp: string;
+  svg?: string;
+  made_by: 'ai' | 'human';
+  hex?: string;
+  hex_source?: string;
 }
 
 export interface Manifest {
@@ -110,16 +119,27 @@ export interface Manifest {
   categories: Record<string, string>;
   /** Present when the set ships more than the simple style. */
   styles?: string[];
-  hq?: {
-    sizes: number[];
-    webp_sizes: number[];
-    made_by: 'ai' | 'human' | 'both';
-    ai_model: string;
-    ai_provider: string;
-    ai_prompt_url: string;
-    coverage: { total: number; done: number };
-  };
+  /** One block per drawn style in `styles`, keyed by style id. */
+  style_info?: Record<string, StyleInfo>;
+  /** The first HQ release's block, kept under its old name beside style_info.hq. */
+  hq?: StyleInfo;
   icons: IconEntry[];
+}
+
+/** What a reader needs to know about one drawn style before using it. */
+export interface StyleInfo {
+  /** Where the style's files sit in the set; absent on the first HQ block. */
+  dir?: string;
+  label?: string;
+  /** One line on the material, so a reader can choose without looking. */
+  material?: string;
+  sizes: number[];
+  webp_sizes: number[];
+  made_by: 'ai' | 'human' | 'both';
+  ai_model: string;
+  ai_provider: string;
+  ai_prompt_url: string;
+  coverage: { total: number; done: number };
 }
 
 // ------------------------------------------------------------------ names
@@ -340,7 +360,21 @@ async function resvgRenderer(): Promise<(svg: string, size: number) => Buffer> {
   return (svg, size) => Buffer.from(new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng());
 }
 
+/** An icon's colour styles, with `hq` under both its names counted once. */
+export function stylesOf(icon: IconEntry): Record<string, StyleFiles> {
+  return { ...(icon.hq ? { hq: icon.hq } : {}), ...icon.styles };
+}
+
 export function previewFor(manifest: Manifest, svgs: Map<string, string>): string {
+  // The colour styles the set has actually derived files for, in its own order.
+  const colour = (manifest.styles ?? []).filter((id) => id !== 'simple' && manifest.icons.some((i) => stylesOf(i)[id]));
+  const artFor = (icon: IconEntry, id: string): string => {
+    const files = stylesOf(icon)[id];
+    if (!files) return '';
+    const src = files.svg ?? files.webp?.replace('{size}', '64') ?? files.png?.replace('{size}', '64') ?? '';
+    return src ? `<img class="art" data-style="${escapeXml(id)}" src="${escapeXml(src)}" alt="" width="28" height="28" loading="lazy" decoding="async">` : '';
+  };
+
   const byCategory = new Map<string, IconEntry[]>();
   for (const icon of manifest.icons) byCategory.set(icon.category, [...(byCategory.get(icon.category) ?? []), icon]);
   const sections = [...byCategory]
@@ -349,26 +383,55 @@ export function previewFor(manifest: Manifest, svgs: Map<string, string>): strin
 <div class="grid">${icons
         .map(
           (i) =>
-            `<figure title="${escapeXml(i.key)}">${svgs.get(i.key)!.replace('<svg ', '<svg width="28" height="28" ')}<figcaption>${escapeXml(i.key)}<span>${escapeXml(i.tui.unicode)} ${escapeXml(i.tui.ascii)}</span></figcaption></figure>`,
+            `<figure title="${escapeXml(i.key)}">${svgs.get(i.key)!.replace('<svg ', '<svg class="art" data-style="simple" width="28" height="28" ')}${colour.map((id) => artFor(i, id)).join('')}<figcaption>${escapeXml(i.key)}<span>${escapeXml(i.tui.unicode)} ${escapeXml(i.tui.ascii)}</span></figcaption></figure>`,
         )
         .join('')}</div>`,
     )
     .join('\n');
+
+  // One button per style, and a hidden image per style that the CSS reveals:
+  // no script, and a browser never fetches the artwork of a style nobody picks.
+  const all = ['simple', ...colour];
+  const styleBar = colour.length
+    ? `${all
+        .map((id) => `<input type="radio" name="style" id="style-${escapeXml(id)}"${id === 'simple' ? ' checked' : ''}>`)
+        .join('')}
+<div class="styles">${all
+        .map((id) => {
+          const info = manifest.style_info?.[id];
+          const label = id === 'simple' ? 'Simple' : (info?.label ?? id);
+          const title = id === 'simple' ? 'The line icon, in the text colour' : (info?.material ?? '');
+          return `<label for="style-${escapeXml(id)}" title="${escapeXml(title)}">${escapeXml(label)}</label>`;
+        })
+        .join('')}</div>`
+    : '';
+  const styleCss = colour.length
+    ? `input[name=style]{position:absolute;opacity:0;pointer-events:none}
+.styles{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 20px}
+.styles label{padding:6px 11px;border:1px solid var(--line);border-radius:999px;font-size:12px;color:var(--muted);cursor:pointer}
+.art{display:none}
+${all.map((id) => `#style-${id}:checked~.styles label[for="style-${id}"]`).join(',')}{background:var(--ink);border-color:var(--ink);color:var(--bg)}
+${all.map((id) => `#style-${id}:checked~.sheet .art[data-style="${id}"]`).join(',')}{display:block;margin:0 auto}`
+    : '.art{display:block;margin:0 auto}';
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OpenIcon preview</title>
 <style>
-:root{--bg:#f7f7f4;--ink:#16181a;--muted:#6a6f75;--card:#fff}
-@media (prefers-color-scheme:dark){:root{--bg:#121314;--ink:#ecebe7;--muted:#9a9ea3;--card:#1b1c1e}}
+:root{--bg:#f7f7f4;--ink:#16181a;--muted:#6a6f75;--card:#fff;--line:#dcdcd7}
+@media (prefers-color-scheme:dark){:root{--bg:#121314;--ink:#ecebe7;--muted:#9a9ea3;--card:#1b1c1e;--line:#2e3033}}
 body{margin:0;padding:24px 16px;background:var(--bg);color:var(--ink);font:14px/1.4 system-ui,sans-serif}
 h1{margin:0 0 4px;font-size:26px}p{color:var(--muted);margin:0 0 20px}h2{font-size:16px;margin:28px 0 10px}small{color:var(--muted);font-weight:400}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:6px}
 figure{margin:0;padding:12px 4px 8px;background:var(--card);border-radius:10px;text-align:center;color:var(--ink)}
 figcaption{font-size:11px;color:var(--muted);margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}figcaption span{display:block;font-family:ui-monospace,monospace}
+${styleCss}
 </style></head><body>
 <h1>OpenIcon</h1>
 <p>${manifest.icons.length} icons on a 24px grid, each with a Nerd Font, Unicode and ASCII glyph for terminals. OpenIcon ${manifest.openicon}.</p>
+${styleBar}
+<div class="sheet">
 ${sections}
+</div>
 </body></html>
 `;
 }

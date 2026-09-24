@@ -1,22 +1,23 @@
 /**
- * The HQ style of OpenIcon: every icon in full colour, as an alternative to
- * the simple line set (which stays canonical and the default).
+ * The drawn styles of OpenIcon: every icon in full colour, as an alternative
+ * to the simple line set (which stays canonical and the default). This file is
+ * the engine; icon-styles.ts is what each style actually looks like.
  *
- * UI icons are drawn by an image model at the OpenEmoji bar, and each draw is
- * pinned two ways, which is what keeps 259 drawings coherent:
+ * Every draw is pinned by the icon's own simple line glyph, rendered at 1024
+ * as the FIRST reference, with the prompt saying to keep its silhouette and
+ * meaning — that is what keeps 259 drawings coherent and keeps `filter` a
+ * funnel rather than whatever the model thinks filters are. The HQ style adds
+ * three OpenEmoji masters as style references so it reads as one family with
+ * the emoji; the agentic styles deliberately use none, because those masters
+ * are where the gloss comes from.
  *
- *   - the icon's own simple line glyph, rendered at 1024, is the FIRST
- *     reference, and the prompt says to keep its silhouette and meaning, so
- *     `filter` stays a funnel and not whatever the model thinks filters are;
- *   - three OpenEmoji masters follow as style references, so the icons read
- *     as the same family as the emoji.
+ * Brands are never drawn in any style: their coloured form is the same logo in
+ * the owner's published colour (Simple Icons' `hex`, or a cited brand page for
+ * the few that came from Font Awesome).
  *
- * Brands are never drawn: their HQ form is the same logo in the owner's
- * published colour (Simple Icons' `hex`, or a cited brand page for the few
- * that came from Font Awesome).
- *
- * Masters live in hq/master (1024px, kept out of git); everything else is
- * derived: hq/png/<size>, hq/webp/<size>, and hq/svg for brands.
+ * Masters live in <style-dir>/master (1024px, kept out of git); everything
+ * else is derived: <style-dir>/png/<size>, <style-dir>/webp/<size>, and
+ * <style-dir>/svg for brands.
  */
 
 import { existsSync } from 'node:fs';
@@ -26,88 +27,20 @@ import { join } from 'node:path';
 import { type ImageCaller, RefusedError, pool } from './emoji.ts';
 import { BRANDS, SIMPLE_ICONS_VERSION } from './icon-brands.ts';
 import { GENERIC, type IconDef } from './icon-set.ts';
-import { type Manifest, cached, humanName, strokeSvg } from './icon.ts';
+import { type Manifest, type StyleFiles, type StyleInfo, cached, strokeSvg } from './icon.ts';
+import { HQ, HQ_STYLE, STYLE_REFS, type StyleSpec } from './icon-styles.ts';
 
 export const HQ_MODEL = 'gpt-image-2';
 export const HQ_WEBP_SIZES = [64, 128] as const;
 export const HQ_CONCURRENCY = 12;
-/**
- * OpenEmoji masters the icons take their look from: laptop, gem, light bulb.
- * Chosen for range: fire and rocket as references tinted every icon orange.
- */
-export const STYLE_REFS = ['1f4bb.png', '1f48e.png', '1f4a1.png'] as const;
 /** Drawn first, to judge the prompt on a contact sheet before the rest. */
 export const HQ_ANCHORS = ['mail', 'settings', 'search', 'delete', 'lock', 'calendar', 'cart', 'terminal', 'bell', 'folder'] as const;
 
-export const HQ_STYLE = `Design one icon for a premium, original colour icon set that sits beside a glossy 3D emoji set as one family.
-The FIRST reference image is this icon's line drawing: keep its exact silhouette, parts and meaning, and turn it into a solid, full-colour object. Where the line drawing outlines a shape (a triangle, a funnel, a square, a pin, a basket), fill that shape: a solid glass or enamel body, never a hollow tube tracing the outline. Only pure strokes (arrows, bars, plus and minus signs, chevrons) stay as rounded solid bars. Do not add or remove parts, do not change what it depicts, do not add text.
-The OTHER reference images are the style to match exactly: soft-volume 3D with vector clarity, smooth rich gradients that model the form, one warm key light from the upper left with a crisp specular highlight, gentle ambient occlusion, a subtle darker rim on the lower-right edge, saturated harmonious colour. Do not copy their subjects.
-Use the colour named below as the dominant colour, with small natural accents (white paper, steel, glass, gold) only where the object has them. Ignore the reference images' colours.
-Composition: the single object, centred, filling about 84% of the square, front or slight three-quarter view, nothing cropped. Fully transparent background, no ground shadow, no badge, no frame, no backdrop.
-It must stay instantly readable at 20 pixels. Every design is original: never resemble a logo, mascot or product from any brand, film or game.`;
+export { HQ_STYLE, STYLE_REFS };
+export { CATEGORY_COLORS, hqColorFor } from './icon-palette.ts';
 
-/**
- * Colour is decided here, not by the model: left to itself it drifts to one
- * hue for the whole set (orange with warm references, blue with cool ones).
- * Each category has its own colour, so a page of icons reads as grouped, and
- * meaning overrides the category where colour carries meaning.
- */
-export const CATEGORY_COLORS: Record<string, string> = {
-  action: 'deep indigo-violet (#5B4BDB) glass',
-  navigation: 'teal (#0FA3A3) glass',
-  communication: 'sky blue (#1E88E5) glass',
-  media: 'magenta-pink (#E0337A) glass',
-  file: 'warm amber-yellow (#F5B422) with white paper',
-  status: 'cobalt blue (#2F6FEB) glass',
-  time: 'cyan (#12A8C9) glass with white faces',
-  commerce: 'emerald green (#1FA35C) glass',
-  dev: 'graphite slate (#39424E) with electric lime (#9BE22E) accents',
-  device: 'brushed silver aluminium with dark glass screens and a blue glow',
-  editor: 'violet-purple (#8E44D9) glass',
-  misc: "the object's own natural colours",
-};
-
-const OVERRIDES: Array<[string[], string]> = [
-  [['add', 'plus-circle', 'check', 'check-circle', 'checkbox', 'toggle-on', 'online', 'user-plus', 'user-check', 'shield-check', 'calendar-check', 'clipboard-check', 'download', 'cloud-download', 'folder-plus', 'file-plus', 'calendar-plus', 'battery-charging'], 'fresh green (#22B35A) glass'],
-  [['delete', 'close', 'x-circle', 'error', 'ban', 'minus-circle', 'user-minus', 'phone-off', 'mic-off', 'bell-off', 'volume-off', 'wifi-off', 'unlink', 'bug', 'power'], 'coral red (#E5484D) glass'],
-  [['warning', 'bell', 'alarm', 'star', 'key', 'lightbulb', 'zap', 'award', 'trophy', 'sun', 'megaphone', 'coins', 'dollar'], 'warm gold-amber (#F5A524) glass'],
-  [['heart'], 'glossy red (#E0245E)'],
-  [['lock', 'unlock', 'shield', 'fingerprint'], 'steel blue-grey (#5B6B82) metal with a gold keyhole or accent'],
-  [['sparkles', 'palette', 'brush', 'pen-tool', 'theme'], 'purple-to-magenta (#8E44D9 to #E0337A) glass'],
-  [['info', 'help'], 'cobalt blue (#2F6FEB) glass'],
-  [['moon'], 'midnight indigo (#3949AB) with a pale gold rim'],
-  [['leaf'], 'leaf green (#3BAA35)'],
-  [['droplet'], 'clear water blue (#2AA7F0)'],
-  [['coffee'], 'white ceramic with a coffee-brown (#6F4E37) interior'],
-  [['rocket'], 'white and silver with a teal window and a small orange flame'],
-  [['thermometer'], 'glass with a red (#E5484D) mercury bulb'],
-  [['umbrella', 'anchor', 'building', 'briefcase'], 'navy (#24407A) with brass accents'],
-  [['rss'], 'orange (#F57C00) glass'],
-];
-
-export function hqColorFor(icon: IconDef): string {
-  for (const [keys, color] of OVERRIDES) if (keys.includes(icon.key)) return color;
-  return CATEGORY_COLORS[icon.category] ?? CATEGORY_COLORS.misc!;
-}
-
-/** Keys whose names mislead a model: say what the control is. */
-const DESCRIBE: Record<string, string> = {
-  'radio-off': 'an empty, unselected radio button: a single ring with nothing inside (a form control, not a radio set)',
-  'radio-on': 'a selected radio button: a ring with a solid dot in the middle (a form control)',
-  'checkbox-empty': 'an empty, unchecked checkbox (a form control)',
-  checkbox: 'a checked checkbox (a form control)',
-  'toggle-on': 'a toggle switch in the on position (a form control)',
-  'toggle-off': 'a toggle switch in the off position (a form control)',
-  online: 'an online presence indicator: a solid dot inside a ring',
-};
-
-export function hqPromptFor(icon: IconDef): string {
-  if (DESCRIBE[icon.key]) {
-    return `${HQ_STYLE}\n\nThe icon: "${icon.key}", which is ${DESCRIBE[icon.key]}.\nColour: ${hqColorFor(icon)}.`;
-  }
-  const words = [humanName(icon.key).toLowerCase(), ...(icon.aliases ?? []), ...(icon.keywords ?? [])].slice(0, 6);
-  return `${HQ_STYLE}\n\nThe icon: "${icon.key}" (${words.join(', ')}), category ${icon.category}.\nColour: ${hqColorFor(icon)}.`;
-}
+/** The HQ style's prompt for one icon. Other styles: `STYLES[id].promptFor`. */
+export const hqPromptFor = (icon: IconDef): string => HQ.promptFor(icon);
 
 /**
  * Brand colours for the logos that came from Font Awesome, which carries no
@@ -149,6 +82,7 @@ export interface HqDrawOptions {
   out: string;
   keys: string[];
   caller: ImageCaller;
+  /** Where the OpenEmoji masters live; unread by a style with no emoji refs. */
   styleDir: string;
   concurrency: number;
   quality: string;
@@ -156,6 +90,8 @@ export interface HqDrawOptions {
   log: (line: string) => void;
   render: (svg: string, size: number) => Promise<Buffer> | Buffer;
   sleep?: (ms: number) => Promise<void>;
+  /** Which style to draw; the HQ style when a caller does not say. */
+  style?: StyleSpec;
 }
 
 export interface HqDrawReport {
@@ -166,11 +102,12 @@ export interface HqDrawReport {
   stoppedForCredit?: string;
 }
 
-/** Draw the missing HQ masters; stops cleanly, keeping what landed, if credit runs out. */
+/** Draw a style's missing masters; stops cleanly, keeping what landed, if credit runs out. */
 export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
-  const master = join(options.out, 'hq', 'master');
+  const style = options.style ?? HQ;
+  const master = join(options.out, style.dir, 'master');
   await mkdir(master, { recursive: true });
-  const styleRefs = await Promise.all(STYLE_REFS.map((f) => readFile(join(options.styleDir, f))));
+  const styleRefs = await Promise.all(style.emojiRefs.map((f) => readFile(join(options.styleDir, f))));
   const report: HqDrawReport = { drawn: [], skipped: [], failed: [], calls: 0 };
   const byKey = new Map(GENERIC.map((i) => [i.key, i]));
   const sleep = options.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
@@ -198,14 +135,14 @@ export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
         report.calls += 1;
         const result = await options.caller({
           model: HQ_MODEL,
-          prompt: hqPromptFor(icon),
+          prompt: style.promptFor(icon),
           quality: options.quality,
           references: [line, ...styleRefs],
         });
         await writeFile(join(master, `${key}.png`), result.png);
         await writeFile(
-          join(options.out, 'hq', 'prompts.jsonl'),
-          `${JSON.stringify({ key, prompt: hqPromptFor(icon), references: ['line', ...STYLE_REFS] })}\n`,
+          join(options.out, style.dir, 'prompts.jsonl'),
+          `${JSON.stringify({ key, style: style.id, prompt: style.promptFor(icon), references: ['line', ...style.emojiRefs] })}\n`,
           { flag: 'a' },
         );
         report.drawn.push(key);
@@ -244,20 +181,31 @@ export interface HqBuildOptions {
   render: (svg: string, size: number) => Promise<Buffer> | Buffer;
   /** Simple Icons slug -> hex, injectable for tests. */
   simpleIconsHex?: Map<string, string>;
+  /** Which style to derive; the HQ style when a caller does not say. */
+  style?: StyleSpec;
 }
 
-export interface HqEntry {
-  png: string;
-  webp: string;
-  svg?: string;
-  made_by: 'ai' | 'human';
-  hex?: string;
-  hex_source?: string;
+export type HqEntry = StyleFiles;
+
+/**
+ * Whether an image file is really an image. A run that fills the disk leaves a
+ * truncated file behind with a plausible mtime, and a skip that trusts the
+ * mtime then carries that file forward for good: one HQ webp shipped that way.
+ * Decoding is the only check that catches it, so every skip pays for one.
+ */
+async function decodes(sharp: Sharp, file: string): Promise<boolean> {
+  try {
+    const meta = await sharp(await readFile(file)).metadata();
+    return Boolean(meta.width && meta.height);
+  } catch {
+    return false;
+  }
 }
 
-async function newer(derived: string, source: string): Promise<boolean> {
+async function newer(sharp: Sharp, derived: string, source: string): Promise<boolean> {
   if (!existsSync(derived)) return false;
-  return (await stat(derived)).mtimeMs >= (await stat(source)).mtimeMs;
+  if ((await stat(derived)).mtimeMs < (await stat(source)).mtimeMs) return false;
+  return decodes(sharp, derived);
 }
 
 async function loadSimpleIconsHex(fetchImpl: typeof fetch): Promise<Map<string, string>> {
@@ -269,19 +217,21 @@ async function loadSimpleIconsHex(fetchImpl: typeof fetch): Promise<Map<string, 
 /** Derive every HQ size from the masters and colour the brands; returns the `hq` field per key. */
 export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEntry>> {
   const sharp = ((await import('sharp')) as unknown as { default: Sharp }).default;
-  const hq = join(options.out, 'hq');
+  const style = options.style ?? HQ;
+  const hq = join(options.out, style.dir);
   const entries = new Map<string, HqEntry>();
   for (const size of options.sizes) await mkdir(join(hq, 'png', String(size)), { recursive: true });
   for (const size of HQ_WEBP_SIZES) await mkdir(join(hq, 'webp', String(size)), { recursive: true });
   await mkdir(join(hq, 'svg'), { recursive: true });
 
   const files = (key: string): HqEntry => ({
-    png: `hq/png/{size}/${key}.png`,
-    webp: `hq/webp/{size}/${key}.webp`,
+    png: `${style.dir}/png/{size}/${key}.png`,
+    webp: `${style.dir}/webp/{size}/${key}.webp`,
     made_by: 'ai',
   });
 
   // UI icons: from the masters, trimmed and centred to one optical size.
+  const broken: string[] = [];
   const masterDir = join(hq, 'master');
   const masters = existsSync(masterDir) ? (await readdir(masterDir)).filter((f) => f.endsWith('.png')) : [];
   const generic = new Set(GENERIC.map((i) => i.key));
@@ -293,7 +243,14 @@ export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEn
       ...options.sizes.map((s) => join(hq, 'png', String(s), `${key}.png`)),
       ...HQ_WEBP_SIZES.map((s) => join(hq, 'webp', String(s), `${key}.webp`)),
     ];
-    if (!(await Promise.all(outputs.map((o) => newer(o, source)))).every(Boolean)) {
+    if (!(await decodes(sharp, source))) {
+      // A master that will not decode is a failed or truncated draw: say so
+      // rather than deriving eight broken sizes from it. `--force` redraws it.
+      broken.push(key);
+      options.log(`BROKEN master ${style.id}/${key}: it does not decode; redraw it with --force --only ${key}`);
+      return;
+    }
+    if (!(await Promise.all(outputs.map((o) => newer(sharp, o, source)))).every(Boolean)) {
       const trimmed = await sharp(await readFile(source)).trim({ threshold: 1 }).toBuffer();
       const meta = await sharp(trimmed).metadata();
       const w = meta.width ?? 1024;
@@ -349,30 +306,60 @@ export async function buildHq(options: HqBuildOptions): Promise<Map<string, HqEn
       const png = await options.render(svg, size);
       await sharp(png).webp({ quality: 90, alphaQuality: 95 }).toFile(join(hq, 'webp', String(size), `${brand.key}.webp`));
     }
-    entries.set(brand.key, { ...files(brand.key), svg: `hq/svg/${brand.key}.svg`, made_by: 'human', hex, hex_source: hexSource });
+    entries.set(brand.key, { ...files(brand.key), svg: `${style.dir}/svg/${brand.key}.svg`, made_by: 'human', hex, hex_source: hexSource });
   }
-  options.log(`${entries.size} HQ icons (${[...entries.values()].filter((e) => e.made_by === 'ai').length} drawn, ${[...entries.values()].filter((e) => e.hex).length} brand-coloured)`);
+  options.log(`${entries.size} ${style.id} icons (${[...entries.values()].filter((e) => e.made_by === 'ai').length} drawn, ${[...entries.values()].filter((e) => e.hex).length} brand-coloured)`);
+  if (broken.length) options.log(`${broken.length} unreadable masters, left out of the manifest: ${broken.join(', ')}`);
   return entries;
 }
 
-/** Add the `hq` block to an existing openicon.json, in place. */
-export function withHq(manifest: Manifest, entries: Map<string, HqEntry>, sizes: number[]): Manifest {
+/**
+ * Write one style into an existing openicon.json, leaving every other style
+ * alone: a set can carry `hq` and the three agentic styles at once, and each
+ * is built by its own run.
+ *
+ * `simple` leads the style list because it stays canonical; the rest follow in
+ * the order they were added. The HQ style also keeps writing the top-level
+ * `hq` block and the per-icon `hq` key it shipped with, so a reader written
+ * against the first HQ release does not break on a set that has four styles.
+ */
+export function withStyle(manifest: Manifest, style: StyleSpec, entries: Map<string, HqEntry>, sizes: number[]): Manifest {
+  const info: StyleInfo = {
+    dir: style.dir,
+    label: style.label,
+    material: style.material,
+    sizes,
+    webp_sizes: [...HQ_WEBP_SIZES],
+    made_by: 'both',
+    ai_model: HQ_MODEL,
+    ai_provider: 'OpenAI',
+    ai_prompt_url: `${style.dir}/style.txt`,
+    coverage: { total: manifest.icons.length, done: manifest.icons.filter((i) => entries.has(i.key)).length },
+  };
+  const styles = [...new Set(['simple', ...(manifest.styles ?? []), style.id])];
   return {
     ...manifest,
-    styles: ['simple', 'hq'],
-    hq: {
-      sizes,
-      webp_sizes: [...HQ_WEBP_SIZES],
-      made_by: 'both',
-      ai_model: HQ_MODEL,
-      ai_provider: 'OpenAI',
-      ai_prompt_url: 'hq/style.txt',
-      coverage: { total: manifest.icons.length, done: manifest.icons.filter((i) => entries.has(i.key)).length },
-    },
-    icons: manifest.icons.map((i) => {
-      const hq = entries.get(i.key);
-      const { hq: _old, ...rest } = i as typeof i & { hq?: HqEntry };
-      return hq ? { ...rest, hq } : rest;
+    styles,
+    style_info: { ...manifest.style_info, [style.id]: info },
+    ...(style.id === 'hq' ? { hq: info } : {}),
+    icons: manifest.icons.map((icon) => {
+      const entry = entries.get(icon.key);
+      const styled: Record<string, HqEntry> = { ...icon.styles };
+      if (entry) styled[style.id] = entry;
+      else delete styled[style.id];
+      const next: typeof icon = { ...icon };
+      if (Object.keys(styled).length) next.styles = styled;
+      else delete next.styles;
+      if (style.id === 'hq') {
+        if (entry) next.hq = entry;
+        else delete next.hq;
+      }
+      return next;
     }),
   };
+}
+
+/** The HQ style, written the way the first HQ release wrote it. */
+export function withHq(manifest: Manifest, entries: Map<string, HqEntry>, sizes: number[]): Manifest {
+  return withStyle(manifest, HQ, entries, sizes);
 }
