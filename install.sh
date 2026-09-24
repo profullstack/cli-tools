@@ -15,6 +15,8 @@
 #   CLI_TOOLS_FORCE    set to 1 to take over links owned by another checkout
 #   CLI_TOOLS_SKIP_STRIPE  set to 1 to skip the Stripe CLI
 #   STRIPE_CLI_VERSION     pin the Stripe CLI (default: latest release)
+#   CLI_TOOLS_SKIP_TEA     set to 1 to skip tea, the Forgejo/Gitea CLI
+#   TEA_CLI_VERSION        pin tea (default: latest release)
 #   CLI_TOOLS_SKIP_SKILL   set to 1 to skip the Profullstack agent skill
 #   PROFULLSTACK_INSTALL_URL  where that skill installer lives
 
