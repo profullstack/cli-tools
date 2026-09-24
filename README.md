@@ -19,6 +19,7 @@ TypeScript, installed as executables on `PATH`.
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
+| [`emoji`](#emoji) | Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
@@ -67,6 +68,9 @@ One thing here is not a `PATH` command and does not need Node:
   Playwright keep under `~/.cache`. axe-core itself ships with this repo
 - **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
   it: the archive Google publishes is a zip, and Node cannot read one
+- **[`uv`](https://docs.astral.sh/uv/) and an OpenAI key** — `emoji` only. The key
+  draws the artwork; `uv` fetches vtracer and nanoemoji on first use for the SVG
+  trace and the fonts (`--no-svg --no-font` skips both)
 - **Network on first use** — `favicon` only: the generation is
   [`@profullstack/favicon-generator`](https://github.com/profullstack/favicon-generator),
   fetched by `npx` rather than installed here (about seven seconds the first
@@ -1133,6 +1137,58 @@ blurry file that looks like a bug in whatever renders it, so that needs
 Two engines: `sharp` arrives with this repo as an optional dependency and is
 fast; ImageMagick is a system binary and handles PDF, PSD and animated GIF,
 which sharp does not. `--engine` picks.
+
+### `emoji`
+
+Every standard emoji, designed by an image model as one set, and packed the
+[OpenEmoji](https://logicsrc.com/openemoji) way:
+
+```sh
+emoji list --group Flags                  # what Unicode says exists
+emoji generate --only 😀🔥🇯🇵👍🏽           # draw a handful and judge the style
+emoji generate                            # draw the rest; resumable
+emoji build                               # sizes, SVGs, fonts, CSS, manifest
+emoji status                              # coverage, and what failed
+```
+
+The list is Unicode's own `emoji-test.txt`: every fully-qualified sequence,
+3,963 of them in Emoji 18.0, fetched and cached for a week. Nothing is kept by
+hand, so a new Emoji version is `emoji generate --refresh`.
+
+**What makes it a set.** One art direction goes into every prompt (`--style
+FILE` replaces it). Six anchors are drawn first (😀 🔥 ❤️ 👍 🚀 🐱), and every
+later glyph is an edit that is handed three of them as style references, so the
+lighting and gloss do not drift across 1,923 drawings. The 2,040 skin-tone
+variants are never drawn from scratch: each is an edit of its already-drawn
+base that changes the skin and nothing else, which is how 👍🏽 stays the same
+thumb as 👍. Asking for a variant alone draws its base first.
+
+**What comes out** (`./openemoji` by default):
+
+```
+master/<key>.png        1024px, the model's own pixels: the canonical artwork
+png/<size>/<key>.png    16 … 512, trimmed and centred to one optical size
+svg/<key>.svg           a posterised trace of the master (vtracer), 35-120 KB
+font/OpenEmoji-CBDT.ttf colour bitmap font: Chrome, Android, Linux
+font/OpenEmoji-sbix.ttf colour bitmap font: Safari, macOS, iOS
+openemoji.css           @font-face plus an img.openemoji rule
+openemoji.json          the OpenEmoji manifest: coverage, files, made_by, model
+index.html              every glyph on one page, to review before shipping
+style.txt, prompts.jsonl, failures.json
+```
+
+`<key>` is the fully-qualified codepoint sequence, lowercase, hyphen-joined
+(`1f469-1f3fe-200d-1f4bb`). The SVGs trade gradients for flat colour steps.
+The PNGs and the fonts carry the artwork as drawn.
+
+A master that exists is never paid for twice, so an interrupted run, a rate
+limit or a refusal costs only a rerun. Refusals and errors land in
+`failures.json` and the run keeps going. Rate limits and 5xx retry with
+backoff. `--force` redraws, `--quality low|medium|high` (default `medium`),
+`--concurrency N` (default 6), `--model` or `EMOJI_IMAGE_MODEL` (default
+`gpt-image-2`). A medium glyph is about 1,800 image tokens drawn fresh and
+4,000-8,000 as an edit with references. The whole set takes hours: at the
+default concurrency, roughly eight.
 
 ### `favicon`
 
