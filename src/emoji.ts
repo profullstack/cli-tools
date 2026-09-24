@@ -27,7 +27,8 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
 
@@ -438,7 +439,9 @@ export async function generate(
   const masterPath = (key: string) => join(dirs.master, `${key}.png`);
   const report: GenerateReport = { drawn: [], skipped: [], failed: [], tokens: 0 };
 
-  const needs = (e: Entry) => options.force || !existsSync(masterPath(e.key));
+  // A zero-byte master is a write that died (disk full, killed run): missing, not done.
+  const hasMaster = (key: string) => existsSync(masterPath(key)) && statSync(masterPath(key)).size > 0;
+  const needs = (e: Entry) => options.force || !hasMaster(e.key);
   const todo = picked.filter((e) => {
     if (needs(e)) return true;
     report.skipped.push(e.key);
@@ -448,12 +451,12 @@ export async function generate(
   // Anchors are drawn even when not selected: a run of just the flags still
   // needs them to be flags in this set's style.
   const anchorEntries = ANCHORS.map((k) => byKey.get(k)).filter((e): e is Entry => Boolean(e));
-  const missingAnchors = anchorEntries.filter((e) => !existsSync(masterPath(e.key)) || (options.force && todo.includes(e)));
+  const missingAnchors = anchorEntries.filter((e) => !hasMaster(e.key) || (options.force && todo.includes(e)));
   const toned = todo.filter((e) => baseKeyOf(e, known));
   // A variant asked for without its base (`--only 👩🏾‍💻`) pulls the base in:
   // there is nothing to edit the tone of otherwise.
   const bases = [...new Set(toned.map((e) => baseKeyOf(e, known)!))]
-    .filter((k) => !existsSync(masterPath(k)) && !todo.some((e) => e.key === k))
+    .filter((k) => !hasMaster(k) && !todo.some((e) => e.key === k))
     .map((k) => byKey.get(k)!);
   const untoned = [...todo, ...bases].filter((e) => !baseKeyOf(e, known) && !ANCHORS.includes(e.key as never));
 
@@ -462,7 +465,10 @@ export async function generate(
       const result = await withRetry(() =>
         options.caller({ model: options.model, prompt, quality: options.quality, references }),
       );
-      await writeFile(masterPath(entry.key), result.png);
+      // Write then rename, so a full disk or a kill never leaves a truncated master.
+      const partial = `${masterPath(entry.key)}.partial`;
+      await writeFile(partial, result.png);
+      await rename(partial, masterPath(entry.key));
       report.drawn.push(entry.key);
       report.tokens += result.tokens;
       // Appended as each glyph lands, so a killed run still records what it paid for.
@@ -494,7 +500,7 @@ export async function generate(
   // 3. Skin tones, each an edit of its own base.
   await pool(toned, options.concurrency, async (entry) => {
     const base = baseKeyOf(entry, known)!;
-    if (!existsSync(masterPath(base))) {
+    if (!hasMaster(base)) {
       report.failed.push({ key: entry.key, name: entry.name, error: `base ${base} has no master yet` });
       return;
     }

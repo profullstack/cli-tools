@@ -227,6 +227,25 @@ describe('generate', () => {
     expect(again.skipped).toHaveLength(2);
   });
 
+  it('treats a zero-byte master as missing and redraws it', async () => {
+    const out = await mkdtemp(join(tmpdir(), 'emoji-'));
+    const { mkdir: mk, writeFile: wf } = await import('node:fs/promises');
+    await mk(join(out, 'master'), { recursive: true });
+    await wf(join(out, 'master', '1f1ef-1f1f5.png'), Buffer.alloc(0));
+    let drew = 0;
+    const caller = async () => {
+      drew += 1;
+      return { png: PNG, tokens: 1 };
+    };
+    const report = await generate(all, select(all, { only: ['1f1ef-1f1f5'] }), {
+      out, model: 'test', quality: 'low', style: STYLE, concurrency: 1, force: false, caller, log: () => {},
+    });
+    expect(report.drawn).toContain('1f1ef-1f1f5');
+    expect((await readFile(join(out, 'master', '1f1ef-1f1f5.png'))).length).toBeGreaterThan(0);
+    expect(existsSync(join(out, 'master', '1f1ef-1f1f5.png.partial'))).toBe(false);
+    expect(drew).toBeGreaterThan(0);
+  });
+
   it('records a refusal and keeps going', async () => {
     const out = await mkdtemp(join(tmpdir(), 'emoji-'));
     const caller = async (request: ImageRequest) => {
