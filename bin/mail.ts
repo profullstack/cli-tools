@@ -64,6 +64,7 @@ import {
   selectAccount,
   selectAccounts,
   sendMail,
+  stripHtml,
   unsupportedProvider,
   verifyAccount,
 } from '../src/mail.ts';
@@ -88,7 +89,7 @@ const USAGE = `Usage:
   mail search <query…> [-a ACCOUNT|all] [--folder F] [--limit N] [--gmail] [--json]
   mail read <uid> [-a ACCOUNT] [--folder F] [--keep-unread] [--raw] [--json]
 
-  mail send --to A[,B] --subject S [--cc …] [--bcc …] [--body T | --file P] [--attach P]… [--via smtp|resend] [--draft]
+  mail send --to A[,B] --subject S [--cc …] [--bcc …] [--body T | --file P] [--html P] [--attach P]… [--via smtp|resend] [--draft]
   mail reply <uid> [--all] [--body T | --file P] [--no-quote] [--via smtp|resend] [--draft]
   mail mark <uid>… (--read | --unread | --flag | --unflag) [--folder F]
   mail mv <uid>… <folder> [--folder F]
@@ -107,6 +108,7 @@ Options:
   --to, --cc, --bcc comma-separated addresses; --to may repeat
   --subject S
   --body T          the text; --file P reads it from a file; otherwise stdin
+  --html P          an HTML part read from a file; the text stays the plain part
   --attach P        a file to attach; may repeat
   --all             reply: everyone on the original, not just the sender
   --no-quote        reply: do not quote the original under the answer
@@ -185,18 +187,54 @@ async function readStdin(): Promise<string> {
   return Buffer.concat(chunks).toString('utf8');
 }
 
-/** The body from --body, --file, or stdin — in that order, and never empty. */
-async function bodyFrom(values: Map<string, string>): Promise<string> {
+/** Where a body comes from when neither --body nor --file names one. */
+export interface StdinSource {
+  isTTY: boolean;
+  read: () => Promise<string>;
+}
+
+const processStdin: StdinSource = {
+  get isTTY() {
+    return Boolean(process.stdin.isTTY);
+  },
+  read: readStdin,
+};
+
+/**
+ * The text and, with --html, the HTML part of a message.
+ *
+ * The text comes from --body, --file, or stdin — in that order, and never
+ * empty. With --html and none of those, stdin is still read when something is
+ * piped in; only when nothing is does the text part fall back to the HTML with
+ * its tags stripped, rather than blocking on (or refusing) a terminal.
+ */
+export async function bodiesFrom(
+  values: Map<string, string>,
+  stdin: StdinSource = processStdin,
+): Promise<{ text: string; html?: string }> {
+  const htmlFile = values.get('--html');
+  const html = htmlFile !== undefined ? readFileSync(htmlFile, 'utf8') : undefined;
+  if (html !== undefined && !html.trim()) throw new UsageError(`--html ${htmlFile} is empty — nothing to send`);
+  const withHtml = (text: string) => (html !== undefined ? { text, html } : { text });
+
   const inline = values.get('--body');
-  if (inline !== undefined) return inline;
+  if (inline !== undefined) return withHtml(inline);
   const file = values.get('--file');
-  if (file !== undefined) return readFileSync(file, 'utf8');
-  if (process.stdin.isTTY) {
-    throw new UsageError('no body — pass --body, --file, or pipe the text on stdin');
+  if (file !== undefined) return withHtml(readFileSync(file, 'utf8'));
+  if (stdin.isTTY) {
+    if (html !== undefined) return withHtml(stripHtml(html));
+    throw new UsageError('no body — pass --body, --file, --html, or pipe the text on stdin');
   }
-  const text = await readStdin();
-  if (!text.trim()) throw new UsageError('stdin was empty — nothing to send');
-  return text;
+  const text = await stdin.read();
+  if (!text.trim()) {
+    if (html !== undefined) return withHtml(stripHtml(html));
+    throw new UsageError('stdin was empty — nothing to send');
+  }
+  return withHtml(text);
+}
+
+async function bodyFrom(values: Map<string, string>): Promise<string> {
+  return (await bodiesFrom(values)).text;
 }
 
 function addressesFrom(values: Map<string, string>, repeated: Map<string, string[]>, flag: string): string[] {
@@ -530,7 +568,7 @@ async function main(argv: string[]): Promise<number> {
     ],
     string: [
       '-a', '--account', '--folder', '--limit', '--to', '--cc', '--bcc', '--subject', '--body',
-      '--file', '--attach', '--via', '--provider', '--name', '--user', '--imap-host', '--imap-port',
+      '--file', '--html', '--attach', '--via', '--provider', '--name', '--user', '--imap-host', '--imap-port',
       '--smtp-host', '--smtp-port', '--as', '--tls-ca',
     ],
   });
@@ -693,7 +731,7 @@ async function main(argv: string[]): Promise<number> {
           cc: addressesFrom(parsed.values, repeated, '--cc'),
           bcc: addressesFrom(parsed.values, repeated, '--bcc'),
           subject,
-          text: await bodyFrom(parsed.values),
+          ...(await bodiesFrom(parsed.values)),
           attachments,
         };
       }

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { bodiesFrom } from '../bin/mail.ts';
 import {
   type Account,
   type FullMessage,
@@ -942,5 +943,74 @@ describe('the wider table in configuration', () => {
     expect(config.accounts.i?.provider).toBe('icloud');
     expect(config.accounts.c).toMatchObject({ imapSecure: false, tlsCa: '/x/ca.pem' });
     expect(config.accounts.bad?.provider).toBe('custom');
+  });
+});
+
+describe('mail send --html', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const html = '<html><body><h1>Recap</h1><p>3 posts &amp; 2 clicks</p></body></html>';
+  function fixture(): { htmlPath: string; textPath: string } {
+    const dir = mkdtempSync(join(tmpdir(), 'mail-html-'));
+    dirs.push(dir);
+    const htmlPath = join(dir, 'body.html');
+    const textPath = join(dir, 'body.txt');
+    writeFileSync(htmlPath, html);
+    writeFileSync(textPath, 'Recap: 3 posts, 2 clicks\n');
+    return { htmlPath, textPath };
+  }
+  const tty = {
+    isTTY: true,
+    read: async (): Promise<string> => {
+      throw new Error('stdin must not be read');
+    },
+  };
+  const piped = (text: string) => ({ isTTY: false, read: async () => text });
+
+  it('takes the text from --file and the HTML part from --html', async () => {
+    const { htmlPath, textPath } = fixture();
+    const parts = await bodiesFrom(new Map([['--file', textPath], ['--html', htmlPath]]), tty);
+    expect(parts).toEqual({ text: 'Recap: 3 posts, 2 clicks\n', html });
+  });
+
+  it('derives the text from the HTML when there is no --body, --file, or piped stdin', async () => {
+    const { htmlPath } = fixture();
+    const parts = await bodiesFrom(new Map([['--html', htmlPath]]), tty);
+    expect(parts.html).toBe(html);
+    expect(parts.text).toContain('Recap');
+    expect(parts.text).toContain('3 posts & 2 clicks');
+    expect(parts.text).not.toContain('<');
+  });
+
+  it('still reads piped stdin for the text part when --html is given', async () => {
+    const { htmlPath } = fixture();
+    const parts = await bodiesFrom(new Map([['--html', htmlPath]]), piped('from stdin'));
+    expect(parts).toEqual({ text: 'from stdin', html });
+  });
+
+  it('leaves a message without --html as text only, as before', async () => {
+    expect(await bodiesFrom(new Map([['--body', 'hi']]), tty)).toEqual({ text: 'hi' });
+    await expect(bodiesFrom(new Map(), tty)).rejects.toThrow(/no body/);
+  });
+
+  it('composes a multipart/alternative message from both parts', async () => {
+    const { htmlPath, textPath } = fixture();
+    const parts = await bodiesFrom(new Map([['--file', textPath], ['--html', htmlPath]]), tty);
+    const raw = (
+      await composeRaw({
+        from: 'a@example.com',
+        to: ['b@example.com'],
+        cc: [],
+        bcc: [],
+        subject: 'Recap',
+        ...parts,
+        attachments: [],
+      })
+    ).toString('utf8');
+    expect(raw).toMatch(/multipart\/alternative/i);
+    expect(raw).toMatch(/text\/plain/i);
+    expect(raw).toMatch(/text\/html/i);
   });
 });
