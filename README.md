@@ -28,6 +28,7 @@ TypeScript, installed as executables on `PATH`.
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
+| [`jobhunt`](#jobhunt) | Find remote roles worth applying to, and apply through a browser, never twice |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
@@ -82,6 +83,8 @@ One thing here is not a `PATH` command and does not need Node:
   than this repo's
 - **[`logicsrc`](https://logicsrc.com)**, logged in to the team — `users-dump`
   only, which reads database locations out of the team vaults
+- **[TronBrowser](https://tronbrowser.dev) with `browser_upload`** — `jobhunt apply`
+  only; `jobhunt discover` needs nothing but the network
 - **Node 24+ and `pnpm` or `npm`** — `agenticjobs` and `openmcp` only, for the
   same reason: each is an npm package installed on first use, and both ask for
   a newer Node than anything else here (`openmcp` keeps its catalog in
@@ -1633,6 +1636,86 @@ that script first if you want this wrapper to own the name.
 Upstream wants **Node 24+**, which is higher than this repo's own floor of 22.18;
 on an older one it says so and tries anyway, since that floor is theirs to move.
 
+### `jobhunt`
+
+Find remote roles worth applying to, from public ATS job boards, and apply to
+them through a browser — never twice. Not `jobs`: that is a builtin in every
+POSIX shell, and a builtin beats `PATH`, so `jobs discover` would answer "no
+such job" without reaching the file. The moshcode plugin is still called `jobs`
+(`/jobs:discover`, `/jobs:apply` …).
+
+```sh
+jobhunt profile add me firstName=Ada lastName=Lovelace email=ada@example.com \
+  resume=~/cv.pdf cover=~/cover.pdf answers.sponsorship=No answers.workAuthorized=Yes
+jobhunt discover                          # rank the postings that pass the filters
+jobhunt queue add 0 3 --focus "agent evals" # {focus} finishes the why-us template
+jobhunt apply --dry-run                   # fill every form, submit nothing
+jobhunt apply                             # shows the queue, asks, then submits
+jobhunt run start --detach                # the same in the background
+jobhunt run stop | resume | restart | list | show
+jobhunt skip 4 --reason onsite            # never show or send it again
+jobhunt status
+jobhunt history --since 7d --type job-outcome
+jobhunt config                            # which file, which profile, the filters in effect
+jobhunt config set workplace=remote,hybrid pay.min=180k exclude=CLEARANCE
+```
+
+**Discovery** reads a Markdown list of companies (by default
+[awesome-ai-startups-hiring](https://github.com/vinitshahdeo/awesome-ai-startups-hiring)),
+guesses each one's board on Ashby, Greenhouse, Lever and Workable, and needs no
+key or login for any of them. It filters on workplace, country, title and pay,
+scores what is left on weighted terms (by default: AI coding tools, agentic
+work, the JS stack), and flags what a listing's summary hides — `ONSITE`,
+`CLEARANCE`, `NON-JS`, `LOCATION-BOUND`. Every filter is per profile and only
+reads a field where the ATS really has it:
+
+| filter    | Ashby               | Greenhouse                 | Lever                  | Workable        |
+|-----------|---------------------|----------------------------|------------------------|-----------------|
+| workplace | workplaceType       | location text              | workplaceType          | remote only     |
+| countries | address + text      | location text              | country + text         | country + text  |
+| pay       | compensation tiers  | pay ranges, else the text  | salaryRange, else text | none            |
+
+Ashby's `isRemote` is true for hybrid roles too, which is why it is not read.
+A posting with no stated pay passes, flagged `pay:unknown`, unless
+`pay.require=true`. `jobhunt --help` lists every filter key.
+
+**Applying** drives [TronBrowser](https://tronbrowser.dev)'s `tron automate`
+MCP server, matching fields by label to the profile. It stops with
+`needs-human-review`, naming the fields, at a required question nothing
+answers, a résumé the page does not show as attached, or a required consent or
+arbitration box — agreeing to terms is never the tool's call. `jobhunt profile
+answer <name> "<label regex>" <value>` answers a new question from then on.
+Greenhouse emails a security code before accepting an application: when the
+profile's email has a [`mail`](#mail) account, the code is read from the inbox,
+and otherwise the run prints `awaiting-code` with a file to write it to.
+
+**Runs** are records on disk, written after every step, so they survive a stop,
+a crash or a reboot. `run stop` abandons a form that is not yet submitted (or
+is waiting for a code, since nothing is sent without it) and finishes one past
+its final submit. A crashed run's interrupted job is redone on `resume`, unless
+it had clicked its final submit, in which case it is counted as sent
+(`unverified`) — sending it again is the one mistake that cannot be undone.
+
+**Profiles** bundle identity, résumé and cover letter, answers, the why-us
+template and the filters, so one person can look for two kinds of role. They
+live in `~/.config/cli-tools/jobs.json` (0600, or `$JOBS_CONFIG`); the repo
+ships empty defaults and no identity. State lives in `$JOBS_STATE`, the file's
+`"state"`, or `~/.local/share/cli-tools/jobs`:
+
+| Path | What |
+| --- | --- |
+| `applied.jsonl` | every posting handled, from any profile — the never-twice list, keyed by job id so a board URL and its embed form are one job |
+| `history.jsonl` | append-only audit log: profile, filter and queue changes, skips, runs, outcomes (never field values or codes) |
+| `runs/<id>.json` | one run, job by job |
+| `profiles/<name>/` | `shortlist.json`, `queue.json`, `results.jsonl`, `logs/`, `codes/` |
+
+Browser: `TRON_AUTOMATE_BIN` (default
+`~/.local/lib/tronbrowser/tronbrowser/sdk/automate-bin.js`) and
+`TRON_CHROMIUM_BIN`, or `"tron": { "automateBin", "chromiumBin" }` in the file.
+It needs a tron with `browser_upload`. tron does not take its Chromium down when
+it is killed, so each job's browser runs in its own process group and the
+group is what gets closed, including by the crash recovery.
+
 ### `openmcp`
 
 The OpenMCP catalog of MCP relays, from the terminal:
@@ -2113,12 +2196,13 @@ moshcode plugin install ai@cli-tools        # /ai:ask, /ai:tts
 moshcode plugin install bo@cli-tools        # /bo:capture, :search, :read, :ask
 moshcode plugin install myna@cli-tools      # /myna:post, :schedule, :queue, :feed
 moshcode plugin install mail@cli-tools      # /mail:inbox, /mail:send, /mail:clean
+moshcode plugin install jobs@cli-tools      # /jobs:discover, :apply, :run, :status, :history, :profile, :config
 ```
 
 See [plugins/tools](plugins/tools/README.md), [plugins/blog](plugins/blog/README.md),
 [plugins/domain](plugins/domain/README.md), [plugins/ai](plugins/ai/README.md),
-[plugins/bo](plugins/bo/README.md), [plugins/myna](plugins/myna/README.md)
-and [plugins/mail](plugins/mail/README.md).
+[plugins/bo](plugins/bo/README.md), [plugins/myna](plugins/myna/README.md),
+[plugins/mail](plugins/mail/README.md) and [plugins/jobs](plugins/jobs/README.md).
 
 Two of them front a command this repo does not implement, for opposite reasons.
 `myna` fronts one it *installs* — the companion above — so the plugin is purely

@@ -157,6 +157,25 @@
         "fastmail",
         "nextcloud"
       ]
+    },
+    {
+      "name": "jobs",
+      "description": "Find remote roles worth applying to from public ATS job boards, filtered by workplace, country, title, pay and score, and apply through TronBrowser with one or more applicant profiles: dry runs, resumable runs, security codes from the inbox, a never-twice list and an audit history.",
+      "source": "./plugins/jobs",
+      "category": "productivity",
+      "author": {
+        "name": "profullstack",
+        "url": "https://profullstack.com"
+      },
+      "homepage": "https://github.com/profullstack/cli-tools#jobhunt",
+      "keywords": [
+        "jobs",
+        "job-search",
+        "ashby",
+        "greenhouse",
+        "lever",
+        "browser-automation"
+      ]
     }
   ]
 }
