@@ -58,6 +58,7 @@ const SUMMARIES: Record<string, string> = {
   tcfeed: 'Find repositories worth scanning, scan them, print a shortlist',
   torrent: 'Make a torrent out of a directory, and get it seeded',
   tts: 'Read text aloud and keep the audio',
+  'users-dump': 'Every user account across the fleet, as one CSV: name, email, site, last login',
   vid: 'Inspect, thumbnail, clip and shrink video, through ffmpeg',
   wcag: 'Audit a site against WCAG with axe in headless Chrome, for the W3C report tool',
 };
