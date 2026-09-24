@@ -11,6 +11,7 @@ import type { RunResult } from '../src/exec.ts';
 import {
   defaults,
   isRepairable,
+  isUpdatable,
   reasonNotMergeable,
   render,
   sweep,
@@ -126,6 +127,76 @@ function stubGh(options: {
   return { gh: new Gh({ exec }), calls };
 }
 
+/**
+ * A scripted `gh` serving several PRs at once.
+ *
+ * `stubGh` answers for exactly one URL, which cannot express the thing the
+ * second pass exists for: whether a PR whose checks are still running holds up
+ * the PRs behind it.
+ */
+function stubFleet(prs: { url: string; createdAt: string; steps: StubStep[] }[]) {
+  const calls: string[] = [];
+  const cursors = new Map<string, { view: number; check: number }>();
+
+  const find = (args: readonly string[]) => {
+    const url = args.find((a) => a.includes('/pull/'));
+    const entry = prs.find((p) => p.url === url);
+    if (!entry) throw new Error(`stubFleet: no PR for ${String(url)}`);
+    const cursor = cursors.get(entry.url) ?? { view: 0, check: 0 };
+    cursors.set(entry.url, cursor);
+    return { entry, cursor };
+  };
+
+  const at = (entry: { steps: StubStep[] }, index: number): StubStep =>
+    entry.steps[Math.min(index, entry.steps.length - 1)]!;
+
+  const exec = async (_file: string, args: readonly string[]): Promise<RunResult> => {
+    calls.push(args.join(' '));
+    const ok = (stdout: string): RunResult => ({ code: 0, stdout, stderr: '' });
+
+    if (args[0] === 'search') {
+      return ok(JSON.stringify(prs.map((p) => ({ url: p.url, createdAt: p.createdAt }))));
+    }
+
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const { entry, cursor } = find(args);
+      const current = at(entry, cursor.view);
+      cursor.view += 1;
+      return ok(
+        JSON.stringify({
+          url: entry.url,
+          title: `stub ${entry.url}`,
+          state: current.state ?? 'OPEN',
+          isDraft: current.isDraft ?? false,
+          mergeable: current.mergeable ?? 'MERGEABLE',
+          mergeStateStatus: current.mergeStateStatus ?? 'CLEAN',
+          headRefOid: 'deadbeef',
+        }),
+      );
+    }
+
+    if (args[0] === 'pr' && args[1] === 'checks') {
+      const { entry, cursor } = find(args);
+      const current = at(entry, cursor.check);
+      cursor.check += 1;
+      const checks = current.checks ?? [{ name: 'test', bucket: 'pass' }];
+      return {
+        code: checks.some((c) => c.bucket !== 'pass') ? 1 : 0,
+        stdout: JSON.stringify(checks),
+        stderr: '',
+      };
+    }
+
+    if (args[0] === 'pr' && args[1] === 'update-branch') return ok('Updated branch');
+    if (args[0] === 'pr' && args[1] === 'merge') return ok('Merged');
+    if (args[0] === 'pr' && args[1] === 'ready') return ok('');
+
+    return ok('');
+  };
+
+  return { gh: new Gh({ exec }), calls };
+}
+
 function baseOptions(overrides: Partial<MergeOptions> = {}): MergeOptions {
   return {
     orgs: ['acme'],
@@ -168,8 +239,8 @@ describe('eligibility rules', () => {
     expect(reasonNotMergeable({ ...pr, mergeable: 'CONFLICTING' }, [], false)).toBe(
       'mergeable=CONFLICTING',
     );
-    expect(reasonNotMergeable({ ...pr, mergeStateStatus: 'UNSTABLE' }, [], false)).toBe(
-      'mergeStateStatus=UNSTABLE',
+    expect(reasonNotMergeable({ ...pr, mergeStateStatus: 'BLOCKED' }, [], true)).toBe(
+      'mergeStateStatus=BLOCKED',
     );
     expect(reasonNotMergeable(pr, [], false)).toBe('no CI checks found');
     expect(reasonNotMergeable(pr, [{ name: 'test', bucket: 'fail' }], false)).toBe(
@@ -190,6 +261,39 @@ describe('eligibility rules', () => {
     expect(isRepairable({ ...pr, mergeable: 'CONFLICTING' }, [])).toBe(true);
     // A check that ran and failed is a result, not an obstacle.
     expect(isRepairable(pr, [{ name: 'a', bucket: 'fail' }])).toBe(false);
+  });
+
+  it('merges UNSTABLE when the checks it can read are green', () => {
+    // UNSTABLE is "mergeable, some non-required context is not green". GitHub
+    // takes the merge; demanding CLEAN skipped ready PRs for nothing.
+    const unstable = { ...pr, mergeStateStatus: 'UNSTABLE' } as const;
+    expect(reasonNotMergeable(unstable, [{ name: 'test', bucket: 'pass' }], false)).toBe('');
+    expect(reasonNotMergeable({ ...pr, mergeStateStatus: 'HAS_HOOKS' }, [
+      { name: 'test', bucket: 'pass' },
+    ], false)).toBe('');
+
+    // But it is only trustworthy because the checks were read. With none to
+    // read, nothing corroborates it.
+    expect(reasonNotMergeable(unstable, [], true)).toContain('no checks to confirm it');
+  });
+
+  it('names the red check rather than the aggregate it explains', () => {
+    // Both are unhappy at once; "socket=fail" is the sentence worth printing.
+    expect(
+      reasonNotMergeable({ ...pr, mergeStateStatus: 'UNSTABLE' }, [
+        { name: 'socket', bucket: 'fail' },
+      ], false),
+    ).toBe('checks not green: socket=fail');
+  });
+
+  it('will not ask update-branch to merge over a settled conflict', () => {
+    // DIRTY is GitHub having already decided the two sides conflict. The call
+    // can only come back "Cannot update PR branch due to conflicts".
+    expect(isUpdatable({ ...pr, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' })).toBe(false);
+    expect(isRepairable({ ...pr, mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }, [])).toBe(
+      false,
+    );
+    expect(isUpdatable({ ...pr, mergeStateStatus: 'BEHIND' })).toBe(true);
   });
 });
 
@@ -263,20 +367,48 @@ describe('sweep', () => {
     expect(calls.some((c) => c.startsWith('pr update-branch'))).toBe(true);
   });
 
-  it('refuses to guess at a conflict GitHub will not merge', async () => {
+  it('reports a settled conflict once, without asking GitHub to merge over it', async () => {
     const { gh, calls } = stubGh({
       steps: [{ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }],
       updateBranchFails: true,
     });
-    const { summary, text } = await runSweep(gh, baseOptions({ fix: true }));
+    const { summary, lines, text } = await runSweep(gh, baseOptions({ fix: true }));
 
     expect(text).toContain('FIXME');
-    expect(text).toContain('Cannot update PR branch due to conflicts');
+    expect(text).toContain('mergeable=CONFLICTING');
+    expect(text).toContain('needs resolving by hand');
     expect(summary.merged).toBe(0);
     expect(summary.skipped).toBe(1);
     // Repair did not succeed, so it is not counted as one.
     expect(summary.fixed).toBe(0);
     expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+
+    // The wasted round trip is gone, and so is the SKIP line that used to
+    // repeat the FIXME immediately underneath it.
+    expect(calls.some((c) => c.startsWith('pr update-branch'))).toBe(false);
+    expect(lines.filter((l) => l.kind === 'skip')).toHaveLength(0);
+  });
+
+  it('merges a PR GitHub calls UNSTABLE when every check is green', async () => {
+    // The false skip this sweep kept producing: MERGEABLE, two green checks,
+    // and an aggregate state that only meant a non-required context was not.
+    const { gh, calls } = stubGh({
+      steps: [
+        {
+          mergeStateStatus: 'UNSTABLE',
+          checks: [
+            { name: 'test', bucket: 'pass' },
+            { name: 'lint', bucket: 'pass' },
+          ],
+        },
+      ],
+    });
+    const { summary, text } = await runSweep(gh, baseOptions());
+
+    expect(summary.merged).toBe(1);
+    expect(summary.skipped).toBe(0);
+    expect(text).not.toContain('mergeStateStatus=UNSTABLE');
+    expect(calls.some((c) => c.startsWith('pr merge'))).toBe(true);
   });
 
   it('waits for a running check, then merges once it goes green', async () => {
@@ -292,6 +424,63 @@ describe('sweep', () => {
 
     expect(text).toContain('checks still running');
     expect(summary.merged).toBe(1);
+  });
+
+  it('merges the rest of the sweep instead of queueing behind a running suite', async () => {
+    // The sweep used to stand in front of the first unfinished PR for the
+    // whole of --fix-wait. Every PR after it was ready and waited anyway.
+    const slow = 'https://github.com/acme/repo/pull/1';
+    const quick = 'https://github.com/acme/repo/pull/2';
+
+    const { gh, calls } = stubFleet([
+      {
+        url: slow,
+        createdAt: '2026-01-01T00:00:00Z',
+        steps: [
+          { mergeStateStatus: 'UNSTABLE', checks: [{ name: 'test', bucket: 'pending' }] },
+          { mergeStateStatus: 'CLEAN', checks: [{ name: 'test', bucket: 'pass' }] },
+        ],
+      },
+      { url: quick, createdAt: '2026-01-02T00:00:00Z', steps: [{}] },
+    ]);
+
+    const { summary, text } = await runSweep(gh, baseOptions({ fix: true }));
+
+    expect(summary.merged).toBe(2);
+    expect(text).toContain('parked for the second pass');
+
+    const mergeOrder = calls.filter((c) => c.startsWith('pr merge'));
+    expect(mergeOrder).toHaveLength(2);
+    // The ready PR goes first even though the slow one was swept first.
+    expect(mergeOrder[0]).toContain(quick);
+    expect(mergeOrder[1]).toContain(slow);
+  });
+
+  it('spends --fix-wait on the parked queue as a whole, not per PR', async () => {
+    // Two PRs, both stuck pending, one second of budget between them. Serially
+    // this was two full waits; the deadline is shared, so it is one.
+    const { gh } = stubFleet([
+      {
+        url: 'https://github.com/acme/repo/pull/1',
+        createdAt: '2026-01-01T00:00:00Z',
+        steps: [{ mergeStateStatus: 'UNSTABLE', checks: [{ name: 'a', bucket: 'pending' }] }],
+      },
+      {
+        url: 'https://github.com/acme/repo/pull/2',
+        createdAt: '2026-01-02T00:00:00Z',
+        steps: [{ mergeStateStatus: 'UNSTABLE', checks: [{ name: 'b', bucket: 'pending' }] }],
+      },
+    ]);
+
+    const started = Date.now();
+    const { summary, text } = await runSweep(
+      gh,
+      baseOptions({ fix: true, fixWaitMs: 60, pollMs: 10 }),
+    );
+
+    expect(Date.now() - started).toBeLessThan(500);
+    expect(summary.skipped).toBe(2);
+    expect(text).toContain('checks still running after');
   });
 
   it('gives up waiting at --fix-wait rather than hanging', async () => {
