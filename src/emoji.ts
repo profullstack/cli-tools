@@ -193,6 +193,23 @@ const GROUP_HINTS: Record<string, string> = {
   Component: 'A component swatch: a simple rounded square showing only the named skin tone or hair style.',
 };
 
+/**
+ * Subjects the model keeps drawing as a famous film design, whatever the
+ * general originality rule says. A concrete brief that moves every signature
+ * feature is what actually works. Keyed by the base codepoint, so every
+ * gender and skin-tone variant inherits it.
+ */
+export const DESIGN_NOTES: Record<string, string> = {
+  '1f9dc':
+    'Design brief (merperson): dark teal or silver-white hair, a top made of coral branches and pearls, a sunset-orange-to-gold tail with small scales, a pearl circlet. Never red hair, never a purple seashell top, never a green tail, never a trident.',
+  '1f9da':
+    'Design brief (fairy): short dark curly hair, a violet-and-orange petal dress like a pansy, monarch-butterfly patterned wings in orange and black, holding a glowing dandelion seed instead of a wand. Never a blonde bun, never a green leaf dress, never a star wand.',
+  '1f9de':
+    'Design brief (genie): a tall indigo turban with a single emerald, a crimson sash, a smoky violet-to-teal wisp tail rising from a squat copper teapot-style lamp, bare arms with gold bands. Never a black topknot ponytail, never a blue vest, never a blue body.',
+};
+
+const designNoteFor = (entry: Pick<Entry, 'codepoints'>): string => DESIGN_NOTES[entry.codepoints[0]!] ?? '';
+
 export function promptFor(entry: Entry, style: string): string {
   const hint = GROUP_HINTS[entry.group] ?? '';
   return [
@@ -200,6 +217,7 @@ export function promptFor(entry: Entry, style: string): string {
     hint,
     `Match the art style of the reference images exactly when references are given: same lighting, gloss, palette handling and proportions. Do not copy their subjects.`,
     `The emoji to draw: "${entry.name}" (${entry.char}, Unicode ${entry.codepoints.join(' ').toUpperCase()}, ${entry.group} / ${entry.subgroup}).`,
+    designNoteFor(entry),
   ]
     .filter(Boolean)
     .join('\n\n');

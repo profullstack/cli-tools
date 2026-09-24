@@ -129,6 +129,13 @@ describe('prompts', () => {
     expect(prompt).toContain('1F1EF 1F1F5');
   });
 
+  it('famous-design subjects carry their own brief', async () => {
+    const { DESIGN_NOTES } = await import('../src/emoji.ts');
+    const mermaid = { key: '1f9dc-200d-2640-fe0f', codepoints: ['1f9dc', '200d', '2640', 'fe0f'], char: '🧜‍♀️', name: 'mermaid', group: 'People & Body', subgroup: 'person-fantasy', version: '5.0' };
+    expect(promptFor(mermaid, STYLE)).toContain(DESIGN_NOTES['1f9dc']);
+    expect(promptFor(byKey('1f600'), STYLE)).not.toContain('Design brief');
+  });
+
   it('a tone edit changes skin and nothing else', () => {
     const prompt = tonePromptFor(byKey('1f44d-1f3fd'));
     expect(prompt).toContain('medium skin tone (Fitzpatrick type 4)');
