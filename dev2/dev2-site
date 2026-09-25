@@ -594,7 +594,11 @@ def render_compose(s, st, app_port_inside, build_args=()):
                 y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
             y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
         y.append(f"    environment:\n      PORT: \"{app_port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
-        if command: y.append(f"    command: {json.dumps(shlex.split(command))}")
+        if command:
+            # A nixpacks image's entrypoint is `/bin/bash -l -c`, and bash -c takes ONE script
+            # argument: an argv list would run only the first word (Bun's help text, exit 0,
+            # restart loop). Hand it the whole string. Other images exec the argv directly.
+            y.append(f"    command: {json.dumps([command] if (df or '').startswith('.nixpacks/') else shlex.split(command))}")
         if ports: y.append(f"    ports:\n      - \"127.0.0.1:${{APP_PORT}}:{app_port_inside}\"")
         if vols:
             y.append("    volumes:")
