@@ -1,1 +1,10 @@
-{ "health_path": "/api/health" }
+{
+ "health_path": "/api/health",
+ "proxies": [
+  {
+   "host": "supabase.coinpayportal.com",
+   "port": 8273,
+   "max_body": "512m"
+  }
+ ]
+}
