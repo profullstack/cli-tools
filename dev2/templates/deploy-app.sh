@@ -87,8 +87,17 @@ log "At $SHA"
 
 log "Building $BUILD_SERVICES"
 # Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) come from app.env through the
-# compose build args; export the file so ${K} interpolates. Never printed.
-set -a; . "$ROOT/app.env"; set +a
+# compose build args; export just those so ${K} interpolates. app.env is a compose env
+# file, not shell (unquoted values may contain spaces), so parse it line by line.
+while IFS= read -r line || [ -n "$line" ]; do
+  case $line in ''|'#'*) continue ;; esac
+  key=${line%%=*}; val=${line#*=}
+  case $key in
+    NEXT_PUBLIC_*|VITE_*|PUBLIC_*|NUXT_PUBLIC_*|EXPO_PUBLIC_*|REACT_APP_*|SVELTEKIT_PUBLIC_*)
+      case $val in \"*\") val=${val#\"}; val=${val%\"} ;; esac
+      export "$key=$val" ;;
+  esac
+done < "$ROOT/app.env"
 # shellcheck disable=SC2086
 compose build $BUILD_SERVICES
 
