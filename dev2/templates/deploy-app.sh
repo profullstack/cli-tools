@@ -101,6 +101,21 @@ done < "$ROOT/app.env"
 # shellcheck disable=SC2086
 compose build $BUILD_SERVICES
 
+# If the compose network's subnet changed (the kit moved sites to explicit
+# 10.200.x.0/24 subnets), `up -d` recreates the network in place and Docker's
+# embedded DNS then answers SERVFAIL for service aliases like `redis` while
+# container names still resolve. A clean down/up avoids that.
+WANT_SUBNET=$(grep -oE 'subnet: [0-9./]+' "$ROOT/docker-compose.app.yml" | awk '{print $2}' | head -n1)
+APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
+if [ -n "$WANT_SUBNET" ] && [ -n "$APP_CID" ]; then
+  NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$APP_CID" 2>/dev/null | head -n1)
+  HAVE_SUBNET=$(docker network inspect "$NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
+  if [ -n "$HAVE_SUBNET" ] && [ "$HAVE_SUBNET" != "$WANT_SUBNET" ]; then
+    log "Network subnet changes ($HAVE_SUBNET -> $WANT_SUBNET): recreating the stack"
+    compose down --remove-orphans
+  fi
+fi
+
 log "Starting"
 compose up -d --remove-orphans
 
