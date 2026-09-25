@@ -1375,11 +1375,18 @@ def cmd_supabase_functions(args):
     fdir = f"{WWW}/{s['site']}/supabase/volumes/functions"
     log(f"Edge Functions -> {fdir}: {', '.join(n for n in names if not n.startswith('_'))}")
     ssh("root", f"mkdir -p {fdir} && base64 -d | tar -xzf - -C {fdir} && chmod -R a+rX {fdir}", input=base64.b64encode(buf.getvalue()).decode())
-    # Function secrets: everything the cloud had except the SUPABASE_* the stack injects itself.
-    secrets = {}
+    # Function secrets: the management API lists their NAMES (the "value" it returns is a digest),
+    # so take each value from the app's own variables, which carry the same keys.
+    secrets, missing = {}, []
     if st.get("cloud_ref"):
-        try: secrets = {x["name"]: x["value"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")}
-        except Exception as e: warn(f"could not read cloud function secrets: {e}")
+        try: names = [x["name"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")]
+        except Exception as e: names = []; warn(f"could not list cloud function secrets: {e}")
+        vars_ = site_variables(s)
+        for n in names:
+            v = vars_.get(n)
+            if isinstance(v, str) and v: secrets[n] = v
+            else: missing.append(n)
+        if missing: warn(f"function secrets with no value in the site's variables (add them to {fdir}/secrets.env by hand): {', '.join(missing)}")
     # Secrets that name the cloud project (URL, keys) must point at this stack instead.
     for k, v in list(secrets.items()):
         nv = v
