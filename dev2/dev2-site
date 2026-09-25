@@ -779,8 +779,15 @@ def cmd_cert(args):
                 sh(["porkbun", "rm", zone, r["name"][: -len(zone) - 1], "--type", "CNAME", "--yes"], check=False); note(f"removed Railway acme CNAME {r['name']}")
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
-    out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
-    if out.strip() and "Cert success" not in out: die(out)
+    # A certificate acme.sh issued in the last day is reused (a retry after a dropped
+    # ssh session must not burn Let's Encrypt's duplicate-certificate quota).
+    fresh = ssh("root", f"find /root/.acme.sh/{shlex.quote(domains[0])}_ecc -name fullchain.cer -mmin -1440 2>/dev/null | head -n1", check=False).strip()
+    if fresh:
+        note("certificate issued within the last day; installing it")
+    else:
+        out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
+        if out.strip() and "Cert success" not in out: die(out)
+    ssh("root", f"install -d -m 0750 {cert_dir}")
     ssh("root", f"env HOME=/root /root/.acme.sh/acme.sh --install-cert -d {shlex.quote(domains[0])} --fullchain-file {cert_dir}/fullchain.pem --key-file {cert_dir}/privkey.pem --reloadcmd 'systemctl reload nginx' >/dev/null")
     note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
     mark(s["site"], "cert", cert_domains=domains)
