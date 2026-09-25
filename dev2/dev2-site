@@ -25,6 +25,7 @@ reproduces the box. State per site lives in ~/.local/state/dev2-fleet/<site>.jso
 """
 import argparse
 import datetime as dt
+import glob
 import json
 import os
 import re
@@ -380,14 +381,22 @@ def cmd_scaffold(args):
     sh(["git", "-C", d, "worktree", "add", "-q", "-B", wbranch, wt, f"origin/{branch}"])
     try:
         cfg = repo_config(wt)
+        if getattr(args, "regen", False) and os.path.isdir(os.path.join(wt, ".nixpacks")):
+            shutil.rmtree(os.path.join(wt, ".nixpacks")); note("removed the previous .nixpacks to regenerate it")
         df = find_dockerfile(wt, cfg)
         if not df:
             log("No Dockerfile: generating one with nixpacks (the same builder Railway used)")
             nix = shutil.which("nixpacks") or os.path.expanduser("~/.local/bin/nixpacks")
             env = dict(os.environ)
             if cfg.get("startCommand"): env["NIXPACKS_START_CMD"] = cfg["startCommand"]
-            env.setdefault("NIXPACKS_NODE_VERSION", s.get("node_version", "22"))  # nixpacks defaults to 18, too old for Next 16
-            sh([nix, "build", wt, "--out", wt], env=env)
+            # nixpacks reads NIXPACKS_* from the build environment it is given (--env), not
+            # from its own process environment; the default Node 18 is too old for Next 16.
+            node_v = s.get("node_version", "22")
+            sh([nix, "build", wt, "--out", wt, "--env", f"NIXPACKS_NODE_VERSION={node_v}"], env=env)
+            for nf in glob.glob(os.path.join(wt, ".nixpacks", "*.nix")):
+                txt = open(nf).read()
+                if "nodejs_18" in txt and not re.search(r'"node"\s*:\s*"[^"]*18', open(os.path.join(wt, "package.json")).read() if os.path.exists(os.path.join(wt, "package.json")) else ""):
+                    open(nf, "w").write(txt.replace("nodejs_18", f"nodejs_{node_v}")); note(f"{os.path.basename(nf)}: nodejs_18 -> nodejs_{node_v}")
             # Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) are baked into the bundle at
             # `build`; Railway had them in the build environment. Declare them as ARGs so the
             # compose build args (provision) reach the build, then keep them as ENV for runtime.
@@ -839,7 +848,7 @@ def cmd_migrate(args):
         if name == "dns" and not args.yes and not args.__dict__.get("no_confirm"):
             if not sys.stdin.isatty(): die("dns flip needs --yes when non-interactive")
             if input(f"Flip DNS for {', '.join(s['domains'])} to dev2 now? [y/N] ").strip().lower() != "y": die("stopped before DNS")
-        ns = argparse.Namespace(site=s["site"], ref=None, force=(name == "refresh-db"), public=(name == "verify-public"), no_cert_check=False, redo=False, yes=True)
+        ns = argparse.Namespace(site=s["site"], ref=None, force=(name == "refresh-db"), public=(name == "verify-public"), no_cert_check=False, redo=False, yes=True, regen=False, ignore_logs=False)
         fn(ns)
         st = load_state(s["site"])
     mark(s["site"], "migrated")
@@ -1023,7 +1032,8 @@ def main():
     sub.add_parser("registry").set_defaults(fn=cmd_registry)
     sub.add_parser("firewall").set_defaults(fn=cmd_firewall)
     p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
-    for name, fn in (("show", cmd_show), ("scaffold", cmd_scaffold), ("provision", cmd_provision), ("volumes", cmd_volumes), ("cert", cmd_cert),
+    p = sub.add_parser("scaffold"); p.add_argument("site"); p.add_argument("--regen", action="store_true", help="regenerate .nixpacks even if the branch already has one"); p.set_defaults(fn=cmd_scaffold)
+    for name, fn in (("show", cmd_show), ("provision", cmd_provision), ("volumes", cmd_volumes), ("cert", cmd_cert),
                      ("dns", cmd_dns), ("railway-stop", cmd_railway_stop), ("merge", cmd_merge)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
     p = sub.add_parser("db"); p.add_argument("site"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_db)
