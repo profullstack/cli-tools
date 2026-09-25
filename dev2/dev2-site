@@ -381,6 +381,14 @@ def cmd_scaffold(args):
     sh(["git", "-C", d, "worktree", "add", "-q", "-B", wbranch, wt, f"origin/{branch}"])
     try:
         cfg = repo_config(wt)
+        # Railway keeps build settings in service variables too: a custom Dockerfile path and
+        # the railpack/nixpacks command overrides. Honour them before guessing.
+        rvars = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+        if rvars.get("RAILWAY_DOCKERFILE_PATH") and os.path.exists(os.path.join(wt, rvars["RAILWAY_DOCKERFILE_PATH"])):
+            cfg["dockerfilePath"] = rvars["RAILWAY_DOCKERFILE_PATH"]
+        for rk, nk in (("RAILPACK_INSTALL_CMD", "NIXPACKS_INSTALL_CMD"), ("RAILPACK_BUILD_CMD", "NIXPACKS_BUILD_CMD"), ("RAILPACK_START_CMD", "NIXPACKS_START_CMD"),
+                       ("NIXPACKS_INSTALL_CMD", "NIXPACKS_INSTALL_CMD"), ("NIXPACKS_BUILD_CMD", "NIXPACKS_BUILD_CMD"), ("NIXPACKS_START_CMD", "NIXPACKS_START_CMD"), ("NIXPACKS_NODE_VERSION", "NIXPACKS_NODE_VERSION")):
+            if isinstance(rvars.get(rk), str) and rvars[rk]: cfg[nk] = rvars[rk]
         if getattr(args, "regen", False) and os.path.isdir(os.path.join(wt, ".nixpacks")):
             shutil.rmtree(os.path.join(wt, ".nixpacks")); note("removed the previous .nixpacks to regenerate it")
         df = find_dockerfile(wt, cfg)
@@ -391,8 +399,14 @@ def cmd_scaffold(args):
             if cfg.get("startCommand"): env["NIXPACKS_START_CMD"] = cfg["startCommand"]
             # nixpacks reads NIXPACKS_* from the build environment it is given (--env), not
             # from its own process environment; the default Node 18 is too old for Next 16.
-            node_v = s.get("node_version", "22")
-            sh([nix, "build", wt, "--out", wt, "--env", f"NIXPACKS_NODE_VERSION={node_v}"], env=env)
+            node_v = s.get("node_version") or cfg.get("NIXPACKS_NODE_VERSION") or "22"
+            nix_env = [f"NIXPACKS_NODE_VERSION={node_v}"]
+            if cfg.get("startCommand") and not cfg.get("NIXPACKS_START_CMD"): cfg["NIXPACKS_START_CMD"] = cfg["startCommand"]
+            for k in ("NIXPACKS_INSTALL_CMD", "NIXPACKS_BUILD_CMD", "NIXPACKS_START_CMD"):
+                if cfg.get(k): nix_env.append(f"{k}={cfg[k]}"); note(f"nixpacks {k}: {cfg[k]}")
+            cmd = [nix, "build", wt, "--out", wt]
+            for e in nix_env: cmd += ["--env", e]
+            sh(cmd, env=env)
             for nf in glob.glob(os.path.join(wt, ".nixpacks", "*.nix")):
                 txt = open(nf).read()
                 if "nodejs_18" in txt and not re.search(r'"node"\s*:\s*"[^"]*18', open(os.path.join(wt, "package.json")).read() if os.path.exists(os.path.join(wt, "package.json")) else ""):
