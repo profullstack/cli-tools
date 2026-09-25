@@ -32,6 +32,11 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 | `railway-stop` | `deploymentRemove` + `serviceDisconnect` (or the next push silently redeploys on Railway) |
 | `merge` | merges the scaffold PR; CI deploys the default branch to dev2 |
 | `retire` | `--yes`: `serviceDelete` for the app, companions and data services. Only after `verify --public` |
+| `supabase-stack` | (kind `supabase`, second pass) a self-hosted Supabase stack of its own under `~/www/<site>/supabase` (compose project `<slug>-supabase`, api `8200+n`, db `5500+n`, pooler `6600+n`, subnet `172.31.(100+n).0/24`, `n = port-3200`), public host `supabase.<site>` added to the site's cert/vhost/dns via `sites.d` |
+| `supabase-pull` | dumps the cloud project through its session pooler (password from the app's `SUPABASE_DB_PASSWORD`, or `--reset-password` through the management API) into `/root/dumps/<slug>-supabase-<ts>` |
+| `supabase-load` | loads it (extensions, schema, data, grants, buckets, absolute storage-URL rewrite over every text/json column, realtime, cron) |
+| `supabase-storage` | copies every Storage object through the two Storage APIs (node in a container on dev2; resumable) |
+| `supabase-cutover` | re-points the app (`env_overrides`: URLs, keys, db password), provision + deploy + verify, unschedules the cloud cron jobs |
 
 ## Layout on the box (every site the same)
 
@@ -46,6 +51,11 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 ├── volumes/<name>/          Railway volumes
 └── .deploy-state
 ```
+
+The box clones over ssh with a **read-only GitHub deploy key** (the same per-repo
+key CI uses to reach dev2), under an alias `github.com-<org>__<repo>` in
+`/home/anthony/.ssh/config`; https cloning fails for private repos because the
+deploy account has no GitHub credential.
 
 Ports are allocated once in `sites.json` from 3200 upwards (3010 nichedb, 3020
 rssamplifier, 3100 crawlproof predate the kit). nginx is the only public face.
