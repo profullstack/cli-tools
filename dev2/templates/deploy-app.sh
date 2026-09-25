@@ -19,8 +19,8 @@ APP_DIR="$ROOT/app"
 STATE="$ROOT/.deploy-state"
 # shellcheck disable=SC1091
 . "$ROOT/deploy.env"
-: "${REPO:?deploy.env needs REPO}"
 : "${APP_PORT:?deploy.env needs APP_PORT}"
+[ "${IMAGE_ONLY:-0}" = 1 ] || : "${REPO:?deploy.env needs REPO}"
 BUILD_SERVICES=${BUILD_SERVICES:-app}
 HEALTH_PATH=${HEALTH_PATH:-/}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-300}
