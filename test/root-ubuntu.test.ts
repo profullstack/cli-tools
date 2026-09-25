@@ -1337,3 +1337,182 @@ describe('the user confine', () => {
     expect(SOURCE).toContain('confine is OFF (CONFINE=0)');
   });
 });
+
+/**
+ * A temp dir standing in for /, and the functions under test rewritten to
+ * write inside it. systemctl/apt/dpkg/logrotate/fail2ban-client are stubbed:
+ * what is asserted is what lands on disk and what the run says it changed.
+ */
+function rooted(fns: string[], dir: string, extra = ''): string {
+  return `
+    CHANGED=(); FAILED=(); log() { :; }; info() { echo "$*"; }; warn() { echo "warn: $*"; }
+    note() { echo "changed: $*"; }
+    try() { local d="$1"; shift; "$@" || { echo "failed: $d"; return 1; }; }
+    systemctl() { echo "systemctl $*" >> ${dir}/calls; case "$1" in is-active|is-enabled) return \${FAKE_ACTIVE:-1} ;; cat) return \${FAKE_UNIT:-0} ;; esac; return 0; }
+    apt-get() { echo "apt-get $*" >> ${dir}/calls; }
+    dpkg() { return 0; }
+    logrotate() { return 0; }
+    fail2ban-client() { return 0; }
+    ss() { printf '%s' "\${FAKE_SS:-}"; }
+    eval "$(declare -f ${fns.join(' ')} \\
+      | sed 's#/etc/#${dir}/etc/#g; s#/var/log/#${dir}/var/log/#g; s#/usr/lib/#${dir}/usr/lib/#g')"
+    ${extra}
+  `;
+}
+
+function fakeRoot(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-rotate-'));
+  for (const d of ['etc/nginx', 'etc/logrotate.d', 'var/log', 'etc/networkd-dispatcher/routable.d']) {
+    mkdirSync(join(dir, d), { recursive: true });
+  }
+  return dir;
+}
+
+const decls = (keys: string[]) =>
+  keys.map((k) => new RegExp(`^${k}=.*$`, 'm').exec(SOURCE)?.[0] ?? '').join('\n');
+
+describe('configure_logrotate', () => {
+  const FNS = ['configure_logrotate', 'write_if_changed'];
+  const DECLS = decls(['LOGROTATE_ENABLE', 'LOGROTATE_MAXSIZE', 'LOGROTATE_KEEP']);
+  const run = (dir: string, env = '') =>
+    shell(FNS, `${rooted(FNS, dir, DECLS)}\n${env} configure_logrotate`);
+
+  it('caps nginx logs by size and makes the timer hourly', () => {
+    const dir = fakeRoot();
+    const out = run(dir);
+    const conf = readFileSync(join(dir, 'etc/logrotate.d/nginx'), 'utf8');
+    expect(conf).toContain('maxsize 200M');
+    expect(conf).toContain('rotate 14');
+    expect(conf).toContain('/var/log/nginx/*.log {');
+    const timer = readFileSync(join(dir, 'etc/systemd/system/logrotate.timer.d/hourly.conf'), 'utf8');
+    expect(timer).toContain('OnCalendar=\nOnCalendar=hourly');
+    expect(out).toContain('changed: nginx logs rotate daily or past 200M, 14 kept');
+    expect(out).toContain('changed: logrotate runs hourly');
+  });
+
+  it('writes a stanza logrotate itself accepts', () => {
+    const dir = fakeRoot();
+    run(dir);
+    const conf = join(dir, 'etc/logrotate.d/nginx');
+    // The real logrotate, in debug mode: parses, rotates nothing.
+    const out = execFileSync('logrotate', ['-d', '-s', join(dir, 'state'), conf], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    expect(out).not.toMatch(/error/i);
+  });
+
+  it('changes nothing on a second run', () => {
+    const dir = fakeRoot();
+    run(dir);
+    const out = run(dir);
+    expect(out).not.toContain('changed:');
+    expect(out).toContain('logrotate already hourly');
+  });
+
+  it('honours the knobs', () => {
+    const dir = fakeRoot();
+    run(dir, 'LOGROTATE_MAXSIZE=50M LOGROTATE_KEEP=7');
+    const conf = readFileSync(join(dir, 'etc/logrotate.d/nginx'), 'utf8');
+    expect(conf).toContain('maxsize 50M');
+    expect(conf).toContain('rotate 7');
+  });
+
+  it('leaves everything alone when LOGROTATE_ENABLE=0', () => {
+    const dir = fakeRoot();
+    expect(run(dir, 'LOGROTATE_ENABLE=0')).toContain('logrotate left alone');
+    expect(() => readFileSync(join(dir, 'etc/logrotate.d/nginx'))).toThrow();
+  });
+});
+
+describe('configure_fail2ban', () => {
+  const FNS = ['configure_fail2ban', '_fail2ban_ignoreip', '_fail2ban_ssh_peers', 'write_if_changed'];
+  const DECLS = decls([
+    'FAIL2BAN_ENABLE', 'FAIL2BAN_BANTIME', 'FAIL2BAN_MAXTIME', 'FAIL2BAN_FINDTIME',
+    'FAIL2BAN_MAXRETRY', 'FAIL2BAN_IGNOREIP',
+  ]);
+  const run = (dir: string, env = '') =>
+    shell(FNS, `${rooted(FNS, dir, DECLS)}\n${env} configure_fail2ban`);
+  const jail = (dir: string) => readFileSync(join(dir, 'etc/fail2ban/jail.d/zz-root-ubuntu.local'), 'utf8');
+
+  it('guards sshd with bans that grow on each repeat', () => {
+    const dir = fakeRoot();
+    writeFileSync(join(dir, 'var/log/auth.log'), '');
+    run(dir);
+    const conf = jail(dir);
+    expect(conf).toContain('bantime.increment = true');
+    expect(conf).toContain('bantime = 1h');
+    expect(conf).toContain('bantime.maxtime = 1w');
+    expect(conf).toMatch(/\[sshd\]\nenabled = true\nport = 22\nbackend = auto/);
+  });
+
+  it('never bans loopback, the tailnet, the admin list or the operator connected now', () => {
+    const dir = fakeRoot();
+    writeFileSync(join(dir, 'var/log/auth.log'), '');
+    run(
+      dir,
+      "FAIL2BAN_IGNOREIP='67.205.189.229 10.0.0.0/8' SSH_CLIENT='203.0.113.5 51234 22' " +
+        "FAKE_SS=$'0 0 23.95.228.174:22 198.51.100.7:40000\\n0 0 23.95.228.174:22 203.0.113.5:51234\\n'",
+    );
+    const line = /^ignoreip = (.*)$/m.exec(jail(dir))?.[1].split(' ') ?? [];
+    expect(line).toEqual([
+      '127.0.0.1/8', '::1', '100.64.0.0/10', '67.205.189.229', '10.0.0.0/8', '203.0.113.5', '198.51.100.7',
+    ]);
+  });
+
+  it('reads the journal on a box with no auth.log', () => {
+    const dir = fakeRoot();
+    run(dir);
+    expect(jail(dir)).toContain('backend = systemd');
+  });
+
+  it('follows SSH_PORT', () => {
+    const dir = fakeRoot();
+    writeFileSync(join(dir, 'var/log/auth.log'), '');
+    run(dir, 'SSH_PORT=2048');
+    expect(jail(dir)).toContain('port = 2048');
+  });
+
+  it('does not restart a correctly configured, running fail2ban', () => {
+    const dir = fakeRoot();
+    writeFileSync(join(dir, 'var/log/auth.log'), '');
+    run(dir);
+    const out = run(dir, 'FAKE_ACTIVE=0');
+    expect(out).toContain('fail2ban already guarding sshd');
+    expect(out).not.toContain('changed:');
+  });
+
+  it('stays off when FAIL2BAN_ENABLE=0', () => {
+    const dir = fakeRoot();
+    expect(run(dir, 'FAIL2BAN_ENABLE=0')).toContain('fail2ban disabled');
+  });
+});
+
+describe('quiet_networkd_dispatcher', () => {
+  const FNS = ['quiet_networkd_dispatcher'];
+  const DECLS = decls(['NETWORKD_DISPATCHER_QUIET']);
+  const run = (dir: string, env = '') => shell(FNS, `${rooted(FNS, dir, DECLS)}\n${env} quiet_networkd_dispatcher`);
+  const calls = (dir: string) => {
+    try { return readFileSync(join(dir, 'calls'), 'utf8'); } catch { return ''; }
+  };
+
+  it('stops it when it has no hook scripts', () => {
+    const dir = fakeRoot();
+    expect(run(dir, 'FAKE_ACTIVE=0')).toContain('changed: networkd-dispatcher off');
+    expect(calls(dir)).toContain('systemctl disable --now networkd-dispatcher');
+  });
+
+  it('keeps it when a hook script exists', () => {
+    const dir = fakeRoot();
+    writeFileSync(join(dir, 'etc/networkd-dispatcher/routable.d/50-vpn'), '#!/bin/sh\n');
+    expect(run(dir, 'FAKE_ACTIVE=0')).toContain('networkd-dispatcher kept');
+    expect(calls(dir)).not.toContain('disable');
+  });
+
+  it('does nothing where it is not installed or already off', () => {
+    const dir = fakeRoot();
+    run(dir, 'FAKE_UNIT=1');
+    expect(calls(dir)).not.toContain('disable');
+    expect(run(dir, 'FAKE_ACTIVE=1')).toContain('already off');
+  });
+});
