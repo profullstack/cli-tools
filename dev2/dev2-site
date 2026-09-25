@@ -694,7 +694,7 @@ def cmd_vhost(args):
     conf = tmpl("nginx-vhost.conf").replace("__SITE__", s["site"]).replace("__APP_PORT__", str(s["port"])).replace("__SERVER_NAMES__", " ".join(domains)).replace("__MAX_BODY__", s.get("max_body", "64m"))
     for p in proxies:  # one more server block per proxied host, same certificate
         blk = tmpl("nginx-vhost.conf").split("server {", 2)[2]  # the 443 block only
-        blk = "server {" + blk.replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"]).replace("__MAX_BODY__", p.get("max_body", "512m")).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;\n        large_client_header_buffers 8 64k;")
+        blk = "server {" + blk.replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"]).replace("__MAX_BODY__", p.get("max_body", "512m")).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;").replace("client_max_body_size " + p.get("max_body", "512m") + ";", "client_max_body_size " + p.get("max_body", "512m") + ";\n    large_client_header_buffers 8 64k;")
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")

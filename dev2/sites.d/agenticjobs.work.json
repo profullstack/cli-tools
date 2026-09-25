@@ -1,5 +1,6 @@
 {
  "env_overrides": {
-  "OBSCURA_MCP_URL": ""
+  "OBSCURA_MCP_URL": "",
+  "PGSSLMODE": "require"
  }
 }
