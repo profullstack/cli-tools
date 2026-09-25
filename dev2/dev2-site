@@ -498,7 +498,10 @@ def cmd_provision(args):
     hp = st.get("health_path") or health_url(s, cfg)[1]
     compose = render_compose(s, st, inside)
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
-    deploy_env = f"SITE={s['site']}\nREPO=https://github.com/{s['repo']}.git\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
+    # The box clones over ssh with a read-only GitHub deploy key (private repos have
+    # no https path for the deploy account); the alias keeps one key per repo.
+    key_alias = f"github.com-{s['repo'].replace('/', '__')}"
+    deploy_env = f"SITE={s['site']}\nREPO=git@{key_alias}:{s['repo']}.git\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")
@@ -516,6 +519,15 @@ def cmd_provision(args):
     key = deploy_key(s["repo"])
     pub = open(key + ".pub").read().strip()
     ssh("root", f"install -d -m 700 -o {DEPLOY_USER} -g {DEPLOY_USER} /home/{DEPLOY_USER}/.ssh; touch /home/{DEPLOY_USER}/.ssh/authorized_keys; chown {DEPLOY_USER}:{DEPLOY_USER} /home/{DEPLOY_USER}/.ssh/authorized_keys; chmod 600 /home/{DEPLOY_USER}/.ssh/authorized_keys; grep -qF {shlex.quote(pub)} /home/{DEPLOY_USER}/.ssh/authorized_keys || echo {shlex.quote(pub)} >> /home/{DEPLOY_USER}/.ssh/authorized_keys")
+    # The same key pair, read-only on the repo, lets the box fetch it.
+    slug = s["repo"].replace("/", "__")
+    have = sh(["gh", "api", f"repos/{s['repo']}/keys", "--jq", ".[].key"], check=False)
+    if pub.split()[1] not in have:
+        sh(["gh", "repo", "deploy-key", "add", key + ".pub", "--repo", s["repo"], "--title", "dev2 deploy (dev2-site)"])
+        note("read-only deploy key added to the GitHub repo")
+    ssh_put(open(key).read(), f"/home/{DEPLOY_USER}/.ssh/deploy-keys/{slug}", "0600", own) if ssh("root", f"install -d -m 700 -o {DEPLOY_USER} -g {DEPLOY_USER} /home/{DEPLOY_USER}/.ssh/deploy-keys && echo ok").strip() == "ok" else None
+    ssh("root", f"f=/home/{DEPLOY_USER}/.ssh/config; touch $f; chown {DEPLOY_USER}:{DEPLOY_USER} $f; chmod 600 $f; grep -q '^Host {key_alias}$' $f || printf 'Host {key_alias}\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/deploy-keys/{slug}\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n\n' >> $f")
+    ssh("root", f"k=/home/{DEPLOY_USER}/.ssh/known_hosts; grep -q '^github.com ' $k 2>/dev/null || ssh-keyscan github.com >> $k 2>/dev/null; chown {DEPLOY_USER}:{DEPLOY_USER} $k")
     known = sh(["ssh-keyscan", "-t", "ed25519,rsa", DEV2_HOST], check=False)
     for name, val in (("DEV2_SSH_KEY", open(key).read()), ("DEV2_KNOWN_HOSTS", known), ("DEV2_HOST", DEV2_HOST), ("DEV2_USER", DEPLOY_USER)):
         sh(["gh", "secret", "set", name, "--repo", s["repo"]], input=val)
@@ -623,7 +635,7 @@ def cmd_deploy(args):
     s = site(args.site); st = load_state(s["site"])
     ref = args.ref or st.get("scaffold_branch") or st.get("branch") or s.get("branch") or "main"
     log(f"Deploy {s['site']} @ {ref} on dev2 (as {DEPLOY_USER})")
-    out = ssh(DEPLOY_USER, f"{WWW}/{s['site']}/deploy-app.sh {shlex.quote(ref)}", check=False, timeout=3600)
+    out = ssh(DEPLOY_USER, f"{WWW}/{s['site']}/deploy-app.sh {shlex.quote(ref)} 2>&1", check=False, timeout=3600)
     print(out[-4000:])
     if "Healthy on" not in out: die("deploy did not report healthy; see output above")
     mark(s["site"], "deploy", deployed_ref=ref)
