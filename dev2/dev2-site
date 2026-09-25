@@ -966,8 +966,11 @@ def cmd_supabase_cutover(args):
     cmd_verify(argparse.Namespace(site=s["site"], public=("dns" in load_state(s["site"])["steps"])))
     if st.get("cloud_db_url"):
         log("Unscheduling the CLOUD project's cron jobs")
-        out = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select cron.unschedule(jobname) from cron.job where active\" 2>&1 | tail -n 5", check=False)
-        note(out.strip() or "none")
+        out = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select case when to_regclass('cron.job') is null then 'no pg_cron' else (select coalesce(string_agg(jobname, ', '), 'none') from cron.job where active) end\" 2>&1 | tail -n 3", check=False).strip()
+        if out and out not in ("no pg_cron", "none"):
+            ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select cron.unschedule(jobname) from cron.job where active\" >/dev/null 2>&1", check=False)
+            note(f"unscheduled: {out}")
+        else: note(out or "none")
     mark(s["site"], "supabase-cutover")
     log(f"{s['site']} now runs on its own Supabase. Cloud project {st['cloud_ref']} stays until `retire` (delete it in the dashboard or with the management API).")
 
