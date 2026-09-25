@@ -1,0 +1,794 @@
+#!/usr/bin/env python3
+"""
+dev2-site: move a Railway-hosted site onto dev2 and keep it deploying on merge.
+
+    dev2-site registry                 rebuild sites.json from Railway (the truth)
+    dev2-site list [--kind pg|none|supabase|turso]
+    dev2-site show <site>
+    dev2-site scaffold <site>          deploy-dev2.yml (+ .nixpacks Dockerfile) in the repo, as a PR
+    dev2-site provision <site>         ~/www/<site> on dev2: env, compose, deploy script, deploy key, secrets
+    dev2-site db <site>                database in the shared cluster + copy from Railway Postgres
+    dev2-site volumes <site>           copy Railway volume contents into ~/www/<site>/volumes
+    dev2-site deploy <site> [ref]      build + start on dev2 (as the deploy account)
+    dev2-site cert <site>              Let's Encrypt via Porkbun DNS-01, before DNS moves
+    dev2-site vhost <site>             nginx server block -> 127.0.0.1:<port>
+    dev2-site verify <site> [--public] curl the site through nginx (pinned to dev2, or via DNS)
+    dev2-site dns <site>               flip every domain at Porkbun to dev2
+    dev2-site railway-stop <site>      remove Railway deployments + disconnect the repo watch
+    dev2-site merge <site>             merge the scaffold PR (CI then deploys the default branch)
+    dev2-site migrate <site>           all of the above, in order, resumable
+    dev2-site retire <site> --yes      delete the Railway services (only after migrate)
+
+Run from dev1. dev2 is production: this tool is the only thing that writes to it,
+and everything it writes is derived from Railway + these templates, so a re-run
+reproduces the box. State per site lives in ~/.local/state/dev2-fleet/<site>.json.
+"""
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import secrets
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+TEMPLATES = os.path.join(HERE, "templates")
+REGISTRY = os.path.join(HERE, "sites.json")
+OVERRIDES = os.path.join(HERE, "sites.overrides.json")
+STATE_DIR = os.path.expanduser(os.environ.get("DEV2_STATE_DIR", "~/.local/state/dev2-fleet"))
+
+DEV2_HOST = os.environ.get("DEV2_HOST", "dev2.profullstack.com")
+DEV2_IP = os.environ.get("DEV2_IP", "23.95.228.174")
+DEPLOY_USER = "anthony"
+WWW = f"/home/{DEPLOY_USER}/www"
+SRC_ROOT = os.path.expanduser("~/src/profullstack")
+CLUSTER_ENV = "/home/anthony/www/crawlproof.com/supabase/.env"  # the shared Supabase cluster
+PG_CONTAINER = "supabase-db"
+WORKSPACE_ID = "50db2758-e580-4af6-b904-366b6bb2a71b"
+FIRST_PORT = 3200
+RAILWAY_SSH_KEY = os.path.expanduser("~/.ssh/id_ed25519")
+ACME_EMAIL = "anthony@profullstack.com"
+
+# ------------------------------------------------------------------ utils
+
+def log(msg): print(f"\n===> {msg}", file=sys.stderr, flush=True)
+def note(msg): print(f"     {msg}", file=sys.stderr, flush=True)
+def warn(msg): print(f"WARNING: {msg}", file=sys.stderr, flush=True)
+def die(msg, code=1):
+    print(f"ERROR: {msg}", file=sys.stderr, flush=True); sys.exit(code)
+
+def sh(cmd, check=True, input=None, capture=True, env=None, timeout=None):
+    """Run a command (list or string). Returns stdout (str) when capture."""
+    if isinstance(cmd, str):
+        cmd = ["bash", "-o", "pipefail", "-c", cmd]
+    p = subprocess.run(cmd, input=input, text=True, capture_output=capture, env=env, timeout=timeout)
+    if check and p.returncode != 0:
+        raise RuntimeError(f"command failed ({p.returncode}): {cmd if isinstance(cmd, str) else ' '.join(map(shlex.quote, cmd))}\n{(p.stdout or '')[-1500:]}\n{(p.stderr or '')[-2000:]}")
+    return p.stdout if capture else ""
+
+def ssh(user, cmd, input=None, check=True, timeout=None):
+    return sh(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", f"{user}@{DEV2_HOST}", cmd],
+              input=input, check=check, timeout=timeout)
+
+def ssh_put(content, path, mode="0644", owner=None, user="root"):
+    """Write a file on dev2 from stdin (no scp, no temp file on the box)."""
+    own = f"-o {owner.split(':')[0]} -g {owner.split(':')[-1]} " if owner else ""
+    ssh(user, f"install -m {mode} {own}/dev/stdin {shlex.quote(path)}", input=content)
+
+def state_path(site): return os.path.join(STATE_DIR, f"{site}.json")
+def load_state(site):
+    p = state_path(site)
+    return json.load(open(p)) if os.path.exists(p) else {"site": site, "steps": {}}
+def save_state(site, st):
+    os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
+    tmp = state_path(site) + ".tmp"
+    with open(tmp, "w") as f: json.dump(st, f, indent=1); f.write("\n")
+    os.chmod(tmp, 0o600); os.replace(tmp, state_path(site))
+def mark(site, step, **extra):
+    st = load_state(site); st["steps"][step] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+    st.update(extra); save_state(site, st)
+
+def tmpl(name):
+    with open(os.path.join(TEMPLATES, name)) as f: return f.read()
+
+# ---------------------------------------------------------------- railway
+
+def rw_token():
+    cfg = json.load(open(os.path.expanduser("~/.railway/config.json")))
+    exp = cfg.get("user", {}).get("tokenExpiresAt", 0)
+    if isinstance(exp, str):
+        exp = int(dt.datetime.fromisoformat(exp.replace("Z", "+00:00")).timestamp())
+    if exp < time.time() + 300:
+        subprocess.run(["railway", "whoami"], capture_output=True)
+        cfg = json.load(open(os.path.expanduser("~/.railway/config.json")))
+    tok = cfg.get("user", {}).get("accessToken")
+    if not tok: die("no Railway token: run `railway login`")
+    return tok
+
+def gql(query, variables=None, retries=4):
+    body = json.dumps({"query": query, "variables": variables or {}}).encode()
+    for attempt in range(retries):
+        req = urllib.request.Request("https://backboard.railway.com/graphql/v2", data=body, headers={
+            "Authorization": f"Bearer {rw_token()}", "Content-Type": "application/json", "User-Agent": "dev2-site"})
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r: out = json.load(r)
+        except urllib.error.HTTPError as e:
+            out = {"errors": [{"message": f"http {e.code}: {e.read()[:300]!r}"}]}
+        if "errors" in out:
+            msg = json.dumps(out["errors"])
+            if "Too many" in msg or "Not Authorized" in msg and attempt < retries - 1:
+                time.sleep(5 * (attempt + 1)); subprocess.run(["railway", "whoami"], capture_output=True); continue
+            raise RuntimeError(f"railway api: {msg[:800]}")
+        return out["data"]
+    raise RuntimeError("railway api: gave up")
+
+def rw_variables(pid, eid, sid):
+    return gql("query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}",
+               {"p": pid, "e": eid, "s": sid})["variables"] or {}
+
+def rw_ssh_user(pid, eid, service_name):
+    out = sh(["railway", "ssh", "config", "--dry-run", "-i", RAILWAY_SSH_KEY, "--project", pid,
+              "--environment", eid, "--service", service_name])
+    m = re.search(r"^\s*User\s+(\S+)", out, re.M)
+    if not m: die(f"railway ssh config gave no User for {service_name}")
+    return m.group(1)
+
+def rw_ssh_cmd(user, remote_cmd):
+    """The ssh argv that runs remote_cmd inside a Railway container."""
+    return ["ssh", "-o", "StrictHostKeyChecking=accept-new", "-o", f"UserKnownHostsFile={os.path.expanduser('~/.ssh/known_hosts_railway')}",
+            "-o", "ServerAliveInterval=30", "-o", "LogLevel=ERROR", "-i", RAILWAY_SSH_KEY, "-l", user, "ssh.railway.com", remote_cmd]
+
+def rw_deployments(pid, eid, sid, first=10):
+    d = gql("query($p:String!,$e:String!,$s:String!,$n:Int!){deployments(first:$n,input:{projectId:$p,environmentId:$e,serviceId:$s}){edges{node{id status createdAt}}}}",
+            {"p": pid, "e": eid, "s": sid, "n": first})
+    return [e["node"] for e in d["deployments"]["edges"]]
+
+# --------------------------------------------------------------- registry
+
+DB_HOST_KINDS = (
+    (re.compile(r"postgres(ql)?://[^\s]*railway\.internal"), "pg"),
+    (re.compile(r"postgres(ql)?://[^\s]*\.rlwy\.net"), "pg"),
+    (re.compile(r"\.supabase\.co"), "supabase"),
+    (re.compile(r"libsql://|\.turso\.io"), "turso"),
+    (re.compile(r"postgres(ql)?://"), "pg-ext"),
+)
+
+def classify_db(vars_):
+    kinds = set()
+    for k, v in vars_.items():
+        if not isinstance(v, str): continue
+        if re.search(r"REDIS", k): continue
+        for rx, kind in DB_HOST_KINDS:
+            if rx.search(v):
+                kinds.add(kind); break
+    for pref in ("pg", "supabase", "turso", "pg-ext"):
+        if pref in kinds: return pref, sorted(kinds)
+    return "none", []
+
+def uses_redis(vars_):
+    return any("redis" in str(v).lower() and "railway.internal" in str(v) for v in vars_.values())
+
+def primary_domain(domains):
+    customs = [d for d in domains if not d.endswith(".up.railway.app")]
+    if not customs: return None
+    apex = [d for d in customs if d.count(".") == 1 and not d.startswith("www.")]
+    if apex: return apex[0]
+    nonwww = [d for d in customs if not d.startswith("www.") and not d.startswith("*.")]
+    return (nonwww or customs)[0]
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+def infra_role(src):
+    img = (src or {}).get("image") or ""
+    repo = (src or {}).get("repo") or ""
+    if re.match(r"(ghcr\.io/railwayapp-templates/postgres|postgres:|.*supabase-postgres)", img): return "pg"
+    if re.match(r"redis", img): return "redis"
+    if repo == "6ixfalls/supabase" or "postgres-meta" in img: return "supabase-infra"
+    return "app"
+
+def cmd_registry(args):
+    log("Reading every project, service, domain, volume and database variable from Railway")
+    ws = gql("query($w:String!){workspace(workspaceId:$w){projects{edges{node{id name environments{edges{node{id name}}} services{edges{node{id name serviceInstances{edges{node{environmentId source{repo image} domains{serviceDomains{domain} customDomains{domain}}}}}}}} volumes{edges{node{id name volumeInstances{edges{node{serviceId environmentId mountPath currentSizeMB}}}}}}}}}}}",
+             {"w": WORKSPACE_ID})["workspace"]["projects"]["edges"]
+    overrides = json.load(open(OVERRIDES)) if os.path.exists(OVERRIDES) else {}
+    old = json.load(open(REGISTRY)) if os.path.exists(REGISTRY) else {"sites": {}}
+    used_ports = {s["port"] for s in old["sites"].values() if s.get("port")}
+    used_ports |= {3010, 3020, 3100, 5432, 6379, 6543, 8000}
+    sites = {}
+    for pe in ws:
+        p = pe["node"]
+        envs = {e["node"]["id"]: e["node"]["name"] for e in p["environments"]["edges"]}
+        prod = [k for k, v in envs.items() if v == "production"] or list(envs)
+        if not prod: continue
+        eid = prod[0]
+        mounts = {}
+        for ve in p["volumes"]["edges"]:
+            for vi in ve["node"]["volumeInstances"]["edges"]:
+                n = vi["node"]
+                if n["environmentId"] != eid: continue
+                mounts.setdefault(n["serviceId"], []).append({"name": ve["node"]["name"], "id": ve["node"]["id"], "mountPath": n["mountPath"], "sizeMB": round(n["currentSizeMB"] or 0)})
+        svcs = []
+        for se in p["services"]["edges"]:
+            s = se["node"]
+            inst = [i["node"] for i in s["serviceInstances"]["edges"] if i["node"]["environmentId"] == eid]
+            if not inst: continue
+            i = inst[0]
+            doms = [d["domain"] for d in (i["domains"] or {}).get("customDomains", [])] + [d["domain"] for d in (i["domains"] or {}).get("serviceDomains", [])]
+            try: vars_ = rw_variables(p["id"], eid, s["id"])
+            except RuntimeError as e: warn(f"{p['name']}/{s['name']}: variables: {e}"); vars_ = {}
+            kind, kinds = classify_db(vars_)
+            db_host = redis_host = None
+            for v in vars_.values():
+                if not isinstance(v, str): continue
+                m = re.search(r"postgres(?:ql)?://[^@\s]*@([a-z0-9.-]+\.railway\.internal)", v)
+                if m and not db_host: db_host = m.group(1)
+                m = re.search(r"redis://[^@\s]*@?([a-z0-9.-]+\.railway\.internal)", v)
+                if m and not redis_host: redis_host = m.group(1)
+            svcs.append({"db_host": db_host, "redis_host": redis_host, "id": s["id"], "name": s["name"], "role": infra_role(i["source"]), "repo": (i["source"] or {}).get("repo"),
+                         "image": (i["source"] or {}).get("image"), "domains": doms, "volumes": mounts.get(s["id"], []),
+                         "db": kind, "db_kinds": kinds, "redis": uses_redis(vars_), "nvars": len(vars_),
+                         "port_var": vars_.get("PORT") if isinstance(vars_.get("PORT"), str) and vars_.get("PORT", "").isdigit() else None})
+        apps = [s for s in svcs if s["role"] == "app"]
+        infra = [s for s in svcs if s["role"] != "app"]
+        # One site per app service that has a custom domain; same-repo, domain-less
+        # app services in the same project ride along as companions (workers).
+        fronts = [s for s in apps if primary_domain(s["domains"])]
+        orphans = [s for s in apps if not primary_domain(s["domains"])]
+        for s in fronts:
+            site = primary_domain(s["domains"])
+            comps = [o for o in orphans if o["repo"] and o["repo"] == s["repo"]]
+            shared_repo = sum(1 for f in fronts if f["repo"] == s["repo"]) > 1
+            entry = {
+                "site": site, "project": p["name"], "project_id": p["id"], "environment_id": eid,
+                "service": s["name"], "service_id": s["id"], "repo": s["repo"], "image": s["image"],
+                "domains": [d for d in s["domains"] if not d.endswith(".up.railway.app")],
+                "railway_domains": [d for d in s["domains"] if d.endswith(".up.railway.app")],
+                "db": s["db"], "db_kinds": s["db_kinds"], "redis": s["redis"], "volumes": s["volumes"], "port_var": s["port_var"],
+                "companions": [{"name": c["name"], "id": c["id"], "volumes": c["volumes"], "db": c["db"], "redis": c["redis"]} for c in comps],
+                "db_host": s["db_host"], "redis_host": s["redis_host"],
+                # Data services that belong to this site: in a one-app project all of them,
+                # otherwise the ones whose internal hostname (service name slug) the app points at.
+                "infra": [{"name": i["name"], "id": i["id"], "role": i["role"], "image": i["image"], "volumes": i["volumes"]} for i in infra
+                          if len(fronts) == 1 or slug(i["name"]) in {(s["db_host"] or "").split(".")[0], (s["redis_host"] or "").split(".")[0]}],
+                "shared_repo": shared_repo,
+            }
+            entry.update(overrides.get(site, {}))
+            prev = old["sites"].get(site, {})
+            port = entry.get("port") or prev.get("port")
+            if not port:
+                port = FIRST_PORT
+                while port in used_ports: port += 1
+            used_ports.add(port); entry["port"] = port
+            for k in ("status", "notes", "moved_at"):
+                if k in prev and k not in entry: entry[k] = prev[k]
+            sites[site] = entry
+        for o in orphans:
+            if not any(o["repo"] and o["repo"] == f["repo"] for f in fronts):
+                note(f"{p['name']}/{o['name']}: app service with no custom domain and no same-repo front; skipped (add to sites.overrides.json to include)")
+    reg = {"generated_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "dev2": {"host": DEV2_HOST, "ip": DEV2_IP},
+           "sites": dict(sorted(sites.items()))}
+    with open(REGISTRY, "w") as f: json.dump(reg, f, indent=1); f.write("\n")
+    log(f"{len(sites)} sites -> {REGISTRY}")
+    cmd_list(argparse.Namespace(kind=None, status=None))
+
+def registry():
+    if not os.path.exists(REGISTRY): die("no sites.json: run `dev2-site registry`")
+    return json.load(open(REGISTRY))
+
+SITES_D = os.path.join(HERE, "sites.d")
+
+def with_overrides(s):
+    """sites.d/<site>.json is merged over the registry entry: one small file per site,
+    so parallel migrations never edit a shared file. Keys are the entry's keys
+    (port, health_path, start_command, companion_commands, env_overrides, pg_service,
+    db, db_host, infra, branch, max_body, notes)."""
+    p = os.path.join(SITES_D, f"{s['site']}.json")
+    if os.path.exists(p):
+        s = dict(s); s.update(json.load(open(p)))
+    return s
+
+def site(name):
+    reg = registry()
+    if name in reg["sites"]: return with_overrides(reg["sites"][name])
+    # allow a service name or a repo tail
+    for s in reg["sites"].values():
+        if s["service"] == name or (s["repo"] or "").split("/")[-1] == name: return with_overrides(s)
+    die(f"unknown site {name!r}; `dev2-site list`")
+
+def cmd_list(args):
+    reg = registry()
+    rows = [with_overrides(s) for s in reg["sites"].values() if (not args.kind or with_overrides(s)["db"] == args.kind)]
+    def status(s):
+        st = load_state(s["site"])["steps"]
+        if "retire" in st: return "retired"
+        if "verify-public" in st: return "on-dev2"
+        if "dns" in st: return "dns-flipped"
+        if st: return f"{len(st)} steps"
+        return "-"
+    rows = [s for s in rows if not getattr(args, "status", None) or status(s) == args.status]
+    print(f"{'site':<34} {'port':>5} {'db':<9} {'redis':<5} {'vols':<4} {'comp':<4} {'status':<12} repo")
+    for s in rows:
+        print(f"{s['site']:<34} {s['port']:>5} {s['db']:<9} {'y' if s['redis'] else '-':<5} {len(s['volumes']) or '-':<4} {len(s['companions']) or '-':<4} {status(s):<12} {s['repo'] or s['image']}")
+    print(f"{len(rows)} sites")
+
+def cmd_show(args):
+    print(json.dumps(site(args.site), indent=1)); print(json.dumps(load_state(args.site), indent=1))
+
+# ------------------------------------------------------------ local repo
+
+def checkout_dir(s):
+    repo = s["repo"]
+    if not repo: die(f"{s['site']} is image-only ({s['image']}); nothing to scaffold")
+    org, name = repo.split("/")
+    cands = [f"{SRC_ROOT}/{name}", f"{SRC_ROOT}/{name}.com", f"{SRC_ROOT}/{name.removesuffix('.com')}",
+             os.path.expanduser(f"~/src/{org}/{name}"), os.path.expanduser(f"~/src/{name}")]
+    for c in cands:
+        if os.path.isdir(os.path.join(c, ".git")): return c
+    dest = f"{SRC_ROOT}/{name}" if org == "profullstack" else os.path.expanduser(f"~/src/{org}/{name}")
+    log(f"Cloning {repo} -> {dest}")
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    sh(["gh", "repo", "clone", repo, dest, "--", "-q"])
+    return dest
+
+def default_branch(repo):
+    return sh(["gh", "api", f"repos/{repo}", "--jq", ".default_branch"]).strip()
+
+def repo_config(d):
+    """rootDirectory-free reading of railway.json/toml for healthcheckPath, dockerfilePath, startCommand."""
+    cfg = {}
+    for fn in ("railway.json", "railway.toml"):
+        p = os.path.join(d, fn)
+        if not os.path.exists(p): continue
+        txt = open(p).read()
+        for key in ("healthcheckPath", "dockerfilePath", "startCommand"):
+            m = re.search(rf'"?{key}"?\s*[:=]\s*"([^"]+)"', txt)
+            if m: cfg[key] = m.group(1)
+    return cfg
+
+def find_dockerfile(d, cfg):
+    if cfg.get("dockerfilePath") and os.path.exists(os.path.join(d, cfg["dockerfilePath"])): return cfg["dockerfilePath"]
+    for c in ("Dockerfile", "docker/Dockerfile", "apps/web/Dockerfile"):
+        if os.path.exists(os.path.join(d, c)): return c
+    if os.path.exists(os.path.join(d, ".nixpacks", "Dockerfile")): return ".nixpacks/Dockerfile"
+    return None
+
+def workflow_name(s):
+    return "deploy-dev2.yml" if not s.get("shared_repo") else f"deploy-dev2-{s['site'].replace('.', '-')}.yml"
+
+def health_url(s, cfg):
+    hp = s.get("health_path") or cfg.get("healthcheckPath") or "/"
+    return f"https://{s['site']}{hp}", hp
+
+def cmd_scaffold(args):
+    s = site(args.site)
+    d = checkout_dir(s)
+    branch = s.get("branch") or default_branch(s["repo"])
+    log(f"Scaffold {s['site']}: {s['repo']}@{branch} in {d}")
+    sh(["git", "-C", d, "fetch", "-q", "origin", branch])
+    wt = tempfile.mkdtemp(prefix=f"dev2-{s['site']}-", dir=os.path.join(d, ".claude", "worktrees") if os.path.isdir(os.path.join(d, ".claude", "worktrees")) else os.environ.get("CLAUDE_JOB_DIR", tempfile.gettempdir()))
+    os.rmdir(wt)
+    wbranch = f"ops/dev2-deploy" if not s.get("shared_repo") else f"ops/dev2-deploy-{s['site'].replace('.', '-')}"
+    sh(["git", "-C", d, "worktree", "add", "-q", "-B", wbranch, wt, f"origin/{branch}"])
+    try:
+        cfg = repo_config(wt)
+        df = find_dockerfile(wt, cfg)
+        if not df:
+            log("No Dockerfile: generating one with nixpacks (the same builder Railway used)")
+            nix = shutil.which("nixpacks") or os.path.expanduser("~/.local/bin/nixpacks")
+            env = dict(os.environ)
+            if cfg.get("startCommand"): env["NIXPACKS_START_CMD"] = cfg["startCommand"]
+            sh([nix, "build", wt, "--out", wt], env=env)
+            gi = os.path.join(wt, ".gitignore")
+            if os.path.exists(gi) and re.search(r"^\.?nixpacks", open(gi).read(), re.M):
+                with open(gi, "a") as f: f.write("\n!.nixpacks\n")
+            df = ".nixpacks/Dockerfile"
+            if not os.path.exists(os.path.join(wt, df)): die("nixpacks produced no .nixpacks/Dockerfile")
+        hurl, hp = health_url(s, cfg)
+        wf = tmpl("deploy-dev2.yml").replace("__SITE__", s["site"]).replace("__BRANCH__", branch).replace("__HEALTH_URL__", hurl)
+        os.makedirs(os.path.join(wt, ".github", "workflows"), exist_ok=True)
+        with open(os.path.join(wt, ".github", "workflows", workflow_name(s)), "w") as f: f.write(wf)
+        for path in (".github/workflows", ".nixpacks", ".gitignore"):
+            if os.path.exists(os.path.join(wt, path)): sh(["git", "-C", wt, "add", "-A", path])
+        if not sh(["git", "-C", wt, "status", "--porcelain"]).strip():
+            note("nothing to commit: scaffold already on the branch")
+        else:
+            sh(["git", "-C", wt, "commit", "-q", "--no-verify", "-m", f"ops: deploy {s['site']} to dev2 on merge\n\nRailway deployed this on push; dev2 does not by itself. The workflow ssh's\nto the box and runs /home/anthony/www/{s['site']}/deploy-app.sh, which builds\nthe image from this checkout and restarts the compose stack. Generated by\ncli-tools dev2/dev2-site scaffold.\n\nCo-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"])
+        sh(["git", "-C", wt, "push", "-q", "-u", "origin", f"+{wbranch}"])
+        pr = sh(["gh", "pr", "list", "--repo", s["repo"], "--head", wbranch, "--json", "url,number", "--jq", ".[0].url"]).strip()
+        if not pr:
+            pr = sh(["gh", "pr", "create", "--repo", s["repo"], "--head", wbranch, "--base", branch, "--title", f"ops: deploy {s['site']} to dev2 on merge",
+                     "--body", f"Moves {s['site']} off Railway onto dev2 (`/home/anthony/www/{s['site']}`). Adds the merge-to-deploy workflow" + (" and a nixpacks-generated Dockerfile" if df == ".nixpacks/Dockerfile" else "") + ".\n\nGenerated by cli-tools `dev2/dev2-site scaffold`.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"]).strip()
+        note(f"PR {pr}")
+        mark(s["site"], "scaffold", pr=pr, scaffold_branch=wbranch, branch=branch, dockerfile=df, health_path=hp, checkout=d)
+    finally:
+        sh(["git", "-C", d, "worktree", "remove", "--force", wt], check=False)
+
+# --------------------------------------------------------------- render
+
+def env_quote(v):
+    s = "" if v is None else str(v)
+    if not re.search(r'[\n\r"#]|^\s|\s$', s): return s
+    return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+def render_env(vars_, s, st, service_name=None):
+    """Railway's rendered variables, minus Railway, with the data services re-pointed."""
+    out = {}
+    for k, v in sorted(vars_.items()):
+        if k.startswith("RAILWAY_"): continue
+        if k in ("PORT",) and not s.get("port_var"): continue
+        out[k] = v
+    if s["db"] == "pg" and st.get("database_url"):
+        for k, v in list(out.items()):
+            if isinstance(v, str) and re.search(r"postgres(ql)?://", v) and ("railway.internal" in v or ".rlwy.net" in v):
+                out[k] = st["database_url"]
+        for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"):
+            if k in out:
+                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"]}[k]
+    if s["redis"]:
+        for k, v in list(out.items()):
+            if isinstance(v, str) and "redis" in v.lower() and "railway.internal" in v:
+                out[k] = "redis://redis:6379"
+            if k in ("REDISHOST",): out[k] = "redis"
+            if k in ("REDISPORT",): out[k] = "6379"
+            if k in ("REDISPASSWORD", "REDIS_PASSWORD"): out[k] = ""
+            if k in ("REDISUSER",): out[k] = "default"
+    for k, v in (s.get("env_overrides") or {}).items(): out[k] = v
+    lines = [f"# {s['site']}{' ' + service_name if service_name else ''}: rendered by dev2-site provision from Railway on {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}"]
+    lines += [f"{k}={env_quote(v)}" for k, v in out.items()]
+    return "\n".join(lines) + "\n", out
+
+def render_compose(s, st, app_port_inside):
+    df = st.get("dockerfile") or "Dockerfile"
+    img = s["site"].replace(".", "-")
+    y = [f"# {s['site']} on dev2: rendered by cli-tools dev2/dev2-site provision. Re-run provision to change.",
+         "# nginx on the host terminates TLS and proxies to 127.0.0.1:${APP_PORT}.", "services:"]
+    def service(name, envfile, command=None, ports=True, vols=()):
+        y.append(f"  {name}:")
+        y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
+        y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
+        y.append(f"    environment:\n      PORT: \"{app_port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
+        if command: y.append(f"    command: {json.dumps(shlex.split(command))}")
+        if ports: y.append(f"    ports:\n      - \"127.0.0.1:${{APP_PORT}}:{app_port_inside}\"")
+        if vols:
+            y.append("    volumes:")
+            for v in vols: y.append(f"      - ./volumes/{v['name']}:{v['mountPath']}")
+        if s["redis"]:
+            y.append("    depends_on:\n      redis:\n        condition: service_started")
+        y.append("    logging:\n      driver: json-file\n      options: { max-size: \"50m\", max-file: \"3\" }")
+    service("app", "app.env", command=s.get("start_command"), vols=s["volumes"])
+    for c in s["companions"]:
+        service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []))
+    if s["redis"]:
+        y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
+        y.append("volumes:\n  redisdata:")
+    return "\n".join(y) + "\n"
+
+# -------------------------------------------------------------- provision
+
+def deploy_key(repo):
+    """One ed25519 key per repo (GitHub secrets are per repo). Private half stays in state."""
+    slug = repo.replace("/", "__")
+    path = os.path.join(STATE_DIR, "deploy-keys", slug)
+    if not os.path.exists(path):
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"github-actions-deploy@{repo}", "-f", path])
+    return path
+
+def cmd_provision(args):
+    s = site(args.site); st = load_state(s["site"])
+    root = f"{WWW}/{s['site']}"
+    log(f"Provision {s['site']} -> {DEV2_HOST}:{root} (port {s['port']})")
+    if s["db"] == "pg" and not st.get("database_url"): die("run `dev2-site db` first (the app env needs the new DATABASE_URL)")
+    if s["db"] in ("supabase", "turso") and not st.get("database_url") and not s.get("env_overrides"):
+        warn(f"db kind {s['db']}: app.env keeps pointing at the current {s['db']} until its own migration; set env_overrides in sites.overrides.json when ready")
+    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    inside = s.get("port_var") or "3000"
+    app_env, merged = render_env(vars_, s, st)
+    cfg = repo_config(st.get("checkout") or checkout_dir(s))
+    if not st.get("dockerfile"):
+        st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
+    branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
+    hp = st.get("health_path") or health_url(s, cfg)[1]
+    compose = render_compose(s, st, inside)
+    build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
+    deploy_env = f"SITE={s['site']}\nREPO=https://github.com/{s['repo']}.git\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
+    ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
+    for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
+        ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")
+    own = f"{DEPLOY_USER}:{DEPLOY_USER}"
+    ssh_put(app_env, f"{root}/app.env", "0600", own)
+    for c in s["companions"]:
+        cv = rw_variables(s["project_id"], s["environment_id"], c["id"])
+        cenv, _ = render_env(cv, s, st, c["name"])
+        ssh_put(cenv, f"{root}/{c['name']}.env", "0600", own)
+    ssh_put(deploy_env, f"{root}/deploy.env", "0640", own)
+    ssh_put(compose, f"{root}/docker-compose.app.yml", "0640", own)
+    ssh_put(tmpl("deploy-app.sh"), f"{root}/deploy-app.sh", "0755", own)
+    note(f"{len(merged)} variables in app.env, {len(s['companions'])} companion env files, compose + deploy-app.sh installed")
+    # Deploy key + GitHub secrets
+    key = deploy_key(s["repo"])
+    pub = open(key + ".pub").read().strip()
+    ssh("root", f"install -d -m 700 -o {DEPLOY_USER} -g {DEPLOY_USER} /home/{DEPLOY_USER}/.ssh; touch /home/{DEPLOY_USER}/.ssh/authorized_keys; chown {DEPLOY_USER}:{DEPLOY_USER} /home/{DEPLOY_USER}/.ssh/authorized_keys; chmod 600 /home/{DEPLOY_USER}/.ssh/authorized_keys; grep -qF {shlex.quote(pub)} /home/{DEPLOY_USER}/.ssh/authorized_keys || echo {shlex.quote(pub)} >> /home/{DEPLOY_USER}/.ssh/authorized_keys")
+    known = sh(["ssh-keyscan", "-t", "ed25519,rsa", DEV2_HOST], check=False)
+    for name, val in (("DEV2_SSH_KEY", open(key).read()), ("DEV2_KNOWN_HOSTS", known), ("DEV2_HOST", DEV2_HOST), ("DEV2_USER", DEPLOY_USER)):
+        sh(["gh", "secret", "set", name, "--repo", s["repo"]], input=val)
+    note(f"deploy key {os.path.basename(key)} authorized on dev2; DEV2_* secrets set on {s['repo']}")
+    mark(s["site"], "provision", root=root, branch=branch, health_path=hp, dockerfile=st["dockerfile"], checkout=st.get("checkout") or checkout_dir(s))
+
+# ------------------------------------------------------------------- db
+
+def cluster_pg_password():
+    return ssh("root", f"grep '^POSTGRES_PASSWORD=' {CLUSTER_ENV} | cut -d= -f2-").strip()
+
+def pg_admin(sql, db="postgres"):
+    return ssh("root", f"docker exec -i {PG_CONTAINER} psql -U supabase_admin -h localhost -d {shlex.quote(db)} -X -At -v ON_ERROR_STOP=1", input=sql)
+
+def db_name_for(s):
+    return s.get("db_name") or re.sub(r"[^a-z0-9]+", "_", s["site"].lower()).strip("_")
+
+def cmd_db(args):
+    s = site(args.site); st = load_state(s["site"])
+    if s["db"] != "pg": die(f"{s['site']} db kind is {s['db']}; `db` copies Railway Postgres only (see README for supabase/turso)")
+    pgs = [i for i in s["infra"] if i["role"] == "pg"]
+    if not pgs: die(f"no Postgres service found beside {s['site']} in project {s['project']}; set infra in sites.overrides.json")
+    want = s.get("pg_service") or (s.get("db_host") or "").split(".")[0]
+    pg = next((p for p in pgs if p["name"] == want or slug(p["name"]) == want), None)
+    if pg is None:
+        if len(pgs) > 1: die(f"{len(pgs)} Postgres services in the project ({', '.join(p['name'] for p in pgs)}) and none matches {want!r}; set pg_service in sites.overrides.json")
+        pg = pgs[0]
+    db = db_name_for(s)
+    log(f"Database {db} in the shared cluster, copied from Railway {s['project']}/{pg['name']}")
+    pw = cluster_pg_password()
+    # The app connects as `postgres` (the only role pg_hba lets in from another compose
+    # network); isolation is one database per app, same as nichedb and rssamplifier.
+    exists = pg_admin(f"select count(*) from pg_database where datname='{db}'").strip()
+    if exists == "0":
+        pg_admin(f'create database "{db}" owner postgres'); note(f"created database {db}")
+    else:
+        note(f"database {db} exists")
+        if not args.force and pg_admin("select count(*) from pg_tables where schemaname='public'", db).strip() != "0":
+            die(f"{db} already has tables; re-run with --force to drop and reload")
+        if args.force:
+            pg_admin("drop schema public cascade; create schema public; grant all on schema public to postgres, public", db); note("dropped public schema")
+    st.update({"db_name": db, "db_user": "postgres", "db_password": pw,
+               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?sslmode=require"})
+    save_state(s["site"], st)
+    # Dump inside the Railway container (pg_dump matches the server there) and stream to dev2.
+    user = rw_ssh_user(s["project_id"], s["environment_id"], pg["name"])
+    pgvars = rw_variables(s["project_id"], s["environment_id"], pg["id"])
+    src_db = pgvars.get("PGDATABASE") or pgvars.get("POSTGRES_DB") or "railway"
+    dump = f"/root/dumps/{db}-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.dump"
+    ssh("root", "install -d -m 700 /root/dumps")
+    log(f"pg_dump {src_db} via ssh.railway.com -> {DEV2_HOST}:{dump}")
+    remote = f"PGPASSWORD=\"$PGPASSWORD\" pg_dump -Fc --no-owner --no-privileges -h localhost -U \"${{PGUSER:-postgres}}\" -d {shlex.quote(src_db)}"
+    cmd = " ".join(map(shlex.quote, rw_ssh_cmd(user, remote))) + f" | ssh -o BatchMode=yes root@{DEV2_HOST} 'cat > {dump}'"
+    sh(cmd, capture=False, timeout=6 * 3600)
+    size = ssh("root", f"stat -c%s {dump}").strip()
+    note(f"dump {int(size)/1e6:.1f} MB")
+    if int(size) < 1000: die("dump is suspiciously small; check the Railway ssh user and PG variables")
+    log("pg_restore into the cluster")
+    toc = ssh("root", f"docker run --rm -i -v /root/dumps:/dumps:ro postgres:17 pg_restore -l /dumps/{os.path.basename(dump)}", check=False)
+    ext = sorted({m.group(1) for m in re.finditer(r"^\d+; \d+ \d+ EXTENSION - (\S+)", toc, re.M)})
+    for e in ext:
+        if e in ("plpgsql",): continue
+        pg_admin(f'create extension if not exists "{e}" cascade', db); note(f"extension {e}")
+    out = ssh("root", f"docker exec -i {PG_CONTAINER} pg_restore -U postgres -h localhost -d {shlex.quote(db)} --no-owner --no-privileges --exit-on-error < {dump} 2>&1 | tail -n 20", check=False)
+    if out.strip(): note(out.strip())
+    st["dump"] = dump; save_state(s["site"], st)
+    log("Verifying row counts (source vs target)")
+    count_sql = "select relname from pg_class c join pg_namespace n on n.oid=c.relnamespace where n.nspname='public' and c.relkind='r' order by 1"
+    tables = ssh("root", f"docker exec -i {PG_CONTAINER} psql -U postgres -h localhost -d {shlex.quote(db)} -X -At", input=count_sql).split()
+    q = " union all ".join(f"select '{t}', count(*) from \"{t}\"" for t in tables) if tables else "select 'none', 0"
+    tgt = ssh("root", f"docker exec -i {PG_CONTAINER} psql -U postgres -h localhost -d {shlex.quote(db)} -X -At -F' '", input=q)
+    src = sh(rw_ssh_cmd(user, f"PGPASSWORD=\"$PGPASSWORD\" psql -h localhost -U \"${{PGUSER:-postgres}}\" -d {shlex.quote(src_db)} -X -At -F' '"), input=q)
+    tgt_c = dict(l.split(" ", 1) for l in tgt.split("\n") if l.strip()); src_c = dict(l.split(" ", 1) for l in src.split("\n") if l.strip())
+    bad = [(t, src_c.get(t), tgt_c.get(t)) for t in tables if src_c.get(t) != tgt_c.get(t)]
+    note(f"{len(tables)} tables, {sum(int(v) for v in tgt_c.values())} rows on dev2")
+    for t, a, b in bad: warn(f"{t}: source {a} vs dev2 {b} (writes continue on Railway until DNS moves; re-run db --force at cutover if the gap matters)")
+    mark(s["site"], "db", db_tables=len(tables), db_rows=sum(int(v) for v in tgt_c.values()), db_mismatch=[t for t, _, _ in bad])
+
+def cmd_refresh_db(args):
+    """Re-copy the database seconds before DNS moves (writes kept landing on Railway
+    while the box was being set up), then restart the app so no connection holds
+    the old schema."""
+    s = site(args.site)
+    cmd_db(argparse.Namespace(site=s["site"], force=True))
+    ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env restart", timeout=600)
+    note("app restarted on the refreshed database")
+    mark(s["site"], "refresh-db")
+
+def cmd_volumes(args):
+    s = site(args.site); st = load_state(s["site"])
+    root = f"{WWW}/{s['site']}"
+    targets = [(s["service"], v) for v in s["volumes"]] + [(c["name"], v) for c in s["companions"] for v in c.get("volumes", [])]
+    if not targets: note("no volumes"); mark(s["site"], "volumes"); return
+    for svc, v in targets:
+        user = rw_ssh_user(s["project_id"], s["environment_id"], svc)
+        log(f"Volume {v['name']} ({v['sizeMB']} MB) from {svc}:{v['mountPath']} -> {root}/volumes/{v['name']}")
+        cmd = " ".join(map(shlex.quote, rw_ssh_cmd(user, f"tar -C {shlex.quote(v['mountPath'])} -cf - ."))) + \
+              f" | ssh -o BatchMode=yes root@{DEV2_HOST} 'tar -C {root}/volumes/{shlex.quote(v['name'])} -xf - && chmod -R a+rwX {root}/volumes/{shlex.quote(v['name'])} && du -sh {root}/volumes/{shlex.quote(v['name'])}'"
+        note(sh(cmd, timeout=6 * 3600).strip())
+    mark(s["site"], "volumes")
+
+# ----------------------------------------------------------- box steps
+
+def cmd_deploy(args):
+    s = site(args.site); st = load_state(s["site"])
+    ref = args.ref or st.get("scaffold_branch") or st.get("branch") or s.get("branch") or "main"
+    log(f"Deploy {s['site']} @ {ref} on dev2 (as {DEPLOY_USER})")
+    out = ssh(DEPLOY_USER, f"{WWW}/{s['site']}/deploy-app.sh {shlex.quote(ref)}", check=False, timeout=3600)
+    print(out[-4000:])
+    if "Healthy on" not in out: die("deploy did not report healthy; see output above")
+    mark(s["site"], "deploy", deployed_ref=ref)
+
+def porkbun_keys():
+    f = os.path.expanduser("~/.config/cli-tools/credentials.json")
+    c = json.load(open(f))
+    def get(*names):
+        for n in names:
+            v = c.get(n)
+            if isinstance(v, dict): v = v.get("value")
+            if v: return v
+        return os.environ.get(names[-1])
+    k, sk = get("porkbun", "PORKBUN_API_KEY"), get("porkbun_secret", "PORKBUN_SECRET_API_KEY")
+    if not (k and sk): die("no Porkbun keys in ~/.config/cli-tools/credentials.json (cli-tools config pull)")
+    return k, sk
+
+def cmd_cert(args):
+    s = site(args.site)
+    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 and f"www.{s['site']}" not in s["domains"] else [])))
+    k, sk = porkbun_keys()
+    cert_dir = f"/etc/nginx/ssl/{s['site']}"
+    log(f"Certificate for {', '.join(domains)} (acme.sh, Porkbun DNS-01, issued before DNS moves)")
+    ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
+    ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
+    out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
+    if out.strip() and "Cert success" not in out: die(out)
+    ssh("root", f"env HOME=/root /root/.acme.sh/acme.sh --install-cert -d {shlex.quote(domains[0])} --fullchain-file {cert_dir}/fullchain.pem --key-file {cert_dir}/privkey.pem --reloadcmd 'systemctl reload nginx' >/dev/null")
+    note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
+    mark(s["site"], "cert", cert_domains=domains)
+
+def cmd_vhost(args):
+    s = site(args.site)
+    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 else [])))
+    ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
+    conf = tmpl("nginx-vhost.conf").replace("__SITE__", s["site"]).replace("__APP_PORT__", str(s["port"])).replace("__SERVER_NAMES__", " ".join(domains)).replace("__MAX_BODY__", s.get("max_body", "64m"))
+    log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
+    ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
+    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    mark(s["site"], "vhost")
+
+def cmd_verify(args):
+    s = site(args.site); st = load_state(s["site"])
+    hp = st.get("health_path") or "/"
+    ok = True
+    for d in s["domains"]:
+        resolve = [] if args.public else ["--resolve", f"{d}:443:{DEV2_IP}"]
+        code = sh(["curl", "-sk", "-o", "/dev/null", "-m", "30", "-w", "%{http_code}", *resolve, f"https://{d}{hp}"], check=False).strip()
+        good = code[:1] in ("2", "3") or code in ("401", "403")
+        ok &= good
+        note(f"{d}{hp} -> {code} {'ok' if good else 'FAIL'}{' (pinned to dev2)' if not args.public else ''}")
+    if not ok: die("verify failed")
+    mark(s["site"], "verify-public" if args.public else "verify")
+
+def cmd_dns(args):
+    s = site(args.site)
+    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 else [])))
+    zones = {}
+    for d in domains:
+        zone = ".".join(d.split(".")[-2:]); zones.setdefault(zone, []).append(d)
+    os.makedirs(os.path.join(STATE_DIR, "dns"), exist_ok=True)
+    for zone, ds in zones.items():
+        log(f"Porkbun {zone}: {', '.join(ds)} -> A {DEV2_IP}")
+        backup = os.path.join(STATE_DIR, "dns", f"{zone}.{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.json")
+        with open(backup, "w") as f: f.write(sh(["porkbun", "ls", zone, "--json"]))
+        recs = json.load(open(backup))
+        recs = recs.get("records", recs) if isinstance(recs, dict) else recs
+        for d in ds:
+            host = "@" if d == zone else d[: -len(zone) - 1]
+            if host.startswith("*"): note(f"{d}: wildcard; set A * manually if needed"); host = "*"
+            for r in recs:
+                if r.get("name") == d and r.get("type") in ("ALIAS", "CNAME", "A", "AAAA"):
+                    sh(["porkbun", "rm", zone, host, "--type", r["type"], "--yes"], check=False)
+            sh(["porkbun", "set", zone, host, "A", DEV2_IP, "--ttl", "600"])
+            for r in recs:
+                if r.get("name") == f"_railway-verify.{d}" and r.get("type") == "TXT":
+                    sh(["porkbun", "rm", zone, f"_railway-verify.{host}" if host != "@" else "_railway-verify", "--type", "TXT", "--yes"], check=False)
+            note(f"{d} -> A {DEV2_IP}")
+    mark(s["site"], "dns", dns_flipped=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
+
+def cmd_railway_stop(args):
+    s = site(args.site)
+    for svc in [{"name": s["service"], "id": s["service_id"]}] + s["companions"]:
+        log(f"Railway: stop {s['project']}/{svc['name']} and disconnect its repo watch")
+        for d in rw_deployments(s["project_id"], s["environment_id"], svc["id"]):
+            if d["status"] in ("SUCCESS", "BUILDING", "DEPLOYING", "INITIALIZING", "WAITING", "SLEEPING", "CRASHED", "NEEDS_APPROVAL"):
+                try:
+                    gql("mutation($id:String!){deploymentRemove(id:$id)}", {"id": d["id"]}); note(f"removed deployment {d['id'][:8]} ({d['status']})")
+                except RuntimeError as e:
+                    if "not stoppable" in str(e).lower() or "BUILDING" in d["status"]:
+                        gql("mutation($id:String!){deploymentCancel(id:$id)}", {"id": d["id"]}); note(f"cancelled {d['id'][:8]}")
+                    else: warn(str(e)[:200])
+        try:
+            gql("mutation($id:String!){serviceDisconnect(id:$id){id}}", {"id": svc["id"]}); note("repo disconnected (a push no longer redeploys on Railway)")
+        except RuntimeError as e: warn(f"serviceDisconnect: {str(e)[:200]}")
+    mark(s["site"], "railway-stop")
+
+def cmd_merge(args):
+    s = site(args.site); st = load_state(s["site"])
+    pr = st.get("pr")
+    if not pr: die("no scaffold PR in state")
+    log(f"Merging {pr}")
+    for _ in range(60):
+        state = sh(["gh", "pr", "view", pr, "--json", "state,mergeable,statusCheckRollup", "--jq", "[.state, .mergeable, ([.statusCheckRollup[]? | .conclusion // .status] | join(\",\"))] | join(\" \")"]).strip()
+        st_, mergeable, checks = (state.split(" ") + ["", ""])[:3]
+        if st_ == "MERGED": note("already merged"); break
+        pending = any(c in checks for c in ("IN_PROGRESS", "QUEUED", "PENDING", "EXPECTED"))
+        failed = any(c in checks for c in ("FAILURE", "CANCELLED", "TIMED_OUT", "ACTION_REQUIRED"))
+        if failed: die(f"checks failed on {pr}: {checks}")
+        if not pending:
+            sh(["gh", "pr", "merge", pr, "--squash", "--delete-branch"], check=False)
+            if sh(["gh", "pr", "view", pr, "--json", "state", "--jq", ".state"]).strip() == "MERGED": note("merged"); break
+            sh(["gh", "pr", "merge", pr, "--squash", "--delete-branch", "--admin"], check=False)
+        time.sleep(20)
+    mark(s["site"], "merge")
+
+def cmd_migrate(args):
+    s = site(args.site); st = load_state(s["site"])
+    steps = [("scaffold", cmd_scaffold), ("db", cmd_db) if s["db"] == "pg" else None, ("provision", cmd_provision), ("volumes", cmd_volumes),
+             ("deploy", cmd_deploy), ("cert", cmd_cert), ("vhost", cmd_vhost), ("verify", cmd_verify),
+             ("refresh-db", cmd_refresh_db) if s["db"] == "pg" else None, ("dns", cmd_dns),
+             ("railway-stop", cmd_railway_stop), ("merge", cmd_merge), ("verify-public", cmd_verify)]
+    for step in filter(None, steps):
+        name, fn = step
+        if name in st["steps"] and not args.redo: note(f"{name}: done {st['steps'][name]}"); continue
+        if name == "dns" and not args.yes and not args.__dict__.get("no_confirm"):
+            if not sys.stdin.isatty(): die("dns flip needs --yes when non-interactive")
+            if input(f"Flip DNS for {', '.join(s['domains'])} to dev2 now? [y/N] ").strip().lower() != "y": die("stopped before DNS")
+        ns = argparse.Namespace(site=s["site"], ref=None, force=(name == "refresh-db"), public=(name == "verify-public"), no_cert_check=False, redo=False, yes=True)
+        fn(ns)
+        st = load_state(s["site"])
+    mark(s["site"], "migrated")
+    log(f"{s['site']} is on dev2. Railway services left for `dev2-site retire {s['site']} --yes`: {', '.join([s['service']] + [c['name'] for c in s['companions']] + [i['name'] for i in s['infra']])}")
+
+def cmd_retire(args):
+    s = site(args.site); st = load_state(s["site"])
+    if "verify-public" not in st["steps"] and not args.force: die("site not verified public on dev2; refuse to delete Railway services (or --force)")
+    if not args.yes: die("--yes required")
+    targets = [{"name": s["service"], "id": s["service_id"]}] + s["companions"] + s["infra"]
+    for t in targets:
+        log(f"Railway: delete {s['project']}/{t['name']}")
+        try: gql("mutation($id:String!){serviceDelete(id:$id)}", {"id": t["id"]}); note("deleted")
+        except RuntimeError as e: warn(str(e)[:200])
+    mark(s["site"], "retire")
+
+# ----------------------------------------------------------------- main
+
+def main():
+    ap = argparse.ArgumentParser(prog="dev2-site", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("registry").set_defaults(fn=cmd_registry)
+    p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
+    for name, fn in (("show", cmd_show), ("scaffold", cmd_scaffold), ("provision", cmd_provision), ("volumes", cmd_volumes), ("cert", cmd_cert),
+                     ("dns", cmd_dns), ("railway-stop", cmd_railway_stop), ("merge", cmd_merge)):
+        p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
+    p = sub.add_parser("db"); p.add_argument("site"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_db)
+    p = sub.add_parser("deploy"); p.add_argument("site"); p.add_argument("ref", nargs="?"); p.set_defaults(fn=cmd_deploy)
+    p = sub.add_parser("vhost"); p.add_argument("site"); p.add_argument("--no-cert-check", action="store_true"); p.set_defaults(fn=cmd_vhost)
+    p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.set_defaults(fn=cmd_verify)
+    p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
+    p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
+    p = sub.add_parser("retire"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_retire)
+    args = ap.parse_args()
+    try: args.fn(args)
+    except RuntimeError as e: die(str(e))
+
+if __name__ == "__main__":
+    main()
