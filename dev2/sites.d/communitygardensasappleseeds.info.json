@@ -1,4 +1,4 @@
 {
- "skip": true,
- "notes": "Anthony 2026-09-25: stays on Railway (DNS at Cloudflare). Never retire, never migrate."
+ "health_path": "/",
+ "notes": "2026-09-25: was `skip` (stay on Railway, DNS at Cloudflare); Anthony reversed that the same day (\"move it all off railway\"). Zone is at Cloudflare (kobe/maxine), no Cloudflare token in the vault: the `dns` step cannot flip it and Porkbun DNS-01 cannot issue, so the cert is HTTP-01 (`cert` falls back to cmd_cert_http) AFTER the apex and www A records point at dev2 unproxied. Stateless Next site: no database; the Railway volume at /data/db is copied but nothing in the repo reads it."
 }
