@@ -209,9 +209,11 @@ for e in ${EXTENSIONS:-}; do sql_admin -c "create extension if not exists \"$e\"
 
 log "Firewall: $DB_PORT reachable from $ALLOW_IPS, loopback and the docker networks only"
 while iptables -D DOCKER-USER -p tcp --dport "$DB_PORT" -j DROP 2>/dev/null; do :; done
-for ip in $ALLOW_IPS 127.0.0.1 172.16.0.0/12; do while iptables -D DOCKER-USER -s "$ip" -p tcp --dport "$DB_PORT" -j ACCEPT 2>/dev/null; do :; done; done
+for ip in $ALLOW_IPS 127.0.0.1 172.16.0.0/12 192.168.0.0/16 10.0.0.0/8; do while iptables -D DOCKER-USER -s "$ip" -p tcp --dport "$DB_PORT" -j ACCEPT 2>/dev/null; do :; done; done
 iptables -I DOCKER-USER 1 -p tcp --dport "$DB_PORT" -j DROP
 iptables -I DOCKER-USER 1 -s 172.16.0.0/12 -p tcp --dport "$DB_PORT" -j ACCEPT
+iptables -I DOCKER-USER 1 -s 192.168.0.0/16 -p tcp --dport "$DB_PORT" -j ACCEPT
+iptables -I DOCKER-USER 1 -s 10.0.0.0/8 -p tcp --dport "$DB_PORT" -j ACCEPT
 iptables -I DOCKER-USER 1 -s 127.0.0.1 -p tcp --dport "$DB_PORT" -j ACCEPT
 for ip in $ALLOW_IPS; do iptables -I DOCKER-USER 1 -s "$ip" -p tcp --dport "$DB_PORT" -j ACCEPT; done
 mkdir -p /etc/iptables && iptables-save > /etc/iptables/rules.v4

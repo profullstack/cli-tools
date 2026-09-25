@@ -788,6 +788,18 @@ def cmd_migrate(args):
     mark(s["site"], "migrated")
     log(f"{s['site']} is on dev2. Railway services left for `dev2-site retire {s['site']} --yes`: {', '.join([s['service']] + [c['name'] for c in s['companions']] + [i['name'] for i in s['infra']])}")
 
+def cmd_firewall(args):
+    """Re-apply the data-port allowlist for 5432 and every Supabase stack's db port."""
+    ports = {5432}
+    for f in os.listdir(STATE_DIR) if os.path.isdir(STATE_DIR) else []:
+        if f.endswith(".json"):
+            st = json.load(open(os.path.join(STATE_DIR, f)))
+            if st.get("sb_ports"): ports.add(st["sb_ports"]["db"])
+    log(f"Firewall on dev2 for ports {sorted(ports)}")
+    ssh("root", "install -d -m 700 /root/dev2-kit")
+    ssh_put(tmpl("firewall-data-ports.sh"), "/root/dev2-kit/firewall-data-ports.sh", "0700")
+    print(ssh("root", f"env PORTS={shlex.quote(' '.join(map(str, sorted(ports))))} bash /root/dev2-kit/firewall-data-ports.sh 2>&1"))
+
 def cmd_retire(args):
     s = site(args.site); st = load_state(s["site"])
     if "verify-public" not in st["steps"] and not args.force: die("site not verified public on dev2; refuse to delete Railway services (or --force)")
@@ -949,6 +961,7 @@ def main():
     ap = argparse.ArgumentParser(prog="dev2-site", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("registry").set_defaults(fn=cmd_registry)
+    sub.add_parser("firewall").set_defaults(fn=cmd_firewall)
     p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
     for name, fn in (("show", cmd_show), ("scaffold", cmd_scaffold), ("provision", cmd_provision), ("volumes", cmd_volumes), ("cert", cmd_cert),
                      ("dns", cmd_dns), ("railway-stop", cmd_railway_stop), ("merge", cmd_merge)):

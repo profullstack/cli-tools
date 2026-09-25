@@ -1,0 +1,9 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.threatcrush.com",
+   "port": 8270,
+   "max_body": "512m"
+  }
+ ]
+}
