@@ -74,4 +74,9 @@ log "Snapshot AFTER (vs the cloud's estimates in counts-estimate.tsv)"
 strict -At -F$'\t' -c "select n.nspname||'.'||c.relname, c.reltuples::bigint from pg_class c join pg_namespace n on n.oid=c.relnamespace where c.relkind='r' and n.nspname='public' order by 1" > "$DUMP/counts-after.tsv" || true
 strict -At -c "select 'tables='||(select count(*) from information_schema.tables where table_schema='public')||' users='||(select count(*) from auth.users)||' identities='||(select count(*) from auth.identities)||' size='||pg_size_pretty(pg_database_size(current_database()))"
 strict -c "analyze" >/dev/null 2>&1 || true
+# PostgREST built its schema cache before these tables existed; without this every
+# request answers PGRST205 "Could not find the table ... in the schema cache".
+log "Reloading PostgREST's schema cache"
+strict -c "notify pgrst, 'reload schema'" >/dev/null
+docker restart "${DBC%-db}-rest" >/dev/null 2>&1 || true
 log "Loaded."

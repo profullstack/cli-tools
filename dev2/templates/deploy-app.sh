@@ -79,6 +79,10 @@ SHA=$(git -C "$APP_DIR" rev-parse --verify --quiet "origin/$TARGET^{commit}" \
    || true)
 [ -n "$SHA" ] || die "cannot resolve '$TARGET' to a commit"
 git -C "$APP_DIR" checkout -q --detach "$SHA"
+# The deploy account's umask leaves files 0640; an image that runs as a non-root
+# user (node, bun) then dies with EACCES reading its own source. Railway's git
+# uploads were world-readable, so match that.
+chmod -R u+rwX,go+rX "$APP_DIR" 2>/dev/null || true
 log "At $SHA"
 
 log "Building $BUILD_SERVICES"
