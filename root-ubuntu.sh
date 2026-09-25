@@ -4464,16 +4464,26 @@ FAIL2BAN_MAXRETRY="${FAIL2BAN_MAXRETRY:-5}"
 # boxes you administer from here.
 FAIL2BAN_IGNOREIP="${FAIL2BAN_IGNOREIP:-}"
 
-# Addresses connected to sshd right now: the operator running this script.
-# Banning them is a lockout, so they go in ignoreip.
+# Addresses logged in over SSH right now: the operator running this script.
+# Banning them is a lockout, so they go in ignoreip. "Connected" is not enough:
+# a brute-forcer mid-attempt holds an established connection too, and would be
+# exempted for good. So a peer counts only if sshd also logged a successful
+# login from it (auth.log, or the journal on a box without one).
 _fail2ban_ssh_peers() {
-	local peer
+	local peer accepted
 	[[ -n "${SSH_CLIENT:-}" ]] && printf '%s\n' "${SSH_CLIENT%% *}"
 	command -v ss >/dev/null 2>&1 || return 0
+	if [[ -f /var/log/auth.log ]]; then
+		accepted="$(tail -n 20000 /var/log/auth.log 2>/dev/null)"
+	else
+		accepted="$(journalctl -q --no-pager --since -2d -t sshd -t sshd-session 2>/dev/null | tail -n 20000)"
+	fi
+	accepted="$(printf '%s\n' "$accepted" | sed -n 's/.*Accepted [^ ]* for [^ ]* from \([^ ]*\) port.*/\1/p' | sort -u)"
+	[[ -n "$accepted" ]] || return 0
 	ss -tnH state established "( sport = :${SSH_PORT:-22} )" 2>/dev/null \
 		| awk '{print $4}' | while read -r peer; do
 			peer="${peer%:*}"; peer="${peer#[}"; peer="${peer%]}"
-			[[ -n "$peer" ]] && printf '%s\n' "$peer"
+			[[ -n "$peer" ]] && grep -qxF -- "$peer" <<<"$accepted" && printf '%s\n' "$peer"
 		done
 	return 0
 }
@@ -4538,9 +4548,13 @@ EOF
 	fi
 
 	# A jail that failed to load leaves the service running and nothing banned.
-	if ! fail2ban-client status sshd >/dev/null 2>&1; then
-		warn "fail2ban is running but the sshd jail is not loaded: fail2ban-client status sshd"
-	fi
+	# The socket takes a moment after a restart, so wait before calling it.
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		fail2ban-client status sshd >/dev/null 2>&1 && return 0
+		sleep "${FAIL2BAN_WAIT:-1}"
+	done
+	warn "fail2ban is running but the sshd jail is not loaded: fail2ban-client status sshd"
 }
 
 # ---------------------------------------------------- networkd-dispatcher ---
