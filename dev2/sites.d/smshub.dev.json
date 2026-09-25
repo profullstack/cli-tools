@@ -1,0 +1,9 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.smshub.dev",
+   "port": 8256,
+   "max_body": "512m"
+  }
+ ]
+}

@@ -1129,6 +1129,7 @@ def cmd_merge(args):
 
 def cmd_migrate(args):
     s = site(args.site); st = load_state(s["site"])
+    if s.get("skip"): die(f"{s['site']} is marked skip in sites.d: {s.get('notes', '')}")
     steps = [("scaffold", cmd_scaffold), ("db", cmd_db) if s["db"] == "pg" else None, ("provision", cmd_provision), ("volumes", cmd_volumes),
              ("deploy", cmd_deploy), ("cert", cmd_cert), ("vhost", cmd_vhost), ("verify", cmd_verify),
              ("refresh-db", cmd_refresh_db) if s["db"] == "pg" else None, ("dns", cmd_dns),
@@ -1165,6 +1166,7 @@ def cmd_box_tune(args):
 
 def cmd_retire(args):
     s = site(args.site); st = load_state(s["site"])
+    if s.get("skip"): die(f"{s['site']} is marked skip in sites.d: {s.get('notes', '')}")
     if "verify-public" not in st["steps"] and not args.force: die("site not verified public on dev2; refuse to delete Railway services (or --force)")
     if not args.yes: die("--yes required")
     targets = [{"name": s["service"], "id": s["service_id"]}] + s["companions"] + s["infra"]
