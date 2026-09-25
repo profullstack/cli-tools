@@ -81,7 +81,8 @@ small file per site, so parallel migrations never edit a shared file:
 { "health_path": "/healthz", "port_var": "8080", "start_command": "bun run start",
   "companion_commands": { "genrewatch-worker": "bun run worker" },
   "env_overrides": { "SITE_URL": "https://example.com" },
-  "pg_service": "Postgres-iVtY", "max_body": "256m", "branch": "master" }
+  "pg_service": "Postgres-iVtY", "max_body": "256m", "branch": "master",
+  "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
 ```
 
 ### Secrets in `env_overrides`
@@ -116,8 +117,12 @@ reference is written back into `sites.d/`.
   `pull-cloud.sh`, `load-selfhost.sh`, `sync-storage.mjs`). Then
   `env_overrides` + `provision` + `deploy` re-point the app.
 - `turso`: the app keeps talking to Turso after the move; the database moves
-  in a second pass with a Postgres port of the app's db layer (the pattern is
-  rssamplifier.com `packages/db/src/pg.js`: serve the libSQL surface over pg).
+  in a second pass once the app's Postgres port (on `@profullstack/libsql-pg`)
+  is merged: `dev2-site db-create <site>` (empty database in the shared cluster,
+  DATABASE_URL into state), apply the app's Postgres schema, `npx libsql-pg copy
+  --from <libsql url> --token ... --to <DATABASE_URL> --verify`, then
+  `provision` (libsql:// values become the new DATABASE_URL; list the retired
+  Turso settings in `env_remove`) and `deploy <default branch>`.
 
 ## State
 

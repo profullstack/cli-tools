@@ -574,6 +574,7 @@ def render_env(vars_, s, st, service_name=None):
             if k in ("REDISPASSWORD", "REDIS_PASSWORD"): out[k] = ""
             if k in ("REDISUSER",): out[k] = "default"
     for k, v in resolved_env_overrides(s).items(): out[k] = v
+    for k in s.get("env_remove") or []: out.pop(k, None)  # settings a ported app refuses outright
     lines = [f"# {s['site']}{' ' + service_name if service_name else ''}: rendered by dev2-site provision from Railway on {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}"]
     lines += [f"{k}={env_quote(v)}" for k, v in out.items()]
     return "\n".join(lines) + "\n", out
