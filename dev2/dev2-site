@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import urllib.request
 
 HERE = os.path.dirname(os.path.realpath(__file__))
@@ -654,9 +655,16 @@ def porkbun_keys():
     if not (k and sk): die("no Porkbun keys in ~/.config/cli-tools/credentials.json (cli-tools config pull)")
     return k, sk
 
+def site_domains(s):
+    """Every hostname the site answers on: custom domains, www of an apex, and extra
+    proxied hosts (the Supabase gateway)."""
+    extra = [p["host"] for p in s.get("proxies") or []]
+    www = [f"www.{s['site']}"] if s["site"].count(".") == 1 else []
+    return list(dict.fromkeys(s["domains"] + www + extra))
+
 def cmd_cert(args):
     s = site(args.site)
-    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 and f"www.{s['site']}" not in s["domains"] else [])))
+    domains = site_domains(s)
     k, sk = porkbun_keys()
     cert_dir = f"/etc/nginx/ssl/{s['site']}"
     log(f"Certificate for {', '.join(domains)} (acme.sh, Porkbun DNS-01, issued before DNS moves)")
@@ -670,9 +678,15 @@ def cmd_cert(args):
 
 def cmd_vhost(args):
     s = site(args.site)
-    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 else [])))
+    proxies = s.get("proxies") or []
+    domains = [d for d in site_domains(s) if d not in {p["host"] for p in proxies}]
     ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
     conf = tmpl("nginx-vhost.conf").replace("__SITE__", s["site"]).replace("__APP_PORT__", str(s["port"])).replace("__SERVER_NAMES__", " ".join(domains)).replace("__MAX_BODY__", s.get("max_body", "64m"))
+    for p in proxies:  # one more server block per proxied host, same certificate
+        blk = tmpl("nginx-vhost.conf").split("server {", 2)[2]  # the 443 block only
+        blk = "server {" + blk.replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"]).replace("__MAX_BODY__", p.get("max_body", "512m")).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;\n        large_client_header_buffers 8 64k;")
+        conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
+        conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
     ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
     ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
@@ -693,7 +707,7 @@ def cmd_verify(args):
 
 def cmd_dns(args):
     s = site(args.site)
-    domains = list(dict.fromkeys(s["domains"] + ([f"www.{s['site']}"] if s["site"].count(".") == 1 else [])))
+    domains = site_domains(s)
     zones = {}
     for d in domains:
         zone = ".".join(d.split(".")[-2:]); zones.setdefault(zone, []).append(d)
@@ -782,6 +796,150 @@ def cmd_retire(args):
         except RuntimeError as e: warn(str(e)[:200])
     mark(s["site"], "retire")
 
+# --------------------------------------------------------------- supabase
+# Second pass for db kind `supabase`: a self-hosted stack per site beside the app,
+# the cloud project dumped into it, storage objects copied, the app re-pointed.
+
+SB_API_TOKEN = os.path.expanduser("~/.supabase/access-token")
+
+def sb_api(path, method="GET", body=None):
+    tok = open(SB_API_TOKEN).read().strip()
+    req = urllib.request.Request(f"https://api.supabase.com/v1/{path}", method=method, data=json.dumps(body).encode() if body is not None else None,
+                                 headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=60) as r: return json.load(r)
+
+def sb_ports(s):
+    n = s["port"] - FIRST_PORT
+    return {"api": 8200 + n, "db": 5500 + n, "pooler": 6600 + n, "subnet": f"172.31.{100 + n}.0/24", "gateway": f"172.31.{100 + n}.1"}
+
+def sb_slug(s): return re.sub(r"[^a-z0-9]+", "-", s["site"].lower()).strip("-")
+
+def sb_cloud(s, st):
+    """Cloud project ref + db password + pooler host, from the app's Railway variables and the management API."""
+    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    refs = {m.group(1) for v in vars_.values() if isinstance(v, str) for m in re.finditer(r"https?://([a-z]{20})\.supabase\.co", v)}
+    refs |= {v for k, v in vars_.items() if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF", "SUPABASE_REF") and isinstance(v, str) and re.fullmatch(r"[a-z]{20}", v)}
+    ref = s.get("cloud_ref") or st.get("cloud_ref")
+    if not ref:
+        if len(refs) != 1: die(f"could not pick one Supabase project ref from the app's variables ({sorted(refs)}); set cloud_ref in sites.d/{s['site']}.json")
+        ref = refs.pop()
+    pw = st.get("cloud_db_password") or vars_.get("SUPABASE_DB_PASSWORD")
+    m = next((re.match(r"postgres(?:ql)?://([^:]+):([^@]+)@", v) for v in vars_.values() if isinstance(v, str) and "supabase.co" in v and "postgres" in v), None)
+    if not pw and m: pw = urllib.parse.unquote(m.group(2)) if hasattr(urllib, "parse") else m.group(2)
+    if not pw:
+        if not args_yes_global: die(f"no SUPABASE_DB_PASSWORD for {ref}; re-run with --reset-password to set a new one through the management API (apps use API keys, not this password, unless a variable carries it)")
+        pw = secrets.token_urlsafe(24)
+        sb_api(f"projects/{ref}/database/password", "PATCH", {"password": pw}); note("cloud database password reset through the management API")
+    pooler = sb_api(f"projects/{ref}/config/database/pooler")
+    prim = next((p for p in pooler if p.get("database_type") == "PRIMARY"), pooler[0])
+    host = prim["db_host"]
+    keys = {k["id"]: k["api_key"] for k in sb_api(f"projects/{ref}/api-keys?reveal=true") if k.get("type") == "legacy"}
+    import urllib.parse as up
+    url = f"postgres://postgres.{ref}:{up.quote(pw, safe='')}@{host}:5432/postgres"
+    st.update({"cloud_ref": ref, "cloud_db_password": pw, "cloud_db_url": url, "cloud_anon_key": keys.get("anon"), "cloud_service_key": keys.get("service_role")})
+    save_state(s["site"], st)
+    return vars_
+
+args_yes_global = False
+
+def cmd_supabase_stack(args):
+    s = site(args.site); st = load_state(s["site"])
+    if s["db"] != "supabase": die(f"{s['site']} db kind is {s['db']}")
+    slug, ports = sb_slug(s), sb_ports(s)
+    host = f"supabase.{s['site']}"
+    log(f"Self-hosted Supabase for {s['site']}: {slug}-supabase, api :{ports['api']}, db :{ports['db']}, pooler :{ports['pooler']}, {ports['subnet']}")
+    creds = json.load(open(os.path.expanduser("~/.config/cli-tools/credentials.json")))
+    smtp = creds.get("RESEND_API_KEY"); smtp = smtp.get("value") if isinstance(smtp, dict) else smtp
+    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    smtp = vars_.get("RESEND_API_KEY") or smtp or ""
+    ssh("root", "install -d -m 700 /root/dev2-kit")
+    ssh_put(tmpl("supabase-stack.sh"), "/root/dev2-kit/supabase-stack.sh", "0700")
+    env = f"SITE={s['site']} SLUG={slug} ROOT={WWW}/{s['site']} STUDIO_DOMAIN={host} SITE_URL=https://{s['site']} API_PORT={ports['api']} DB_PORT={ports['db']} POOLER_PORT={ports['pooler']} SUBNET={ports['subnet']} GATEWAY={ports['gateway']} SMTP_PASS={shlex.quote(smtp)} EXTENSIONS={shlex.quote(' '.join(s.get('extensions') or []))}"
+    out = ssh("root", f"env {env} bash /root/dev2-kit/supabase-stack.sh 2>&1", timeout=3600)
+    print("\n".join(l for l in out.splitlines() if l.startswith("===>") or "gateway" in l or "WARNING" in l or "ERROR" in l))
+    conn = ssh("root", f"cat {WWW}/{s['site']}/supabase/{slug}-connection.env")
+    kv = dict(l.split("=", 1) for l in conn.splitlines() if "=" in l and not l.startswith("#"))
+    st.update({"sb_slug": slug, "sb_ports": ports, "sb_host": host, "sb_anon_key": kv["SELFHOST_ANON_KEY"], "sb_service_key": kv["SELFHOST_SERVICE_ROLE_KEY"],
+               "sb_jwt_secret": kv["SELFHOST_JWT_SECRET"], "sb_pg_password": kv["SELFHOST_POSTGRES_PASSWORD"], "sb_database_url": kv["SELFHOST_DATABASE_URL"]})
+    save_state(s["site"], st)
+    # The gateway hostname joins the site: cert, vhost and dns pick it up from sites.d.
+    os.makedirs(SITES_D, exist_ok=True)
+    sd_path = os.path.join(SITES_D, f"{s['site']}.json")
+    sd = json.load(open(sd_path)) if os.path.exists(sd_path) else {}
+    sd["proxies"] = [p for p in sd.get("proxies", []) if p.get("host") != host] + [{"host": host, "port": ports["api"], "max_body": "512m"}]
+    with open(sd_path, "w") as f: json.dump(sd, f, indent=1); f.write("\n")
+    mark(s["site"], "supabase-stack")
+    log(f"Stack up. Next: `dev2-site cert {s['site']}` + `vhost` + `dns` (adds {host}), then supabase-pull / supabase-load / supabase-storage / supabase-cutover")
+
+def cmd_supabase_pull(args):
+    global args_yes_global; args_yes_global = getattr(args, "reset_password", False)
+    s = site(args.site); st = load_state(s["site"])
+    sb_cloud(s, st); st = load_state(s["site"])
+    out = f"/root/dumps/{sb_slug(s)}-supabase-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}"
+    log(f"Dumping cloud project {st['cloud_ref']} -> {DEV2_HOST}:{out}")
+    ssh("root", "install -d -m 700 /root/dev2-kit /root/dumps")
+    ssh_put(tmpl("supabase-pull.sh"), "/root/dev2-kit/supabase-pull.sh", "0700")
+    res = ssh("root", f"env CLOUD_DB_URL={shlex.quote(st['cloud_db_url'])} OUT={out} EXCLUDE_TABLE_DATA={shlex.quote(' '.join('--exclude-table-data=' + t for t in (s.get('exclude_table_data') or [])))} bash /root/dev2-kit/supabase-pull.sh 2>&1", timeout=6 * 3600)
+    print("\n".join(l for l in res.splitlines() if l.startswith("===>") or "=" in l[:20] or "ERROR" in l or "WARN" in l)[-3000:])
+    mark(s["site"], "supabase-pull", sb_dump=out)
+
+def cmd_supabase_load(args):
+    s = site(args.site); st = load_state(s["site"])
+    for k in ("sb_dump", "sb_slug", "cloud_ref", "sb_host"):
+        if not st.get(k): die(f"state has no {k}: run supabase-stack and supabase-pull first")
+    log(f"Loading {st['sb_dump']} into {st['sb_slug']}-supabase-db")
+    ssh_put(tmpl("supabase-load.sh"), "/root/dev2-kit/supabase-load.sh", "0700")
+    res = ssh("root", f"env DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
+    print(res[-6000:])
+    mark(s["site"], "supabase-load")
+
+def cmd_supabase_storage(args):
+    s = site(args.site); st = load_state(s["site"])
+    for k in ("sb_dump", "cloud_ref", "cloud_service_key", "sb_service_key", "sb_ports"):
+        if not st.get(k): die(f"state has no {k}")
+    log(f"Copying storage objects from {st['cloud_ref']} into the {st['sb_slug']} stack (node in a container on dev2)")
+    ssh_put(tmpl("sync-storage.mjs"), "/root/dev2-kit/sync-storage.mjs", "0600")
+    # The self-hosted gateway is reached on loopback (no TLS needed from the box itself).
+    env = f"-e CLOUD_URL=https://{st['cloud_ref']}.supabase.co -e CLOUD_SERVICE_KEY={shlex.quote(st['cloud_service_key'])} -e SELF_URL=http://127.0.0.1:{st['sb_ports']['api']} -e SELF_SERVICE_KEY={shlex.quote(st['sb_service_key'])}"
+    res = ssh("root", f"docker run --rm --network host {env} -v {st['sb_dump']}:/dump -v /root/dev2-kit/sync-storage.mjs:/sync.mjs:ro node:22-alpine node /sync.mjs /dump --concurrency {args.concurrency} 2>&1 | tail -n 40", timeout=12 * 3600)
+    print(res)
+    mark(s["site"], "supabase-storage")
+
+def cmd_supabase_cutover(args):
+    """Re-point the app at the self-hosted stack: env overrides, provision, deploy, verify,
+    then unschedule the cloud project's cron jobs (they would otherwise keep calling the site)."""
+    s = site(args.site); st = load_state(s["site"])
+    for k in ("cloud_ref", "sb_host", "sb_anon_key", "sb_service_key", "sb_database_url", "sb_pg_password"):
+        if not st.get(k): die(f"state has no {k}")
+    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    ov = {}
+    for k, v in vars_.items():
+        if not isinstance(v, str): continue
+        nv = v
+        if f"{st['cloud_ref']}.supabase.co" in nv:
+            nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
+            if nv.startswith("postgres"): nv = st["sb_database_url"]
+        if st.get("cloud_anon_key") and v == st["cloud_anon_key"]: nv = st["sb_anon_key"]
+        if st.get("cloud_service_key") and v == st["cloud_service_key"]: nv = st["sb_service_key"]
+        if k == "SUPABASE_DB_PASSWORD": nv = st["sb_pg_password"]
+        if k in ("SUPABASE_JWT_SECRET", "JWT_SECRET") and st.get("sb_jwt_secret") and len(v) > 20: nv = st["sb_jwt_secret"]
+        if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF") and v == st["cloud_ref"]: warn(f"{k}={v}: the app derives URLs from the ref; it needs a code change to use SUPABASE_URL")
+        if nv != v: ov[k] = nv
+    sd_path = os.path.join(SITES_D, f"{s['site']}.json")
+    sd = json.load(open(sd_path)) if os.path.exists(sd_path) else {}
+    sd["env_overrides"] = {**sd.get("env_overrides", {}), **ov}
+    with open(sd_path, "w") as f: json.dump(sd, f, indent=1); f.write("\n")
+    log(f"{len(ov)} variables re-pointed in sites.d/{s['site']}.json: {', '.join(sorted(ov))}")
+    cmd_provision(argparse.Namespace(site=s["site"]))
+    cmd_deploy(argparse.Namespace(site=s["site"], ref=None))
+    cmd_verify(argparse.Namespace(site=s["site"], public=("dns" in load_state(s["site"])["steps"])))
+    if st.get("cloud_db_url"):
+        log("Unscheduling the CLOUD project's cron jobs")
+        out = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select cron.unschedule(jobname) from cron.job where active\" 2>&1 | tail -n 5", check=False)
+        note(out.strip() or "none")
+    mark(s["site"], "supabase-cutover")
+    log(f"{s['site']} now runs on its own Supabase. Cloud project {st['cloud_ref']} stays until `retire` (delete it in the dashboard or with the management API).")
+
 # ----------------------------------------------------------------- main
 
 def main():
@@ -798,6 +956,11 @@ def main():
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
+    for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover)):
+        p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
+    p = sub.add_parser("supabase-pull"); p.add_argument("site"); p.add_argument("--reset-password", action="store_true"); p.set_defaults(fn=cmd_supabase_pull)
+    p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.set_defaults(fn=cmd_supabase_load)
+    p = sub.add_parser("supabase-storage"); p.add_argument("site"); p.add_argument("--concurrency", type=int, default=8); p.set_defaults(fn=cmd_supabase_storage)
     p = sub.add_parser("retire"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_retire)
     args = ap.parse_args()
     try: args.fn(args)
