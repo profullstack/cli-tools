@@ -148,6 +148,35 @@ def rw_variables(pid, eid, sid):
     return gql("query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}",
                {"p": pid, "e": eid, "s": sid})["variables"] or {}
 
+def parse_env_file(text):
+    """A compose env file as `render_env` writes it (double-quoted values may hold newlines)."""
+    out, key, buf = {}, None, None
+    for line in text.split("\n"):
+        if key is not None:
+            buf += "\n" + line
+            if line.endswith('"') and not line.endswith('\\"'):
+                out[key] = buf[1:-1].replace('\\"', '"').replace("\\\\", "\\"); key, buf = None, None
+            continue
+        if not line or line.startswith("#") or "=" not in line: continue
+        k, v = line.split("=", 1)
+        if v.startswith('"') and not (v.endswith('"') and len(v) > 1 and not v.endswith('\\"')): key, buf = k, v; continue
+        if v.startswith('"') and v.endswith('"') and len(v) > 1: v = v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        out[k] = v
+    return out
+
+def site_variables(s, sid=None, envfile="app.env"):
+    """The service's environment: Railway while the service exists, else the live app.env on
+    dev2 (a retired service has no variables left anywhere else). Values from dev2 are already
+    the rendered ones, which is what a re-render should start from."""
+    vars_ = {}
+    try: vars_ = rw_variables(s["project_id"], s["environment_id"], sid or s["service_id"])
+    except RuntimeError as e: warn(f"railway variables: {str(e)[:120]}")
+    if vars_: return vars_
+    txt = ssh("root", f"cat {WWW}/{shlex.quote(s['site'])}/{shlex.quote(envfile)} 2>/dev/null", check=False)
+    if not txt.strip(): die(f"{s['site']}: no variables on Railway and no {envfile} on dev2 to fall back to")
+    note(f"{s['site']}: Railway has no variables (service retired); using the live {envfile} from dev2")
+    return parse_env_file(txt)
+
 def rw_ssh_user(pid, eid, service_name):
     out = sh(["railway", "ssh", "config", "--dry-run", "-i", RAILWAY_SSH_KEY, "--project", pid,
               "--environment", eid, "--service", service_name])
@@ -644,7 +673,7 @@ def cmd_provision(args):
     if s["db"] == "pg" and not st.get("database_url"): die("run `dev2-site db` first (the app env needs the new DATABASE_URL)")
     if s["db"] in ("supabase", "turso") and not st.get("database_url") and not s.get("env_overrides"):
         warn(f"db kind {s['db']}: app.env keeps pointing at the current {s['db']} until its own migration; set env_overrides in sites.overrides.json when ready")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     image_only = bool(s.get("image")) and not s.get("repo")
     inside = s.get("port_var") or ("3000" if image_only else dockerfile_port(st.get("checkout") or checkout_dir(s), st.get("dockerfile")) or "3000")
     app_env, merged = render_env(vars_, s, st)
@@ -676,7 +705,7 @@ def cmd_provision(args):
     own = f"{DEPLOY_USER}:{DEPLOY_USER}"
     ssh_put(app_env, f"{root}/app.env", "0600", own)
     for c in s["companions"]:
-        cv = rw_variables(s["project_id"], s["environment_id"], c["id"])
+        cv = site_variables(s, c["id"], f"{c['name']}.env")
         cenv, _ = render_env(cv, s, st, c["name"])
         ssh_put(cenv, f"{root}/{c['name']}.env", "0600", own)
     ssh_put(deploy_env, f"{root}/deploy.env", "0640", own)
@@ -1165,7 +1194,7 @@ def sb_slug(s): return re.sub(r"[^a-z0-9]+", "-", s["site"].lower()).strip("-")
 
 def sb_cloud(s, st):
     """Cloud project ref + db password + pooler host, from the app's Railway variables and the management API."""
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     refs = {m.group(1) for v in vars_.values() if isinstance(v, str) for m in re.finditer(r"https?://([a-z]{20})\.supabase\.co", v)}
     refs |= {v for k, v in vars_.items() if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF", "SUPABASE_REF") and isinstance(v, str) and re.fullmatch(r"[a-z]{20}", v)}
     ref = s.get("cloud_ref") or st.get("cloud_ref")
@@ -1198,7 +1227,7 @@ def cmd_supabase_stack(args):
     host = f"supabase.{s['site']}"
     log(f"Self-hosted Supabase for {s['site']}: {slug}-supabase, api :{ports['api']}, db :{ports['db']}, pooler :{ports['pooler']}, {ports['subnet']}")
     smtp = cred("RESEND_API_KEY")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     smtp = vars_.get("RESEND_API_KEY") or smtp or ""
     ssh("root", "install -d -m 700 /root/dev2-kit")
     ssh_put(tmpl("supabase-stack.sh"), "/root/dev2-kit/supabase-stack.sh", "0700")
@@ -1259,7 +1288,7 @@ def cmd_supabase_cutover(args):
     s = site(args.site); st = load_state(s["site"])
     for k in ("cloud_ref", "sb_host", "sb_anon_key", "sb_service_key", "sb_database_url", "sb_pg_password"):
         if not st.get(k): die(f"state has no {k}")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     ov = {}
     # Which of the new values are credentials, known by where they came from
     # rather than by the spelling of the key.
