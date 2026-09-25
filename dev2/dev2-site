@@ -77,9 +77,10 @@ def ssh(user, cmd, input=None, check=True, timeout=None):
               input=input, check=check, timeout=timeout)
 
 def ssh_put(content, path, mode="0644", owner=None, user="root"):
-    """Write a file on dev2 from stdin (no scp, no temp file on the box)."""
-    own = f"-o {owner.split(':')[0]} -g {owner.split(':')[-1]} " if owner else ""
-    ssh(user, f"install -m {mode} {own}/dev/stdin {shlex.quote(path)}", input=content)
+    """Write a file on dev2 from stdin: temp file beside the target, then an atomic move."""
+    q = shlex.quote(path)
+    chown = f" && chown {shlex.quote(owner)} {q}.tmp" if owner else ""
+    ssh(user, f"umask 077 && cat > {q}.tmp && chmod {mode} {q}.tmp{chown} && mv -f {q}.tmp {q}", input=content)
 
 def state_path(site): return os.path.join(STATE_DIR, f"{site}.json")
 def load_state(site):
