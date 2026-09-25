@@ -745,6 +745,15 @@ def cmd_cert(args):
     k, sk = porkbun_keys()
     cert_dir = f"/etc/nginx/ssl/{s['site']}"
     log(f"Certificate for {', '.join(domains)} (acme.sh, Porkbun DNS-01, issued before DNS moves)")
+    # Railway's managed certificates leave `_acme-challenge.<host>` CNAMEs to
+    # authorize.railwaydns.net at Porkbun; a CNAME there stops acme.sh adding its TXT.
+    for d in domains:
+        zone = ".".join(d.split(".")[-2:]); host = "_acme-challenge" if d == zone else f"_acme-challenge.{d[:-len(zone)-1].lstrip('*.')}"
+        recs = json.loads(sh(["porkbun", "ls", zone, "--json"], check=False) or "[]")
+        recs = recs.get("records", recs) if isinstance(recs, dict) else recs
+        for r in recs:
+            if r.get("type") == "CNAME" and r.get("name", "").startswith("_acme-challenge") and "railwaydns" in r.get("content", ""):
+                sh(["porkbun", "rm", zone, r["name"][: -len(zone) - 1], "--type", "CNAME", "--yes"], check=False); note(f"removed Railway acme CNAME {r['name']}")
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
     out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
