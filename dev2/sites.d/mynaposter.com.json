@@ -23,5 +23,10 @@
    "max_body": "64m"
   }
  ],
- "notes": "the CLI (packages/core/src/store/cloud.ts DEFAULT_SERVER) called the API at its railway.app URL; api.mynaposter.com replaces it"
+ "notes": "the CLI (packages/core/src/store/cloud.ts DEFAULT_SERVER) called the API at its railway.app URL; api.mynaposter.com replaces it",
+ "start_command": "bun apps/web/src/build.ts && bun apps/web/src/server.ts",
+ "companion_commands": {
+  "mynaposter-api": "bun apps/api/src/server.ts"
+ },
+ "node_version": "22"
 }

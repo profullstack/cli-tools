@@ -401,6 +401,7 @@ def cmd_scaffold(args):
             # from its own process environment; the default Node 18 is too old for Next 16.
             node_v = s.get("node_version") or cfg.get("NIXPACKS_NODE_VERSION") or "22"
             nix_env = [f"NIXPACKS_NODE_VERSION={node_v}"]
+            if s.get("start_command"): cfg["NIXPACKS_START_CMD"] = s["start_command"]
             if cfg.get("startCommand") and not cfg.get("NIXPACKS_START_CMD"): cfg["NIXPACKS_START_CMD"] = cfg["startCommand"]
             for k in ("NIXPACKS_INSTALL_CMD", "NIXPACKS_BUILD_CMD", "NIXPACKS_START_CMD"):
                 if cfg.get(k): nix_env.append(f"{k}={cfg[k]}"); note(f"nixpacks {k}: {cfg[k]}")
