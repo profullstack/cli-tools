@@ -470,6 +470,12 @@ def render_compose(s, st, app_port_inside):
     if s["redis"]:
         y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
         y.append("volumes:\n  redisdata:")
+    # An explicit subnet per site: Docker's default address pools (15 x /16 + 16 x /20)
+    # ran out at 34 networks on dev2, and widening them means restarting dockerd
+    # under every container. 10.200.<port-3200>.0/24 is deterministic and allowlisted
+    # on the data ports.
+    n = s["port"] - FIRST_PORT
+    y.append(f"networks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
     return "\n".join(y) + "\n"
 
 # -------------------------------------------------------------- provision
