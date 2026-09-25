@@ -717,13 +717,19 @@ def pg_admin(sql, db="postgres"):
     return ssh("root", f"docker exec -i {PG_CONTAINER} psql -U supabase_admin -h localhost -d {shlex.quote(db)} -X -At -v ON_ERROR_STOP=1", input=sql)
 
 def sslparams_for(s, st):
-    """`sslmode=no-verify` for node-postgres repos, `sslmode=require` for everything else."""
+    """`sslmode=no-verify` for repos that use node-postgres directly (pg reads `require` as
+    verify-full and rejects the cluster's self-signed cert); `sslmode=require` for Bun.SQL,
+    postgres.js and @profullstack/libsql-pg (whose own parser turns `no-verify` into a plain
+    connection that pg_hba rejects). Read from the repo's DEFAULT BRANCH on origin, not the
+    working tree: local checkouts lag behind merged ports."""
     d = st.get("checkout") or (checkout_dir(s) if s.get("repo") else None)
-    if d:
-        try:
-            out = sh(f"grep -rls --include=package.json -E '\"pg\"\\s*:' {shlex.quote(d)} --exclude-dir=node_modules --exclude-dir=.git | head -n 1", check=False)
-            if out.strip(): return "sslmode=no-verify"
-        except RuntimeError: pass
+    if d and s.get("repo"):
+        branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
+        sh(["git", "-C", d, "fetch", "-q", "origin", branch], check=False)
+        pkgs = sh(["git", "-C", d, "grep", "-l", "-E", r'"pg"\s*:', f"origin/{branch}", "--", "package.json", "*/package.json", "*/*/package.json"], check=False)
+        uses_pg = bool(pkgs.strip())
+        uses_shim = bool(sh(["git", "-C", d, "grep", "-l", "@profullstack/libsql-pg", f"origin/{branch}", "--", "package.json", "*/package.json", "*/*/package.json"], check=False).strip())
+        if uses_pg and not uses_shim: return "sslmode=no-verify"
     return "sslmode=require"
 
 def db_name_for(s):
