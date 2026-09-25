@@ -757,10 +757,49 @@ def cmd_volumes(args):
     if not targets: note("no volumes"); mark(s["site"], "volumes"); return
     for svc, v in targets:
         user = rw_ssh_user(s["project_id"], s["environment_id"], svc)
-        log(f"Volume {v['name']} ({v['sizeMB']} MB) from {svc}:{v['mountPath']} -> {root}/volumes/{v['name']}")
-        cmd = " ".join(map(shlex.quote, rw_ssh_cmd(user, f"tar -C {shlex.quote(v['mountPath'])} -cf - ."))) + \
-              f" | {SSH_BASE_STR} root@{DEV2_HOST} 'tar -C {root}/volumes/{shlex.quote(v['name'])} -xf - && chmod -R a+rwX {root}/volumes/{shlex.quote(v['name'])} && du -sh {root}/volumes/{shlex.quote(v['name'])}'"
-        note(sh(cmd, timeout=6 * 3600).strip())
+        dest = f"{root}/volumes/{v['name']}"
+        log(f"Volume {v['name']} from {svc}:{v['mountPath']} -> {dest} (resumable, per file)")
+        # ssh.railway.com drops a stream after ~15-20 min, so one big tar is not an option for
+        # multi-GB volumes. Compare size-lists and move only the files that are missing or
+        # differ, in chunks that each finish well inside that window.
+        def listing(txt):
+            out = {}
+            for line in txt.splitlines():
+                if "\t" in line:
+                    size, path = line.split("\t", 1); out[path] = int(size)
+            return out
+        src = listing(sh(rw_ssh_cmd(user, f"cd {shlex.quote(v['mountPath'])} && find . -type f -printf '%s\\t%p\\n'"), timeout=1800))
+        dst = listing(ssh("root", f"cd {shlex.quote(dest)} && find . -type f -printf '%s\\t%p\\n'", check=False))
+        todo = [p for p, size in src.items() if dst.get(p) != size]
+        total = sum(src[p] for p in todo)
+        note(f"{len(src)} files / {sum(src.values())/1e6:.0f} MB on Railway; {len(todo)} files / {total/1e6:.0f} MB to move")
+        ssh("root", f"install -d -m 0777 {shlex.quote(dest)}")
+        chunk, size, n = [], 0, 0
+        def flush(chunk):
+            nonlocal n
+            n += 1
+            files = "\n".join(chunk) + "\n"
+            for attempt in range(4):
+                try:
+                    cmd = " ".join(map(shlex.quote, rw_ssh_cmd(user, f"cd {shlex.quote(v['mountPath'])} && tar -cf - --no-recursion -T -"))) + \
+                          f" | {SSH_BASE_STR} root@{DEV2_HOST} 'tar -C {shlex.quote(dest)} -xf -'"
+                    sh(cmd, input=files, timeout=3600); return
+                except (RuntimeError, subprocess.TimeoutExpired) as e:
+                    warn(f"chunk {n} attempt {attempt + 1} failed: {str(e)[-200:].strip()}"); time.sleep(10)
+            die(f"volume {v['name']}: chunk {n} failed 4 times")
+        for path in sorted(todo, key=lambda p: src[p]):
+            chunk.append(path); size += src[path]
+            if size >= 400 * 1024 * 1024 or len(chunk) >= 2000:
+                flush(chunk); note(f"chunk {n}: {len(chunk)} files, {size/1e6:.0f} MB"); chunk, size = [], 0
+        if chunk: flush(chunk); note(f"chunk {n}: {len(chunk)} files, {size/1e6:.0f} MB")
+        # Empty directories carry no files; recreate them, then make everything readable.
+        dirs = sh(rw_ssh_cmd(user, f"cd {shlex.quote(v['mountPath'])} && find . -type d -empty -printf '%p\\n'"), check=False, timeout=600)
+        if dirs.strip(): ssh("root", f"cd {shlex.quote(dest)} && xargs -d '\\n' mkdir -p", input=dirs)
+        ssh("root", f"chmod -R a+rwX {shlex.quote(dest)}")
+        dst2 = listing(ssh("root", f"cd {shlex.quote(dest)} && find . -type f -printf '%s\\t%p\\n'", check=False))
+        bad = [p for p, size in src.items() if dst2.get(p) != size]
+        if bad: die(f"volume {v['name']}: {len(bad)} files still differ, e.g. {bad[:3]}")
+        note(f"volume {v['name']} complete: {len(src)} files match")
     mark(s["site"], "volumes")
 
 # ----------------------------------------------------------- box steps
