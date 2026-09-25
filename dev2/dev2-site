@@ -1178,6 +1178,20 @@ def cmd_firewall(args):
     ssh_put(tmpl("firewall-data-ports.sh"), "/root/dev2-kit/firewall-data-ports.sh", "0700")
     print(ssh("root", f"env PORTS={shlex.quote(' '.join(map(str, sorted(ports))))} bash /root/dev2-kit/firewall-data-ports.sh 2>&1"))
 
+def cmd_backup_install(args):
+    """Install /usr/local/bin/dev2-pg-backup.sh + /etc/cron.d/dev2-pg-backup from the templates
+    (shared cluster every 4h, per-site Supabase stacks, storage files daily). --run does a
+    frequent pass right away and shows the log."""
+    log("Installing dev2-pg-backup.sh + cron")
+    ssh_put(tmpl("dev2-pg-backup.sh"), "/usr/local/bin/dev2-pg-backup.sh", "0755")
+    ssh_put(tmpl("dev2-pg-backup.cron"), "/etc/cron.d/dev2-pg-backup", "0644")
+    ssh("root", "bash -n /usr/local/bin/dev2-pg-backup.sh && grep -c supabase-db /usr/local/bin/dev2-pg-backup.sh >/dev/null")
+    note("installed; runs frequent at 0 */4 and full at 05:20 UTC")
+    if getattr(args, "run", False):
+        log("Running a frequent pass now (all databases; a few minutes)")
+        ssh("root", "/usr/local/bin/dev2-pg-backup.sh frequent", check=False, timeout=3600)
+        print(ssh("root", "tail -n 40 /var/log/dev2-pg-backup.log"))
+
 def cmd_box_tune(args):
     ssh("root", "install -d -m 700 /root/dev2-kit")
     ssh_put(tmpl("box-tune.sh"), "/root/dev2-kit/box-tune.sh", "0700")
@@ -1431,6 +1445,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("registry").set_defaults(fn=cmd_registry)
     sub.add_parser("firewall").set_defaults(fn=cmd_firewall)
+    p = sub.add_parser("backup-install"); p.add_argument("--run", action="store_true"); p.set_defaults(fn=cmd_backup_install)
     sub.add_parser("box-tune").set_defaults(fn=cmd_box_tune)
     p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("scaffold"); p.add_argument("site"); p.add_argument("--regen", action="store_true", help="regenerate .nixpacks even if the branch already has one"); p.set_defaults(fn=cmd_scaffold)

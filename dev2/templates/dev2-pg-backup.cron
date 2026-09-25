@@ -1,0 +1,15 @@
+# Backups for the self-hosted cluster, the per-site Supabase stacks and their storage
+# files. Managed by cli-tools `dev2-site backup-install`; do not edit on the box.
+#
+# frequent (every 4h): everything that cannot be re-derived. Full dumps of the
+#   small databases; the bulk catalogue tables are excluded from nichedb and
+#   rssamplifier because they are re-importable from public sources. Measured
+#   at ~700 MB and ~50 seconds per run, so four-hourly is cheap.
+#
+# full (daily): the complete copies including those bulk tables, kept 2 deep.
+#   Six full dumps a day of a 165 GB database would outgrow the disk in days,
+#   which is why the frequent job excludes them.
+#
+# 05:20 is after the 04:17 docker build cache prune, so they do not overlap.
+0 */4 * * * root /usr/local/bin/dev2-pg-backup.sh frequent
+20 5 * * *  root /usr/local/bin/dev2-pg-backup.sh full
