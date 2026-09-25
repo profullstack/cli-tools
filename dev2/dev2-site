@@ -428,6 +428,18 @@ def find_dockerfile(d, cfg):
     if os.path.exists(os.path.join(d, ".nixpacks", "Dockerfile")): return ".nixpacks/Dockerfile"
     return None
 
+def dockerfile_port(checkout, dockerfile):
+    """The port the image expects when Railway set none: HEALTHCHECK's localhost:<port>
+    first (that is what Docker will probe), else the first EXPOSE."""
+    if not checkout or not dockerfile: return None
+    p = os.path.join(checkout, dockerfile)
+    if not os.path.exists(p): return None
+    txt = open(p).read()
+    m = re.search(r"HEALTHCHECK[^\n]*?(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})", txt, re.S)
+    if m: return m.group(1)
+    m = re.search(r"^EXPOSE\s+(\d{2,5})", txt, re.M)
+    return m.group(1) if m else None
+
 def workflow_name(s):
     return "deploy-dev2.yml" if not s.get("shared_repo") else f"deploy-dev2-{s['site'].replace('.', '-')}.yml"
 
@@ -627,9 +639,9 @@ def cmd_provision(args):
     if s["db"] in ("supabase", "turso") and not st.get("database_url") and not s.get("env_overrides"):
         warn(f"db kind {s['db']}: app.env keeps pointing at the current {s['db']} until its own migration; set env_overrides in sites.overrides.json when ready")
     vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
-    inside = s.get("port_var") or "3000"
-    app_env, merged = render_env(vars_, s, st)
     image_only = bool(s.get("image")) and not s.get("repo")
+    inside = s.get("port_var") or ("3000" if image_only else dockerfile_port(st.get("checkout") or checkout_dir(s), st.get("dockerfile")) or "3000")
+    app_env, merged = render_env(vars_, s, st)
     if image_only:
         if not s.get("start_command"): die(f"{s['site']} runs a stock image; set start_command (Railway's deployment manifest has it) in sites.d/{s['site']}.json")
         cfg, branch, hp = {}, "", s.get("health_path") or "/"
