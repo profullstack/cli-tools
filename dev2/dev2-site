@@ -775,7 +775,9 @@ def cmd_db(args):
     # Several apps can share one Railway Postgres instance, each in its own database
     # (mynaposter-api used /myna on the instance whose default is /railway): the app's own
     # URL is the authority on which database to copy.
-    appvars = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    appvars = {}
+    for sid in [s["service_id"]] + [c["id"] for c in s.get("companions", [])]:  # a companion may be the one that talks to Postgres
+        appvars.update(rw_variables(s["project_id"], s["environment_id"], sid))
     for v in appvars.values():
         m = re.match(r"postgres(?:ql)?://[^@]+@[a-z0-9.-]+\.railway\.internal(?::\d+)?/([A-Za-z0-9_]+)", str(v))
         if m and m.group(1) != src_db: note(f"app uses database {m.group(1)} on that instance (instance default is {src_db})"); src_db = m.group(1); break
