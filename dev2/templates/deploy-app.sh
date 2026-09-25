@@ -125,7 +125,7 @@ compose up -d --remove-orphans
 # inside the app; if not, recreate the stack once.
 APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
 if [ -n "$APP_CID" ]; then
-  for svc in $(grep -E '^  [a-z][a-z0-9_-]*:$' "$ROOT/docker-compose.app.yml" | tr -d ' :' | grep -vx app); do
+  for svc in $(awk '/^services:/{f=1;next} /^[a-z]/{f=0} f && /^  [a-z][a-z0-9_-]*:$/{gsub(/[ :]/,""); print}' "$ROOT/docker-compose.app.yml" | grep -vx app); do
     if docker exec "$APP_CID" sh -c 'command -v getent >/dev/null' 2>/dev/null; then
       if ! docker exec "$APP_CID" sh -c "getent hosts $svc" >/dev/null 2>&1; then
         log "Service '$svc' does not resolve inside the app container (stale embedded DNS): recreating the stack"

@@ -628,7 +628,8 @@ def cmd_db(args):
     dump = f"/root/dumps/{db}-{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')}.dump"
     ssh("root", "install -d -m 700 /root/dumps")
     log(f"pg_dump {src_db} via ssh.railway.com -> {DEV2_HOST}:{dump}")
-    remote = f"PGPASSWORD=\"$PGPASSWORD\" pg_dump -Fc --no-owner --no-privileges -h localhost -U \"${{PGUSER:-postgres}}\" -d {shlex.quote(src_db)}"
+    # Railway's template sets PGPASSWORD/PGUSER; a plain postgres:* image sets POSTGRES_*.
+    remote = f"PGPASSWORD=\"${{PGPASSWORD:-$POSTGRES_PASSWORD}}\" pg_dump -Fc --no-owner --no-privileges -h localhost -U \"${{PGUSER:-${{POSTGRES_USER:-postgres}}}}\" -d {shlex.quote(src_db)}"
     cmd = " ".join(map(shlex.quote, rw_ssh_cmd(user, remote))) + f" | ssh -o BatchMode=yes root@{DEV2_HOST} 'cat > {dump}'"
     sh(cmd, capture=False, timeout=6 * 3600)
     size = ssh("root", f"stat -c%s {dump}").strip()
@@ -648,7 +649,7 @@ def cmd_db(args):
     tables = ssh("root", f"docker exec -i {PG_CONTAINER} psql -U postgres -h localhost -d {shlex.quote(db)} -X -At", input=count_sql).split()
     q = " union all ".join(f"select '{t}', count(*) from \"{t}\"" for t in tables) if tables else "select 'none', 0"
     tgt = ssh("root", f"docker exec -i {PG_CONTAINER} psql -U postgres -h localhost -d {shlex.quote(db)} -X -At -F' '", input=q)
-    src = sh(rw_ssh_cmd(user, f"PGPASSWORD=\"$PGPASSWORD\" psql -h localhost -U \"${{PGUSER:-postgres}}\" -d {shlex.quote(src_db)} -X -At -F' '"), input=q)
+    src = sh(rw_ssh_cmd(user, f"PGPASSWORD=\"${{PGPASSWORD:-$POSTGRES_PASSWORD}}\" psql -h localhost -U \"${{PGUSER:-${{POSTGRES_USER:-postgres}}}}\" -d {shlex.quote(src_db)} -X -At -F' '"), input=q)
     tgt_c = dict(l.split(" ", 1) for l in tgt.split("\n") if l.strip()); src_c = dict(l.split(" ", 1) for l in src.split("\n") if l.strip())
     bad = [(t, src_c.get(t), tgt_c.get(t)) for t in tables if src_c.get(t) != tgt_c.get(t)]
     note(f"{len(tables)} tables, {sum(int(v) for v in tgt_c.values())} rows on dev2")

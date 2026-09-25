@@ -1,0 +1,26 @@
+{
+ "repo": "profullstack/opensocial",
+ "notes": "deployed with `railway up`; three services from one Dockerfile whose CMD switches on SERVICE_ROLE (web/api/worker); own postgres:17 + redis on Railway",
+ "companions": [
+  {
+   "name": "opensocial-api",
+   "id": "2c54f0d4-e1bd-4ac6-afc8-d6d1c9125a6e",
+   "volumes": [],
+   "db": "pg",
+   "redis": true
+  },
+  {
+   "name": "opensocial-worker",
+   "id": "30fdfa55-9ded-4356-944f-734a26e8bd78",
+   "volumes": [],
+   "db": "pg",
+   "redis": true
+  }
+ ],
+ "redis": true,
+ "env_overrides": {
+  "API_INTERNAL_ORIGIN": "http://opensocial-api:3101",
+  "API_HOST": "0.0.0.0"
+ },
+ "health_path": "/"
+}
