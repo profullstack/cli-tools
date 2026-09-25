@@ -1380,6 +1380,13 @@ def cmd_supabase_functions(args):
     if st.get("cloud_ref"):
         try: secrets = {x["name"]: x["value"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")}
         except Exception as e: warn(f"could not read cloud function secrets: {e}")
+    # Secrets that name the cloud project (URL, keys) must point at this stack instead.
+    for k, v in list(secrets.items()):
+        nv = v
+        if st.get("cloud_ref"): nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
+        if st.get("cloud_anon_key") and v == st["cloud_anon_key"] or v in (st.get("cloud_publishable_keys") or []): nv = st["sb_anon_key"]
+        if st.get("cloud_service_key") and v == st["cloud_service_key"] or v in (st.get("cloud_secret_keys") or []): nv = st["sb_service_key"]
+        if nv != v: secrets[k] = nv; note(f"{k}: re-pointed at the stack")
     ssh_put("".join(f"{k}={v}\n" for k, v in sorted(secrets.items())), f"{fdir}/secrets.env", "0600")
     note(f"{len(secrets)} function secrets written to secrets.env: {', '.join(sorted(secrets)) or '-'}")
     # Older overlays predate the env_file line; add it, then restart the runtime.
