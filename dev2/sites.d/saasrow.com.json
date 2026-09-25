@@ -1,0 +1,9 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.saasrow.com",
+   "port": 8276,
+   "max_body": "512m"
+  }
+ ]
+}
