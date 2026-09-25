@@ -119,6 +119,24 @@ fi
 log "Starting"
 compose up -d --remove-orphans
 
+# Docker's embedded DNS can keep stale alias state after a network was recreated in
+# place: container names resolve, service names (`redis`) answer SERVFAIL, and the app
+# hangs at boot with a green health check. Prove every sibling service resolves from
+# inside the app; if not, recreate the stack once.
+APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
+if [ -n "$APP_CID" ]; then
+  for svc in $(grep -E '^  [a-z][a-z0-9_-]*:$' "$ROOT/docker-compose.app.yml" | tr -d ' :' | grep -vx app); do
+    if docker exec "$APP_CID" sh -c 'command -v getent >/dev/null' 2>/dev/null; then
+      if ! docker exec "$APP_CID" sh -c "getent hosts $svc" >/dev/null 2>&1; then
+        log "Service '$svc' does not resolve inside the app container (stale embedded DNS): recreating the stack"
+        compose down --remove-orphans
+        compose up -d --remove-orphans
+        break
+      fi
+    fi
+  done
+fi
+
 if health; then
   log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
   {
