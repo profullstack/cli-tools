@@ -300,6 +300,59 @@ def registry():
 
 SITES_D = os.path.join(HERE, "sites.d")
 
+# ── Secrets ─────────────────────────────────────────────────────────────────
+# sites.d/ is committed, and cli-tools is a public repository, so a value that
+# is a credential never goes in it. It goes here -- 0600, outside every
+# checkout, the same file `cli-tools config` already writes -- and sites.d
+# carries "secret:<KEY>" in its place.
+CREDENTIALS = os.path.expanduser("~/.config/cli-tools/credentials.json")
+
+def credentials():
+    try:
+        with open(CREDENTIALS) as f: return json.load(f)
+    except FileNotFoundError: return {}
+
+def cred(*names):
+    """First of `names` present in credentials.json, then the environment. The
+    file holds both shapes it has accumulated: a bare string and {"value": ...}."""
+    c = credentials()
+    for n in names:
+        v = c.get(n)
+        if isinstance(v, dict): v = v.get("value")
+        if v: return v
+    return os.environ.get(names[-1])
+
+def put_cred(name, value):
+    c = credentials(); c[name] = value
+    os.makedirs(os.path.dirname(CREDENTIALS), exist_ok=True)
+    fd = os.open(CREDENTIALS, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f: json.dump(c, f, indent=1, sort_keys=True); f.write("\n")
+    os.chmod(CREDENTIALS, 0o600)
+
+SECRET_REF = re.compile(r"^secret:([A-Za-z0-9_]+)$")
+
+# What must never be written into sites.d. The cutover also marks the values it
+# knows to be secret by provenance; this is the backstop for everything else,
+# because the cost of a wrong guess is one extra entry in credentials.json and
+# the cost of the opposite is a published key.
+SECRET_KEY = re.compile(r"SECRET|PASSWORD|PASSWD|TOKEN|APIKEY|CREDENTIAL|DATABASE_URL|_DSN|_KEY$", re.I)
+
+def resolved_env_overrides(s):
+    """env_overrides with every "secret:<KEY>" replaced by its value."""
+    out = {}
+    for k, v in (s.get("env_overrides") or {}).items():
+        m = SECRET_REF.match(v) if isinstance(v, str) else None
+        if not m: out[k] = v; continue
+        name = m.group(1)
+        val = cred(f"{s['site']}.{name}", name)
+        if not val:
+            die(f"{s['site']}: env_overrides[{k}] is {v!r}, but neither "
+                f'"{s["site"]}.{name}" nor "{name}" is in {CREDENTIALS}.\n'
+                f"  Add it there (0600, outside every checkout). sites.d/ is committed to a\n"
+                f"  public repository, so the value itself must not go back into it.")
+        out[k] = val
+    return out
+
 def with_overrides(s):
     """sites.d/<site>.json is merged over the registry entry: one small file per site,
     so parallel migrations never edit a shared file. Keys are the entry's keys
@@ -508,7 +561,7 @@ def render_env(vars_, s, st, service_name=None):
             if k in ("REDISPORT",): out[k] = "6379"
             if k in ("REDISPASSWORD", "REDIS_PASSWORD"): out[k] = ""
             if k in ("REDISUSER",): out[k] = "default"
-    for k, v in (s.get("env_overrides") or {}).items(): out[k] = v
+    for k, v in resolved_env_overrides(s).items(): out[k] = v
     lines = [f"# {s['site']}{' ' + service_name if service_name else ''}: rendered by dev2-site provision from Railway on {dt.datetime.now(dt.timezone.utc).isoformat(timespec='seconds')}"]
     lines += [f"{k}={env_quote(v)}" for k, v in out.items()]
     return "\n".join(lines) + "\n", out
@@ -656,7 +709,15 @@ def sslparams_for(s, st):
     return "sslmode=require"
 
 def db_name_for(s):
-    return s.get("db_name") or re.sub(r"[^a-z0-9]+", "_", s["site"].lower()).strip("_")
+    """The database name is interpolated into `create database` and into a DSN, and
+    `db_name` in sites.d can set it to anything. Constrain it at the one place it is
+    derived rather than quoting it at each use: a name this tool would ever generate
+    is already a plain identifier, so anything else is a mistake worth stopping on."""
+    db = s.get("db_name") or re.sub(r"[^a-z0-9]+", "_", s["site"].lower()).strip("_")
+    if not re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", db):
+        die(f"{s['site']}: db_name {db!r} is not a plain Postgres identifier "
+            f"([a-z_][a-z0-9_]*, at most 63 characters)")
+    return db
 
 def cmd_db(args):
     s = site(args.site); st = load_state(s["site"])
@@ -814,16 +875,8 @@ def cmd_deploy(args):
     mark(s["site"], "deploy", deployed_ref=ref)
 
 def porkbun_keys():
-    f = os.path.expanduser("~/.config/cli-tools/credentials.json")
-    c = json.load(open(f))
-    def get(*names):
-        for n in names:
-            v = c.get(n)
-            if isinstance(v, dict): v = v.get("value")
-            if v: return v
-        return os.environ.get(names[-1])
-    k, sk = get("porkbun", "PORKBUN_API_KEY"), get("porkbun_secret", "PORKBUN_SECRET_API_KEY")
-    if not (k and sk): die("no Porkbun keys in ~/.config/cli-tools/credentials.json (cli-tools config pull)")
+    k, sk = cred("porkbun", "PORKBUN_API_KEY"), cred("porkbun_secret", "PORKBUN_SECRET_API_KEY")
+    if not (k and sk): die(f"no Porkbun keys in {CREDENTIALS} (cli-tools config pull)")
     return k, sk
 
 def site_domains(s):
@@ -1069,8 +1122,7 @@ def cmd_supabase_stack(args):
     slug, ports = sb_slug(s), sb_ports(s)
     host = f"supabase.{s['site']}"
     log(f"Self-hosted Supabase for {s['site']}: {slug}-supabase, api :{ports['api']}, db :{ports['db']}, pooler :{ports['pooler']}, {ports['subnet']}")
-    creds = json.load(open(os.path.expanduser("~/.config/cli-tools/credentials.json")))
-    smtp = creds.get("RESEND_API_KEY"); smtp = smtp.get("value") if isinstance(smtp, dict) else smtp
+    smtp = cred("RESEND_API_KEY")
     vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
     smtp = vars_.get("RESEND_API_KEY") or smtp or ""
     ssh("root", "install -d -m 700 /root/dev2-kit")
@@ -1134,23 +1186,33 @@ def cmd_supabase_cutover(args):
         if not st.get(k): die(f"state has no {k}")
     vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
     ov = {}
+    # Which of the new values are credentials, known by where they came from
+    # rather than by the spelling of the key.
+    secret = set()
     for k, v in vars_.items():
         if not isinstance(v, str): continue
         nv = v
         if f"{st['cloud_ref']}.supabase.co" in nv:
             nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
-            if nv.startswith("postgres"): nv = st["sb_database_url"]
-        if st.get("cloud_anon_key") and v == st["cloud_anon_key"]: nv = st["sb_anon_key"]
-        if st.get("cloud_service_key") and v == st["cloud_service_key"]: nv = st["sb_service_key"]
-        if k == "SUPABASE_DB_PASSWORD": nv = st["sb_pg_password"]
-        if k in ("SUPABASE_JWT_SECRET", "JWT_SECRET") and st.get("sb_jwt_secret") and len(v) > 20: nv = st["sb_jwt_secret"]
+            if nv.startswith("postgres"): nv = st["sb_database_url"]; secret.add(k)
+        if st.get("cloud_anon_key") and v == st["cloud_anon_key"]: nv = st["sb_anon_key"]; secret.add(k)
+        if st.get("cloud_service_key") and v == st["cloud_service_key"]: nv = st["sb_service_key"]; secret.add(k)
+        if k == "SUPABASE_DB_PASSWORD": nv = st["sb_pg_password"]; secret.add(k)
+        if k in ("SUPABASE_JWT_SECRET", "JWT_SECRET") and st.get("sb_jwt_secret") and len(v) > 20: nv = st["sb_jwt_secret"]; secret.add(k)
         if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF") and v == st["cloud_ref"]: warn(f"{k}={v}: the app derives URLs from the ref; it needs a code change to use SUPABASE_URL")
         if nv != v: ov[k] = nv
     sd_path = os.path.join(SITES_D, f"{s['site']}.json")
     sd = json.load(open(sd_path)) if os.path.exists(sd_path) else {}
-    sd["env_overrides"] = {**sd.get("env_overrides", {}), **ov}
+    env_ov, vaulted = dict(sd.get("env_overrides") or {}), []
+    for k, v in ov.items():
+        if k in secret or SECRET_KEY.search(k):
+            put_cred(f"{s['site']}.{k}", v); env_ov[k] = f"secret:{k}"; vaulted.append(k)
+        else:
+            env_ov[k] = v
+    sd["env_overrides"] = env_ov
     with open(sd_path, "w") as f: json.dump(sd, f, indent=1); f.write("\n")
     log(f"{len(ov)} variables re-pointed in sites.d/{s['site']}.json: {', '.join(sorted(ov))}")
+    if vaulted: note(f"{len(vaulted)} kept out of the repository, in {CREDENTIALS} as {s['site']}.<KEY>: {', '.join(sorted(vaulted))}")
     cmd_provision(argparse.Namespace(site=s["site"]))
     cmd_deploy(argparse.Namespace(site=s["site"], ref=None))
     cmd_verify(argparse.Namespace(site=s["site"], public=("dns" in load_state(s["site"])["steps"])))

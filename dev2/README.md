@@ -84,6 +84,28 @@ small file per site, so parallel migrations never edit a shared file:
   "pg_service": "Postgres-iVtY", "max_body": "256m", "branch": "master" }
 ```
 
+### Secrets in `env_overrides`
+
+`sites.d/` is committed and this repository is public, so a value that is a
+credential is written as `secret:<KEY>` and the value itself lives in
+`~/.config/cli-tools/credentials.json` (0600, outside every checkout) under
+`<site>.<KEY>`:
+
+```json
+{ "env_overrides": {
+    "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.example.com",
+    "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY" } }
+```
+
+`provision` resolves the reference when it renders `app.env`, and fails loudly
+naming the missing key rather than deploying a site with a literal
+`secret:...` in its environment. A bare `<KEY>` at the top level of
+credentials.json is the fallback, for a value shared across sites.
+
+`supabase-cutover` writes these references itself: anything it re-points that
+came from a key, a password or a DSN goes to credentials.json, and only the
+reference is written back into `sites.d/`.
+
 ## Database kinds
 
 - `pg`: Railway Postgres -> shared cluster (above). Done by the kit.
