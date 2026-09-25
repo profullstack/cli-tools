@@ -38,6 +38,18 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 | `supabase-storage` | copies every Storage object through the two Storage APIs (node in a container on dev2; resumable) |
 | `supabase-cutover` | re-points the app (`env_overrides`: URLs, keys, db password), provision + deploy + verify, unschedules the cloud cron jobs |
 
+| `firewall` | re-applies the data-port allowlist (5432 + every Supabase stack's db port) for dev1, loopback and all Docker pools |
+| `box-tune` | sshd MaxStartups/MaxSessions for parallel deploys |
+
+Image-only Railway services (a stock image plus a start command, no repo) are
+supported through `sites.d`: `{"image": "node:24-alpine", "start_command": "..."}`;
+the compose file uses `image:`/`command:` and `deploy-app.sh` skips clone and build
+(`IMAGE_ONLY=1`). Companion services can be published on their own hostname with
+`"companion_ports": {"name": {"host": 3361, "inside": 3000}}` plus a `proxies` entry.
+
+Run at most about six migrations against the box at once: more than that, and
+dev2 (or its provider) starts dropping this box's connections outright.
+
 ## Layout on the box (every site the same)
 
 ```
