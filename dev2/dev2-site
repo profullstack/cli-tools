@@ -75,8 +75,14 @@ def sh(cmd, check=True, input=None, capture=True, env=None, timeout=None):
     return p.stdout if capture else ""
 
 def ssh(user, cmd, input=None, check=True, timeout=None):
-    return sh(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", f"{user}@{DEV2_HOST}", cmd],
-              input=input, check=check, timeout=timeout)
+    argv = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", f"{user}@{DEV2_HOST}", cmd]
+    for attempt in range(3):  # sshd drops attempts under parallel load (exit 255); retry those only
+        p = subprocess.run(argv, input=input, text=True, capture_output=True, timeout=timeout)
+        if p.returncode != 255 or attempt == 2: break
+        time.sleep(3 * (attempt + 1))
+    if check and p.returncode != 0:
+        raise RuntimeError(f"command failed ({p.returncode}): {' '.join(map(shlex.quote, argv))}\n{(p.stdout or '')[-1500:]}\n{(p.stderr or '')[-2000:]}")
+    return p.stdout
 
 def ssh_put(content, path, mode="0644", owner=None, user="root"):
     """Write a file on dev2 from stdin: temp file beside the target, then an atomic move."""
@@ -480,6 +486,13 @@ def render_env(vars_, s, st, service_name=None):
         for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE"):
             if k in out:
                 out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": (s.get("db_sslparams") or sslparams_for(s, st)).split("=")[-1]}[k]
+    if s["db"] == "turso" and st.get("database_url"):
+        # After `db-create` + the app's Postgres port: every libsql:// URL becomes the new
+        # DATABASE_URL, the Turso token goes, DATABASE_URL is set if the app never had one.
+        for k, v in list(out.items()):
+            if isinstance(v, str) and (v.startswith("libsql://") or ".turso.io" in v): out[k] = st["database_url"]
+            if k in ("TURSO_AUTH_TOKEN",): del out[k]
+        out.setdefault("DATABASE_URL", st["database_url"])
     if s["redis"]:
         for k, v in list(out.items()):
             if isinstance(v, str) and "redis" in v.lower() and "railway.internal" in v:
@@ -715,6 +728,21 @@ def cmd_refresh_db(args):
     note("app restarted on the refreshed database")
     mark(s["site"], "refresh-db")
 
+def cmd_db_create(args):
+    """An empty database in the shared cluster and its DATABASE_URL in state (Turso ports:
+    the app's Postgres schema is applied by the app or by `libsql-pg convert-schema`)."""
+    s = site(args.site); st = load_state(s["site"])
+    db = db_name_for(s); pw = cluster_pg_password()
+    if pg_admin(f"select count(*) from pg_database where datname='{db}'").strip() == "0":
+        pg_admin(f'create database "{db}" owner postgres'); note(f"created database {db}")
+    else: note(f"database {db} exists")
+    pg_admin("create extension if not exists citext; create extension if not exists pg_trgm; create extension if not exists pgcrypto", db)
+    st.update({"db_name": db, "db_user": "postgres", "db_password": pw,
+               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?{s.get('db_sslparams') or sslparams_for(s, st)}"})
+    save_state(s["site"], st); mark(s["site"], "db-create")
+    print(st["database_url"].replace(pw, "***"))
+    note("the URL with the password is in the site's state file; `provision` renders it into app.env")
+
 def cmd_volumes(args):
     s = site(args.site); st = load_state(s["site"])
     root = f"{WWW}/{s['site']}"
@@ -926,6 +954,11 @@ def cmd_firewall(args):
     ssh_put(tmpl("firewall-data-ports.sh"), "/root/dev2-kit/firewall-data-ports.sh", "0700")
     print(ssh("root", f"env PORTS={shlex.quote(' '.join(map(str, sorted(ports))))} bash /root/dev2-kit/firewall-data-ports.sh 2>&1"))
 
+def cmd_box_tune(args):
+    ssh("root", "install -d -m 700 /root/dev2-kit")
+    ssh_put(tmpl("box-tune.sh"), "/root/dev2-kit/box-tune.sh", "0700")
+    print(ssh("root", "bash /root/dev2-kit/box-tune.sh 2>&1"))
+
 def cmd_retire(args):
     s = site(args.site); st = load_state(s["site"])
     if "verify-public" not in st["steps"] and not args.force: die("site not verified public on dev2; refuse to delete Railway services (or --force)")
@@ -1091,12 +1124,14 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("registry").set_defaults(fn=cmd_registry)
     sub.add_parser("firewall").set_defaults(fn=cmd_firewall)
+    sub.add_parser("box-tune").set_defaults(fn=cmd_box_tune)
     p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("scaffold"); p.add_argument("site"); p.add_argument("--regen", action="store_true", help="regenerate .nixpacks even if the branch already has one"); p.set_defaults(fn=cmd_scaffold)
     for name, fn in (("show", cmd_show), ("provision", cmd_provision), ("volumes", cmd_volumes), ("cert", cmd_cert),
                      ("dns", cmd_dns), ("railway-stop", cmd_railway_stop), ("merge", cmd_merge)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
     p = sub.add_parser("db"); p.add_argument("site"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_db)
+    p = sub.add_parser("db-create"); p.add_argument("site"); p.set_defaults(fn=cmd_db_create)
     p = sub.add_parser("deploy"); p.add_argument("site"); p.add_argument("ref", nargs="?"); p.set_defaults(fn=cmd_deploy)
     p = sub.add_parser("vhost"); p.add_argument("site"); p.add_argument("--no-cert-check", action="store_true"); p.set_defaults(fn=cmd_vhost)
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
