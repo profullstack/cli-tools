@@ -5,5 +5,18 @@
    "port": 8276,
    "max_body": "512m"
   }
- ]
+ ],
+ "function_secrets": {
+  "VITE_SUPABASE_URL": "https://supabase.saasrow.com",
+  "VITE_SUPABASE_ANON_KEY": "secret:VITE_SUPABASE_ANON_KEY",
+  "OPENAI_API_KEY": "secret:OPENAI_API_KEY",
+  "STRIPE_SECRET_KEY": "secret:STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET": "secret:STRIPE_WEBHOOK_SECRET",
+  "SITE_URL": "secret:SITE_URL",
+  "ADMIN_EMAIL": "secret:ADMIN_EMAIL",
+  "GETSCREENSHOT_API_KEY": "secret:GETSCREENSHOT_API_KEY",
+  "RESEND_API_KEY": "secret:RESEND_API_KEY",
+  "RESEND_DOMAIN": "secret:RESEND_DOMAIN",
+  "GEMINI_API_KEY": "secret:GEMINI_API_KEY"
+ }
 }
