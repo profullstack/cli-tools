@@ -1,0 +1,1 @@
+{ "branch": "main", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
