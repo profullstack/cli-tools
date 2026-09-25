@@ -958,6 +958,8 @@ def cmd_verify(args):
         die(f"no nginx vhost for {s['site']} yet: run `dev2-site vhost {s['site']}` first")
     ok = True
     for d in s["domains"]:
+        # A wildcard is probed through a sample label (the cert and vhost cover it).
+        if d.startswith("*."): d = "dev2-probe." + d[2:]
         resolve = [] if args.public else ["--resolve", f"{d}:443:{DEV2_IP}"]
         for attempt in range(12 if args.public else 1):  # resolvers cache the old record for up to TTL 600
             curl = ["curl", "-sk", "-o", "/dev/null", "-m", "30", "-w", "%{http_code}", *resolve, f"https://{d}{hp}"]
