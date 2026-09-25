@@ -879,7 +879,10 @@ def cmd_volumes(args):
 
 def cmd_deploy(args):
     s = site(args.site); st = load_state(s["site"])
-    ref = args.ref or st.get("scaffold_branch") or st.get("branch") or s.get("branch") or ("image" if not s.get("repo") else "main")
+    # Before the merge the scaffold branch carries the workflow; after it the branch is
+    # gone and the default branch is what CI deploys.
+    merged = "merge" in st["steps"]
+    ref = args.ref or (None if merged else st.get("scaffold_branch")) or st.get("branch") or s.get("branch") or ("image" if not s.get("repo") else "main")
     log(f"Deploy {s['site']} @ {ref} on dev2 (as {DEPLOY_USER})")
     out = ssh(DEPLOY_USER, f"{WWW}/{s['site']}/deploy-app.sh {shlex.quote(ref)} 2>&1", check=False, timeout=3600)
     print(out[-4000:])
