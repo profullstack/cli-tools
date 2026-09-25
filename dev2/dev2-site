@@ -1266,7 +1266,7 @@ def cmd_supabase_load(args):
         if not st.get(k): die(f"state has no {k}: run supabase-stack and supabase-pull first")
     log(f"Loading {st['sb_dump']} into {st['sb_slug']}-supabase-db")
     ssh_put(tmpl("supabase-load.sh"), "/root/dev2-kit/supabase-load.sh", "0700")
-    res = ssh("root", f"env DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
+    res = ssh("root", f"env DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} RESET={'1' if getattr(args, 'reset', False) else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
     print(res[-6000:])
     mark(s["site"], "supabase-load")
 
@@ -1353,7 +1353,7 @@ def main():
     for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
     p = sub.add_parser("supabase-pull"); p.add_argument("site"); p.add_argument("--reset-password", action="store_true"); p.set_defaults(fn=cmd_supabase_pull)
-    p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.set_defaults(fn=cmd_supabase_load)
+    p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.add_argument("--reset", action="store_true", help="drop the earlier load first (fresh dump before cutover)"); p.set_defaults(fn=cmd_supabase_load)
     p = sub.add_parser("supabase-storage"); p.add_argument("site"); p.add_argument("--concurrency", type=int, default=8); p.set_defaults(fn=cmd_supabase_storage)
     p = sub.add_parser("retire"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_retire)
     args = ap.parse_args()

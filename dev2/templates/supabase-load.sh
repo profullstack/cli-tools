@@ -6,6 +6,10 @@
 set -euo pipefail
 : "${DUMP:?}" "${DBC:?}" "${CLOUD_REF:?}" "${NEW_HOST:?}"
 POST_ONLY=${POST_ONLY:-0}
+# RESET=1 drops the app schemas (public and any other non-system schema the dump carries) plus
+# the auth/storage ROWS before loading, so a fresh dump can replace an earlier load without
+# duplicate-key errors. The stack's own auth/storage structure is untouched.
+RESET=${RESET:-0}
 log() { printf '\n===> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -d "$DUMP" ] || die "no dump at $DUMP"
@@ -16,6 +20,15 @@ docker exec "$DBC" pg_isready -U postgres -h localhost >/dev/null || die "$DBC n
 
 log "Snapshot BEFORE"
 strict -At -c "select 'tables='||(select count(*) from information_schema.tables where table_schema='public')||' users='||(select count(*) from auth.users)"
+
+if [ "$POST_ONLY" = 0 ] && [ "$RESET" = 1 ]; then
+  log "RESET: dropping app schemas and auth/storage rows from the earlier load"
+  while read -r sch; do [ -n "$sch" ] || continue
+    psql_admin -v ON_ERROR_STOP=1 -c "drop schema if exists \"$sch\" cascade; create schema \"$sch\"; grant usage on schema \"$sch\" to anon, authenticated, service_role; grant all on schema \"$sch\" to postgres" >/dev/null && echo "    dropped+recreated schema $sch"
+  done < "$DUMP/schemas.txt"
+  psql_admin -v ON_ERROR_STOP=1 -c "truncate auth.users cascade" -c "truncate storage.buckets cascade" >/dev/null && echo "    auth.users / storage.buckets truncated"
+  psql_admin -c "select cron.unschedule(jobname) from cron.job" >/dev/null 2>&1 || true
+fi
 
 if [ "$POST_ONLY" = 0 ]; then
   log "Extensions the cloud had"
