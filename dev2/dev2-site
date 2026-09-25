@@ -1379,11 +1379,13 @@ def cmd_supabase_functions(args):
     # so take each value from the app's own variables, which carry the same keys.
     secrets, missing = {}, []
     if st.get("cloud_ref"):
-        try: names = [x["name"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")]
-        except Exception as e: names = []; warn(f"could not list cloud function secrets: {e}")
+        try: snames = [x["name"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")]
+        except Exception as e: snames = []; warn(f"could not list cloud function secrets: {e}")
         vars_ = site_variables(s)
-        for n in names:
-            v = vars_.get(n)
+        # sites.d "function_secrets": {"NAME": "secret:NAME"} (values in credentials.json as <site>.fn.NAME) wins over app variables.
+        fs = {k: (cred(f"{s['site']}.fn.{v[7:]}", v[7:]) if isinstance(v, str) and v.startswith("secret:") else v) for k, v in (s.get("function_secrets") or {}).items()}
+        for n in snames:
+            v = fs.get(n) or vars_.get(n)
             if isinstance(v, str) and v: secrets[n] = v
             else: missing.append(n)
         if missing: warn(f"function secrets with no value in the site's variables (add them to {fdir}/secrets.env by hand): {', '.join(missing)}")
