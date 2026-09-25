@@ -1,0 +1,33 @@
+{
+ "site": "bittorrented.com",
+ "service": "bittorrented.com",
+ "repo": "profullstack/media-streamer",
+ "image": null,
+ "domains": [
+  "bittorrented.com",
+  "www.bittorrented.com"
+ ],
+ "db": "supabase",
+ "db_kinds": [
+  "supabase"
+ ],
+ "redis": false,
+ "volumes": [],
+ "companions": [],
+ "infra": [],
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3290,
+ "cloud_ref": "ussbjnpovrynxyztjeeb",
+ "app_host": "do (DigitalOcean droplet 137.184.114.110, user ubuntu, systemd bittorrented.service); NOT on dev2",
+ "notes": "Not a Railway site: only the Supabase stack lives on dev2 (supabase.bittorrented.com). DNS at DigitalOcean, so the cert is HTTP-01. The app, its workers and bitmagnet run on the droplet and were re-pointed by hand; never provision/deploy/dns/cutover this site with the kit.",
+ "proxies": [
+  {
+   "host": "supabase.bittorrented.com",
+   "port": 8290,
+   "max_body": "512m"
+  }
+ ]
+}
