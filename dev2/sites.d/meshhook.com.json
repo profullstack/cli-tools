@@ -1,1 +1,9 @@
-{"node_version": "24", "notes": "pnpm in the lockfile needs Node >= 22.13; nixpacks pinned nixpkgs has 22.11"}
+{
+ "node_version": "24",
+ "notes": "pnpm in the lockfile needs Node >= 22.13; nixpacks pinned nixpkgs has 22.11",
+ "branch": "master",
+ "env_remove": [
+  "TURSO_DATABASE_URL",
+  "TURSO_AUTH_TOKEN"
+ ]
+}

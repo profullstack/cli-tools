@@ -963,6 +963,10 @@ def cmd_cert(args):
         for r in recs:
             if r.get("type") == "CNAME" and r.get("name", "").startswith("_acme-challenge") and "railwaydns" in r.get("content", ""):
                 sh(["porkbun", "rm", zone, r["name"][: -len(zone) - 1], "--type", "CNAME", "--yes"], check=False); note(f"removed Railway acme CNAME {r['name']}")
+            # An interrupted acme.sh run leaves its TXT challenge behind, and the Porkbun hook
+            # then fails the next issuance with DUPLICATE_RECORD.
+            if r.get("type") == "TXT" and r.get("name", "") in (host + "." + zone if host != "_acme-challenge" else "_acme-challenge." + zone,):
+                sh(["porkbun", "rm", zone, r["id"], "--yes"], check=False); note(f"removed stale acme TXT {r['name']}")
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
     # A certificate acme.sh issued in the last day is reused (a retry after a dropped
