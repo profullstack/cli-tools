@@ -904,9 +904,37 @@ def site_domains(s):
     wild = [n[2:] for n in names if n.startswith("*.")]
     return [n for n in names if n.startswith("*.") or not any(n.endswith("." + z) and n.count(".") == z.count(".") + 1 for z in wild)]
 
+def zone_at_porkbun(domain):
+    zone = ".".join(domain.split(".")[-2:])
+    ns = sh(["dig", "+short", "NS", zone], check=False).lower()
+    return "porkbun" in ns
+
+def cmd_cert_http(s, domains):
+    """HTTP-01 for zones whose DNS we do not control (Cloudflare etc.): DNS must already
+    point at dev2. An http-only server block serves the challenge from /var/www/acme."""
+    cert_dir = f"/etc/nginx/ssl/{s['site']}"
+    for d in domains:
+        if d.startswith("*."): die(f"{d}: a wildcard needs DNS-01; move the zone to Porkbun or drop the wildcard")
+        ip = sh(["dig", "+short", d], check=False).split()
+        if DEV2_IP not in ip: die(f"{d} resolves to {ip or 'nothing'}, not {DEV2_IP}: point the zone's A record at dev2 first (DNS-only, not proxied, for issuance)")
+    log(f"Certificate for {', '.join(domains)} (acme.sh, HTTP-01 through nginx, zone not at Porkbun)")
+    conf = "server {\n    listen 80;\n    listen [::]:80;\n    server_name " + " ".join(domains) + ";\n    location ^~ /.well-known/acme-challenge/ { root /var/www/acme; default_type \"text/plain\"; }\n    location / { return 301 https://$host$request_uri; }\n}\n"
+    ssh_put(conf, f"/etc/nginx/sites-available/{s['site']}", "0644")
+    ssh("root", f"install -d -m 0755 /var/www/acme && ln -sf /etc/nginx/sites-available/{s['site']} /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
+    ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
+    out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root /root/.acme.sh/acme.sh --issue --server letsencrypt --webroot /var/www/acme {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
+    if out.strip() and "Cert success" not in out: die(out)
+    ssh("root", f"env HOME=/root /root/.acme.sh/acme.sh --install-cert -d {shlex.quote(domains[0])} --fullchain-file {cert_dir}/fullchain.pem --key-file {cert_dir}/privkey.pem --reloadcmd 'systemctl reload nginx' >/dev/null")
+    note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
+    mark(s["site"], "cert", cert_domains=domains, cert_mode="http-01")
+
 def cmd_cert(args):
     s = site(args.site)
     domains = site_domains(s)
+    if not zone_at_porkbun(s["site"]):
+        note(f"{s['site']}'s zone is not at Porkbun (NS: {sh(['dig', '+short', 'NS', '.'.join(s['site'].split('.')[-2:])], check=False).strip().replace(chr(10), ' ')})")
+        return cmd_cert_http(s, domains)
     k, sk = porkbun_keys()
     cert_dir = f"/etc/nginx/ssl/{s['site']}"
     log(f"Certificate for {', '.join(domains)} (acme.sh, Porkbun DNS-01, issued before DNS moves)")
@@ -981,6 +1009,10 @@ def cmd_verify(args):
 def cmd_dns(args):
     s = site(args.site)
     domains = site_domains(s)
+    if not zone_at_porkbun(s["site"]):
+        warn(f"{s['site']}'s DNS is not at Porkbun; point every A record ({', '.join(domains)}) at {DEV2_IP} by hand, then re-run"); 
+        if not all(DEV2_IP in sh(["dig", "+short", d], check=False).split() for d in domains if not d.startswith("*.")): die("DNS not pointing at dev2 yet")
+        mark(s["site"], "dns", dns_flipped="manual"); return
     zones = {}
     for d in domains:
         zone = ".".join(d.split(".")[-2:]); zones.setdefault(zone, []).append(d)
