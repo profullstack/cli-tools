@@ -1,0 +1,1 @@
+{"node_version": "24", "notes": "pnpm in the lockfile needs Node >= 22.13; nixpacks pinned nixpkgs has 22.11"}
