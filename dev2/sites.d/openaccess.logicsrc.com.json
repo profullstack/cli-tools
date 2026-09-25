@@ -1,0 +1,6 @@
+{
+ "image": "node:24-alpine",
+ "start_command": "sh -c 'until npx -y @logicsrc/openaccess@0.3.0 serve; do echo retrying in 20s; sleep 20; done'",
+ "health_path": "/healthz",
+ "notes": "stock node image running npx @logicsrc/openaccess (Railway startCommand)"
+}

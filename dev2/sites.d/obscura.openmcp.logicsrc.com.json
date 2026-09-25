@@ -1,0 +1,6 @@
+{
+ "image": "node:24-bookworm-slim",
+ "start_command": "sh -c 'node -e \"fetch(process.argv[1]).then(r=>{if(!r.ok)throw new Error(r.status);return r.body.pipeTo(require(\\\"stream\\\").Writable.toWeb(process.stdout))})\" https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.2/obscura-x86_64-linux-stealth.tar.gz | tar -xz -C /usr/local/bin obscura obscura-worker && until npx -y @logicsrc/openmcp@0.4.0 serve; do echo retrying in 20s; sleep 20; done'",
+ "health_path": "/healthz",
+ "notes": "stock node image: downloads the obscura binary then runs npx @logicsrc/openmcp (Railway startCommand); serves openmcp.logicsrc.com and obscura.openmcp.logicsrc.com"
+}

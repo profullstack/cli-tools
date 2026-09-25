@@ -61,6 +61,20 @@ TARGET=${1:?usage: deploy-app.sh <git-sha|ref> | --rollback | --status}
 
 [ -f "$ROOT/app.env" ] || die "missing $ROOT/app.env (the app's secrets)"
 
+if [ "${IMAGE_ONLY:-0}" = 1 ]; then
+  # A stock image with Railway's start command: nothing to clone or build.
+  log "Pulling image and starting"
+  compose pull -q || true
+  compose up -d --remove-orphans
+  if health; then
+    log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
+    { echo "DEPLOYED_SHA=image"; echo "PREVIOUS_SHA="; echo "DEPLOYED_AT=$(date -u +%FT%TZ)"; } > "$STATE"
+    compose ps; exit 0
+  fi
+  compose logs --tail 60 || true
+  die "image-only deploy failed health check"
+fi
+
 CURRENT=""
 [ -d "$APP_DIR/.git" ] && CURRENT=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo "")
 

@@ -497,12 +497,16 @@ def render_compose(s, st, app_port_inside, build_args=()):
     img = s["site"].replace(".", "-")
     y = [f"# {s['site']} on dev2: rendered by cli-tools dev2/dev2-site provision. Re-run provision to change.",
          "# nginx on the host terminates TLS and proxies to 127.0.0.1:${APP_PORT}.", "services:"]
+    image_only = bool(s.get("image")) and not s.get("repo")
     def service(name, envfile, command=None, ports=True, vols=()):
         y.append(f"  {name}:")
-        y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
-        if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
-            y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
-        y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
+        if image_only:  # Railway ran a stock image with a start command; no repo, nothing to build
+            y.append(f"    image: {s['image']}\n    restart: unless-stopped\n    env_file: {envfile}")
+        else:
+            y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
+            if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
+                y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
+            y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
         y.append(f"    environment:\n      PORT: \"{app_port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
         if command: y.append(f"    command: {json.dumps(shlex.split(command))}")
         if ports: y.append(f"    ports:\n      - \"127.0.0.1:${{APP_PORT}}:{app_port_inside}\"")
@@ -514,7 +518,11 @@ def render_compose(s, st, app_port_inside, build_args=()):
         y.append("    logging:\n      driver: json-file\n      options: { max-size: \"50m\", max-file: \"3\" }")
     service("app", "app.env", command=s.get("start_command"), vols=s["volumes"])
     for c in s["companions"]:
+        # companion_ports {"name": {"host": 3301, "inside": 3000}} publishes a companion on
+        # loopback so a `proxies` entry can give it its own hostname (an API the web app calls).
+        cp = (s.get("companion_ports") or {}).get(c["name"])
         service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []))
+        if cp: y.insert(len(y) - (2 if s["redis"] else 1), f"    ports:\n      - \"127.0.0.1:{cp['host']}:{cp['inside']}\"")
     if s["redis"]:
         y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
         y.append("volumes:\n  redisdata:")
@@ -547,20 +555,29 @@ def cmd_provision(args):
     vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
     inside = s.get("port_var") or "3000"
     app_env, merged = render_env(vars_, s, st)
-    cfg = repo_config(st.get("checkout") or checkout_dir(s))
-    if not st.get("dockerfile"):
-        st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
-    branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
-    hp = st.get("health_path") or health_url(s, cfg)[1]
+    image_only = bool(s.get("image")) and not s.get("repo")
+    if image_only:
+        if not s.get("start_command"): die(f"{s['site']} runs a stock image; set start_command (Railway's deployment manifest has it) in sites.d/{s['site']}.json")
+        cfg, branch, hp = {}, "", s.get("health_path") or "/"
+        st["dockerfile"] = None
+    else:
+        cfg = repo_config(st.get("checkout") or checkout_dir(s))
+        if not st.get("dockerfile"):
+            st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
+        branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
+        hp = st.get("health_path") or health_url(s, cfg)[1]
     compose = render_compose(s, st, inside, build_args=public_keys(merged))
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
     # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
     # deploy key (the alias keeps one key per repo); some orgs (moshcoder) disable deploy
     # keys, which only matters when the repo is private.
-    private = sh(["gh", "api", f"repos/{s['repo']}", "--jq", ".private"], check=False).strip() == "true"
-    key_alias = f"github.com-{s['repo'].replace('/', '__')}"
-    repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
-    deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\n"
+    if image_only:
+        repo_url, key_alias = "", ""
+    else:
+        private = sh(["gh", "api", f"repos/{s['repo']}", "--jq", ".private"], check=False).strip() == "true"
+        key_alias = f"github.com-{s['repo'].replace('/', '__')}"
+        repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
+    deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\nIMAGE_ONLY={'1' if image_only else '0'}\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")
@@ -574,6 +591,8 @@ def cmd_provision(args):
     ssh_put(compose, f"{root}/docker-compose.app.yml", "0640", own)
     ssh_put(tmpl("deploy-app.sh"), f"{root}/deploy-app.sh", "0755", own)
     note(f"{len(merged)} variables in app.env, {len(s['companions'])} companion env files, compose + deploy-app.sh installed")
+    if image_only:
+        mark(s["site"], "provision", root=root, branch="", health_path=hp, dockerfile=None); return
     # Deploy key + GitHub secrets
     key = deploy_key(s["repo"])
     pub = open(key + ".pub").read().strip()
@@ -712,7 +731,7 @@ def cmd_volumes(args):
 
 def cmd_deploy(args):
     s = site(args.site); st = load_state(s["site"])
-    ref = args.ref or st.get("scaffold_branch") or st.get("branch") or s.get("branch") or "main"
+    ref = args.ref or st.get("scaffold_branch") or st.get("branch") or s.get("branch") or ("image" if not s.get("repo") else "main")
     log(f"Deploy {s['site']} @ {ref} on dev2 (as {DEPLOY_USER})")
     out = ssh(DEPLOY_USER, f"{WWW}/{s['site']}/deploy-app.sh {shlex.quote(ref)} 2>&1", check=False, timeout=3600)
     print(out[-4000:])
@@ -873,6 +892,7 @@ def cmd_migrate(args):
              ("railway-stop", cmd_railway_stop), ("merge", cmd_merge), ("verify-public", cmd_verify)]
     for step in filter(None, steps):
         name, fn = step
+        if name in ("scaffold", "merge") and not s.get("repo"): note(f"{name}: skipped (image-only site, no repo)"); continue
         if name in st["steps"] and not args.redo: note(f"{name}: done {st['steps'][name]}"); continue
         if name == "dns" and not args.yes and not args.__dict__.get("no_confirm"):
             if not sys.stdin.isatty(): die("dns flip needs --yes when non-interactive")
