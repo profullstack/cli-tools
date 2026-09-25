@@ -1,0 +1,1 @@
+{ "branch": "main", "env_remove": ["DATABASE_AUTH_TOKEN"] }
