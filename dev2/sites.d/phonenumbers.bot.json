@@ -1,0 +1,13 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.phonenumbers.bot",
+   "port": 8268,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
+  "SUPABASE_URL": "https://supabase.phonenumbers.bot"
+ }
+}
