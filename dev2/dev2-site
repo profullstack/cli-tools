@@ -414,8 +414,14 @@ def cmd_scaffold(args):
             # Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) are baked into the bundle at
             # `build`; Railway had them in the build environment. Declare them as ARGs so the
             # compose build args (provision) reach the build, then keep them as ENV for runtime.
-            pub = public_keys(rw_variables(s["project_id"], s["environment_id"], s["service_id"]))
+            pub = public_keys(rvars)
             dfp = os.path.join(wt, ".nixpacks", "Dockerfile")
+            # nixpacks 1.41 installs corepack 0.24, which cannot launch pnpm >= 10 on Node 22/24
+            # (ERR_VM_DYNAMIC_IMPORT_CALLBACK_MISSING). Pin a current one.
+            if os.path.exists(dfp):
+                txt = open(dfp).read()
+                new_txt = re.sub(r"corepack@0\.2\d\.\d+", "corepack@0.36.0", txt)
+                if new_txt != txt: open(dfp, "w").write(new_txt); note("corepack pinned to 0.36.0 in .nixpacks/Dockerfile")
             if pub and os.path.exists(dfp):
                 lines = open(dfp).read().split("\n")
                 at = next((i for i, l in enumerate(lines) if l.startswith("WORKDIR")), 0) + 1
