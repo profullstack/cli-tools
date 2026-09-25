@@ -1,0 +1,1 @@
+{ "env_remove": ["TSBB_DATABASE_AUTH_TOKEN"], "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/tsbb#28); TSBB_DATABASE_URL is rewritten to the cluster URL by provision" }
