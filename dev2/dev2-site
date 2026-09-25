@@ -666,6 +666,20 @@ def deploy_key(repo):
         sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"github-actions-deploy@{repo}", "-f", path])
     return path
 
+def render_crons(s):
+    """sites.d "crons": [{"schedule": "* * * * *", "path": "/api/cron/x", "auth_env": "CRON_SECRET", "timeout": 55}]
+    -> /etc/cron.d/dev2-site-<slug>. Replaces the Vercel/Railway cron the app used to rely on: root curls the
+    site's own URL with the bearer taken from app.env at run time (nothing secret lands in the cron file)."""
+    path = f"/etc/cron.d/dev2-site-{sb_slug(s)}"
+    crons = s.get("crons") or []
+    if not crons: ssh("root", f"rm -f {path}", check=False); return
+    lines = [f"# {s['site']}: managed by cli-tools dev2-site (sites.d crons); do not edit", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin", ""]
+    for c in crons:
+        hdr = f' -H "Authorization: Bearer $(grep -m1 ^{c["auth_env"]}= {WWW}/{s["site"]}/app.env | cut -d= -f2-)"' if c.get("auth_env") else ""
+        lines.append(f'{c["schedule"]} root curl -fsS -m {int(c.get("timeout", 55))} -o /dev/null{hdr} https://{s["site"]}{c["path"]} >/dev/null 2>&1')
+    ssh_put("\n".join(lines) + "\n", path, "0644")
+    note(f"{len(crons)} cron job(s) in {path}: " + ", ".join(f"{c['schedule']} {c['path']}" for c in crons))
+
 def cmd_provision(args):
     s = site(args.site); st = load_state(s["site"])
     root = f"{WWW}/{s['site']}"
@@ -735,6 +749,7 @@ def cmd_provision(args):
     for name, val in (("DEV2_SSH_KEY", open(key).read()), ("DEV2_KNOWN_HOSTS", known), ("DEV2_HOST", DEV2_HOST), ("DEV2_USER", DEPLOY_USER)):
         sh(["gh", "secret", "set", name, "--repo", s["repo"]], input=val)
     note(f"deploy key {os.path.basename(key)} authorized on dev2; DEV2_* secrets set on {s['repo']}")
+    render_crons(s)
     mark(s["site"], "provision", root=root, branch=branch, health_path=hp, dockerfile=st["dockerfile"], checkout=st.get("checkout") or checkout_dir(s))
 
 # ------------------------------------------------------------------- db
