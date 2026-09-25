@@ -252,6 +252,11 @@ export class Gh {
           (raw) => parsePullRequest(raw),
         );
 
+        // Only an open PR has mergeability left to compute. A merged or closed
+        // one rests in UNKNOWN for good, so retrying spends the whole budget
+        // waiting out a verdict that is never coming.
+        if (pr.state !== 'OPEN') return pr;
+
         const settled = pr.mergeable !== 'UNKNOWN';
         const ready = !awaitReady || !pr.isDraft;
 

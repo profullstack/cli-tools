@@ -295,6 +295,13 @@ describe('eligibility rules', () => {
     );
     expect(isUpdatable({ ...pr, mergeStateStatus: 'BEHIND' })).toBe(true);
   });
+
+  it('will not try to update the branch of a PR that is no longer open', () => {
+    // Merging deletes the head branch, so update-branch answers "Could not
+    // resolve head ref" — alarming output about a PR that is already done.
+    expect(isUpdatable({ ...pr, state: 'MERGED', mergeStateStatus: 'UNKNOWN' })).toBe(false);
+    expect(isUpdatable({ ...pr, state: 'CLOSED', mergeable: 'CONFLICTING' })).toBe(false);
+  });
 });
 
 describe('gh response validation', () => {
@@ -313,6 +320,34 @@ describe('gh response validation', () => {
     expect(parseChecks([{ name: 'a', bucket: 'pass' }])).toEqual([
       { name: 'a', bucket: 'pass' },
     ]);
+  });
+
+  it('does not wait out mergeability on a PR that is already merged', async () => {
+    // A merged PR rests in mergeable=UNKNOWN for good. Retrying it spends the
+    // whole budget — seconds per PR — on a verdict that is never coming.
+    let views = 0;
+    const gh = new Gh({
+      exec: async () => {
+        views += 1;
+        return {
+          code: 0,
+          stdout: JSON.stringify({
+            url: PR_URL,
+            title: 'merged already',
+            state: 'MERGED',
+            isDraft: false,
+            mergeable: 'UNKNOWN',
+            mergeStateStatus: 'UNKNOWN',
+            headRefOid: 'deadbeef',
+          }),
+          stderr: '',
+        };
+      },
+    });
+
+    const pr = await gh.pullRequest(PR_URL, { delayMs: 0 });
+    expect(pr.state).toBe('MERGED');
+    expect(views).toBe(1);
   });
 
   it('reports non-JSON output as such', async () => {
@@ -352,6 +387,23 @@ describe('sweep', () => {
 
     expect(summary.skipped).toBe(1);
     expect(text).toContain('mergeable=CONFLICTING');
+    expect(calls.some((c) => c.startsWith('pr update-branch'))).toBe(false);
+  });
+
+  it('leaves a PR merged out from under the sweep alone instead of repairing it', async () => {
+    // Someone else merged it between the search and the read. UNKNOWN would
+    // otherwise look repairable, and update-branch would ask after a head ref
+    // the merge deleted.
+    const { gh, calls } = stubGh({
+      steps: [{ state: 'MERGED', mergeable: 'UNKNOWN', mergeStateStatus: 'UNKNOWN' }],
+    });
+    const { summary, text } = await runSweep(gh, baseOptions({ fix: true }));
+
+    expect(summary.skipped).toBe(1);
+    expect(summary.fixed).toBe(0);
+    expect(text).toContain('state=MERGED');
+    expect(text).not.toContain('FIXING');
+    expect(text).not.toContain('FIXME');
     expect(calls.some((c) => c.startsWith('pr update-branch'))).toBe(false);
   });
 
