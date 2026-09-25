@@ -700,7 +700,7 @@ def cmd_provision(args):
         if not st.get("dockerfile"):
             st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
         branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
-        hp = st.get("health_path") or health_url(s, cfg)[1]
+        hp = s.get("health_path") or st.get("health_path") or health_url(s, cfg)[1]  # sites.d wins over the state file (app.logicsrc.com)
     compose = render_compose(s, st, inside, build_args=public_keys(merged))
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
     # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
@@ -1054,7 +1054,7 @@ def cmd_vhost(args):
 
 def cmd_verify(args):
     s = site(args.site); st = load_state(s["site"])
-    hp = st.get("health_path") or "/"
+    hp = s.get("health_path") or st.get("health_path") or "/"
     # Without the vhost nginx's default server answers the pinned SNI and a 200 means nothing.
     if ssh("root", f"test -e /etc/nginx/sites-enabled/{shlex.quote(s['site'])} && echo yes", check=False).strip() != "yes":
         die(f"no nginx vhost for {s['site']} yet: run `dev2-site vhost {s['site']}` first")
