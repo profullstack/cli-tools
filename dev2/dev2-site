@@ -1007,8 +1007,12 @@ def cmd_cert(args):
     # A certificate acme.sh issued in the last day is reused (a retry after a dropped
     # ssh session must not burn Let's Encrypt's duplicate-certificate quota).
     fresh = ssh("root", f"find /root/.acme.sh/{shlex.quote(domains[0])}_ecc -name fullchain.cer -mmin -1440 2>/dev/null | head -n1", check=False).strip()
+    if fresh:  # only if it covers every name we need now (a stack adds supabase.<site> later in the day)
+        sans = ssh("root", f"openssl x509 -in {shlex.quote(fresh)} -noout -ext subjectAltName 2>/dev/null | tr ',' '\\n' | sed -n 's/.*DNS://p'", check=False).split()
+        missing = [d for d in domains if d not in sans]
+        if missing: note(f"fresh certificate lacks {', '.join(missing)}; issuing a new one"); fresh = ""
     if fresh:
-        note("certificate issued within the last day; installing it")
+        note("certificate issued within the last day covers every name; installing it")
     else:
         out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
         if out.strip() and "Cert success" not in out: die(out)
