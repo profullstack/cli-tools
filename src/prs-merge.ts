@@ -109,8 +109,13 @@ export function reasonNotMergeable(
  * conflict. DIRTY is GitHub's settled verdict that they do, so asking anyway
  * spends a round trip to be told "Cannot update PR branch due to conflicts" and
  * then prints the refusal as though it were news.
+ *
+ * A PR that is no longer open has nothing to update either: merging deletes the
+ * head branch, so the request comes back "Could not resolve head ref" — a
+ * frightening sentence about a PR that is simply already done.
  */
 export function isUpdatable(pr: PullRequest): boolean {
+  if (pr.state !== 'OPEN') return false;
   if (pr.mergeStateStatus === 'DIRTY') return false;
   return (
     pr.mergeStateStatus === 'BEHIND' ||
@@ -281,7 +286,10 @@ export async function sweep(
     const checks = await gh.checks(url);
     const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
 
-    if (reason && options.fix) {
+    // Repair is for open PRs. A PR that was merged or closed between the search
+    // and this read is not a blocker to clear — it is finished — and every
+    // repair below would ask GitHub about a head branch the merge deleted.
+    if (reason && options.fix && pr.state === 'OPEN') {
       // Checks still running. The PR is not blocked, it is unfinished — the
       // only defect is that we looked too early. Set it aside rather than
       // standing here: every PR behind it in the sweep is merge-ready now and
