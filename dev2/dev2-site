@@ -430,9 +430,9 @@ def render_env(vars_, s, st, service_name=None):
         for k, v in list(out.items()):
             if isinstance(v, str) and re.search(r"postgres(ql)?://", v) and ("railway.internal" in v or ".rlwy.net" in v):
                 out[k] = st["database_url"]
-        for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE"):
+        for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE"):
             if k in out:
-                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"]}[k]
+                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": s.get("db_sslmode", "no-verify")}[k]
     if s["redis"]:
         for k, v in list(out.items()):
             if isinstance(v, str) and "redis" in v.lower() and "railway.internal" in v:
@@ -506,7 +506,7 @@ def cmd_provision(args):
     private = sh(["gh", "api", f"repos/{s['repo']}", "--jq", ".private"], check=False).strip() == "true"
     key_alias = f"github.com-{s['repo'].replace('/', '__')}"
     repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
-    deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
+    deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")
@@ -579,7 +579,10 @@ def cmd_db(args):
         if args.force:
             pg_admin("drop schema public cascade; create schema public; grant all on schema public to postgres, public", db); note("dropped public schema")
     st.update({"db_name": db, "db_user": "postgres", "db_password": pw,
-               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?sslmode=require"})
+               # `no-verify`, not `require`: node-postgres (pg >= 8.x) treats sslmode=require as
+               # verify-full and rejects the cluster's self-signed certificate, while the health
+               # check stays green. postgres.js/Bun accept no-verify too. pg_hba still forces TLS.
+               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?sslmode={s.get('db_sslmode', 'no-verify')}"})
     save_state(s["site"], st)
     # Dump inside the Railway container (pg_dump matches the server there) and stream to dev2.
     user = rw_ssh_user(s["project_id"], s["environment_id"], pg["name"])
