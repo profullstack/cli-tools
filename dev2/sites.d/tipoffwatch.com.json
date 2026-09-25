@@ -1,0 +1,6 @@
+{
+ "env_overrides": {
+  "PLAYLIST_SECRET": "postgresql://postgres:JApsRyjafaEFHDqXQHWFAJTQoNxADLOo@postgres-q7ea.railway.internal:5432/railway"
+ },
+ "notes": "PLAYLIST_SECRET pins the playlist encryption key to the old Railway DATABASE_URL: tipoffwatch derives the key from PLAYLIST_SECRET || DATABASE_URL (packages/config/src/index.js), and the kit rewrote DATABASE_URL, which made every stored playlist URL unreadable. Contains the retired Railway Postgres credential; do not commit."
+}

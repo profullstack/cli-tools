@@ -432,7 +432,7 @@ def render_env(vars_, s, st, service_name=None):
                 out[k] = st["database_url"]
         for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE"):
             if k in out:
-                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": s.get("db_sslmode", "no-verify")}[k]
+                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": "require"}[k]
     if s["redis"]:
         for k, v in list(out.items()):
             if isinstance(v, str) and "redis" in v.lower() and "railway.internal" in v:
@@ -579,10 +579,11 @@ def cmd_db(args):
         if args.force:
             pg_admin("drop schema public cascade; create schema public; grant all on schema public to postgres, public", db); note("dropped public schema")
     st.update({"db_name": db, "db_user": "postgres", "db_password": pw,
-               # `no-verify`, not `require`: node-postgres (pg >= 8.x) treats sslmode=require as
-               # verify-full and rejects the cluster's self-signed certificate, while the health
-               # check stays green. postgres.js/Bun accept no-verify too. pg_hba still forces TLS.
-               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?sslmode={s.get('db_sslmode', 'no-verify')}"})
+               # One form both drivers accept: node-postgres (pg >= 8.x) reads sslmode=require as
+               # verify-full and rejects the cluster's self-signed cert unless uselibpqcompat=true;
+               # Bun.SQL rejects `no-verify` outright but ignores the extra parameter. pg_hba
+               # still forces TLS on the wire.
+               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?{s.get('db_sslparams', 'sslmode=require&uselibpqcompat=true')}"})
     save_state(s["site"], st)
     # Dump inside the Railway container (pg_dump matches the server there) and stream to dev2.
     user = rw_ssh_user(s["project_id"], s["environment_id"], pg["name"])
