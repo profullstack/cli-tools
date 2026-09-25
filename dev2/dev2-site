@@ -716,6 +716,12 @@ def cmd_verify(args):
         ok &= good
         note(f"{d}{hp} -> {code} {'ok' if good else 'FAIL'}{' (pinned to dev2)' if not args.public else ''}")
     if not ok: die("verify failed")
+    # A green health check can hide a dead database: scan the last minutes of logs.
+    bad = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -ciE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND' || true", check=False).strip()
+    if bad and bad != "0":
+        out = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -iE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND' | tail -n 8", check=False)
+        warn(f"{bad} connection-failure lines in the last 10 min of logs:\n{out}")
+        if not getattr(args, "ignore_logs", False): die("verify: the app answers but its logs show connection failures (re-run with --ignore-logs if these are expected)")
     mark(s["site"], "verify-public" if args.public else "verify")
 
 def cmd_dns(args):
@@ -979,7 +985,7 @@ def main():
     p = sub.add_parser("db"); p.add_argument("site"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_db)
     p = sub.add_parser("deploy"); p.add_argument("site"); p.add_argument("ref", nargs="?"); p.set_defaults(fn=cmd_deploy)
     p = sub.add_parser("vhost"); p.add_argument("site"); p.add_argument("--no-cert-check", action="store_true"); p.set_defaults(fn=cmd_vhost)
-    p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.set_defaults(fn=cmd_verify)
+    p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
     for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover)):
