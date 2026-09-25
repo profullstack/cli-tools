@@ -1,1 +1,4 @@
-{"start_command": "node apps/pwa/src/server.mjs", "health_path": "/healthz", "notes": "Railway ran this service from apps/pwa (its railway.json: npm start -> node src/server.mjs, /healthz); the repo root start is the moshcode CLI"}
+{
+ "health_path": "/healthz",
+ "notes": "web app is apps/pwa (own deps); plain Dockerfile on the deploy branch, health /healthz"
+}
