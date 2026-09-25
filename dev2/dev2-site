@@ -757,7 +757,10 @@ def site_domains(s):
     proxied hosts (the Supabase gateway)."""
     extra = [p["host"] for p in s.get("proxies") or []]
     www = [f"www.{s['site']}"] if s["site"].count(".") == 1 else []
-    return list(dict.fromkeys(s["domains"] + www + extra))
+    names = list(dict.fromkeys(s["domains"] + www + extra))
+    # Let's Encrypt refuses a name that a wildcard in the same order already covers.
+    wild = [n[2:] for n in names if n.startswith("*.")]
+    return [n for n in names if n.startswith("*.") or not any(n.endswith("." + z) and n.count(".") == z.count(".") + 1 for z in wild)]
 
 def cmd_cert(args):
     s = site(args.site)
