@@ -432,7 +432,7 @@ def render_env(vars_, s, st, service_name=None):
                 out[k] = st["database_url"]
         for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE"):
             if k in out:
-                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": "require"}[k]
+                out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": (s.get("db_sslparams") or sslparams_for(s, st)).split("=")[-1]}[k]
     if s["redis"]:
         for k, v in list(out.items()):
             if isinstance(v, str) and "redis" in v.lower() and "railway.internal" in v:
@@ -557,6 +557,16 @@ def cluster_pg_password():
 def pg_admin(sql, db="postgres"):
     return ssh("root", f"docker exec -i {PG_CONTAINER} psql -U supabase_admin -h localhost -d {shlex.quote(db)} -X -At -v ON_ERROR_STOP=1", input=sql)
 
+def sslparams_for(s, st):
+    """`sslmode=no-verify` for node-postgres repos, `sslmode=require` for everything else."""
+    d = st.get("checkout") or (checkout_dir(s) if s.get("repo") else None)
+    if d:
+        try:
+            out = sh(f"grep -rls --include=package.json -E '\"pg\"\\s*:' {shlex.quote(d)} --exclude-dir=node_modules --exclude-dir=.git | head -n 1", check=False)
+            if out.strip(): return "sslmode=no-verify"
+        except RuntimeError: pass
+    return "sslmode=require"
+
 def db_name_for(s):
     return s.get("db_name") or re.sub(r"[^a-z0-9]+", "_", s["site"].lower()).strip("_")
 
@@ -585,11 +595,12 @@ def cmd_db(args):
         if args.force:
             pg_admin("drop schema public cascade; create schema public; grant all on schema public to postgres, public", db); note("dropped public schema")
     st.update({"db_name": db, "db_user": "postgres", "db_password": pw,
-               # One form both drivers accept: node-postgres (pg >= 8.x) reads sslmode=require as
-               # verify-full and rejects the cluster's self-signed cert unless uselibpqcompat=true;
-               # Bun.SQL rejects `no-verify` outright but ignores the extra parameter. pg_hba
-               # still forces TLS on the wire.
-               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?{s.get('db_sslparams', 'sslmode=require&uselibpqcompat=true')}"})
+               # No single form suits every driver: node-postgres (pg >= 8.x) reads sslmode=require
+               # as verify-full and rejects the cluster's self-signed cert, so it needs no-verify;
+               # Bun.SQL rejects no-verify and forwards any unknown parameter (uselibpqcompat) to the
+               # server as a GUC, which is FATAL. So: no-verify when the repo depends on `pg`,
+               # plain require otherwise (Bun.SQL, postgres.js, libpq). Override with db_sslparams.
+               "database_url": f"postgres://postgres:{pw}@{DEV2_HOST}:5432/{db}?{s.get('db_sslparams') or sslparams_for(s, st)}"})
     save_state(s["site"], st)
     # Dump inside the Railway container (pg_dump matches the server there) and stream to dev2.
     user = rw_ssh_user(s["project_id"], s["environment_id"], pg["name"])
@@ -724,9 +735,9 @@ def cmd_verify(args):
         note(f"{d}{hp} -> {code} {'ok' if good else 'FAIL'}{' (pinned to dev2)' if not args.public else ''}")
     if not ok: die("verify failed")
     # A green health check can hide a dead database: scan the last minutes of logs.
-    bad = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -ciE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND' || true", check=False).strip()
+    bad = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -ciE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND|unrecognized configuration parameter|database unavailable' || true", check=False).strip()
     if bad and bad != "0":
-        out = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -iE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND' | tail -n 8", check=False)
+        out = ssh(DEPLOY_USER, f"cd {WWW}/{s['site']} && docker compose -f docker-compose.app.yml --env-file deploy.env logs --since 10m --no-color 2>&1 | grep -iE 'self signed certificate|SELF_SIGNED_CERT|CONNECT_TIMEOUT|ECONNREFUSED|password authentication failed|does not exist|ENOTFOUND|unrecognized configuration parameter|database unavailable' | tail -n 8", check=False)
         warn(f"{bad} connection-failure lines in the last 10 min of logs:\n{out}")
         if not getattr(args, "ignore_logs", False): die("verify: the app answers but its logs show connection failures (re-run with --ignore-logs if these are expected)")
     mark(s["site"], "verify-public" if args.public else "verify")
