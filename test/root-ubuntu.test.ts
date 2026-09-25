@@ -1446,18 +1446,37 @@ describe('configure_fail2ban', () => {
     expect(conf).toMatch(/\[sshd\]\nenabled = true\nport = 22\nbackend = auto/);
   });
 
-  it('never bans loopback, the tailnet, the admin list or the operator connected now', () => {
+  it('never bans loopback, the tailnet, the admin list or the operator logged in now', () => {
     const dir = fakeRoot();
-    writeFileSync(join(dir, 'var/log/auth.log'), '');
+    writeFileSync(
+      join(dir, 'var/log/auth.log'),
+      '2026-09-25T12:31:52+00:00 box sshd-session[1]: Accepted publickey for anthony from 198.51.100.7 port 40000 ssh2: ED25519 SHA256:x\n' +
+        '2026-09-25T12:32:00+00:00 box sshd-session[2]: Accepted keyboard-interactive/pam for ops from 198.51.100.8 port 40001 ssh2\n',
+    );
     run(
       dir,
       "FAIL2BAN_IGNOREIP='67.205.189.229 10.0.0.0/8' SSH_CLIENT='203.0.113.5 51234 22' " +
-        "FAKE_SS=$'0 0 23.95.228.174:22 198.51.100.7:40000\\n0 0 23.95.228.174:22 203.0.113.5:51234\\n'",
+        "FAKE_SS=$'0 0 23.95.228.174:22 198.51.100.7:40000\\n0 0 23.95.228.174:22 198.51.100.8:40001\\n0 0 23.95.228.174:22 203.0.113.5:51234\\n'",
     );
     const line = /^ignoreip = (.*)$/m.exec(jail(dir))?.[1].split(' ') ?? [];
     expect(line).toEqual([
-      '127.0.0.1/8', '::1', '100.64.0.0/10', '67.205.189.229', '10.0.0.0/8', '203.0.113.5', '198.51.100.7',
+      '127.0.0.1/8', '::1', '100.64.0.0/10', '67.205.189.229', '10.0.0.0/8',
+      '203.0.113.5', '198.51.100.7', '198.51.100.8',
     ]);
+  });
+
+  it('does not exempt a peer that is connected but never logged in', () => {
+    // A brute-forcer mid-attempt holds an established connection too.
+    const dir = fakeRoot();
+    writeFileSync(
+      join(dir, 'var/log/auth.log'),
+      '2026-09-25T12:31:52+00:00 box sshd-session[1]: Failed password for root from 192.0.2.99 port 5 ssh2\n' +
+        '2026-09-25T12:31:53+00:00 box sshd-session[2]: Accepted publickey for anthony from 198.51.100.7 port 40000 ssh2\n',
+    );
+    run(dir, "FAKE_SS=$'0 0 23.95.228.174:22 192.0.2.99:5\\n0 0 23.95.228.174:22 198.51.100.7:40000\\n'");
+    const ignore = /^ignoreip = (.*)$/m.exec(jail(dir))?.[1] ?? '';
+    expect(ignore).toContain('198.51.100.7');
+    expect(ignore).not.toContain('192.0.2.99');
   });
 
   it('reads the journal on a box with no auth.log', () => {
