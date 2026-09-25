@@ -1,0 +1,17 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.weedforcrypto.com",
+   "port": 8243,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY": "secret:NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.weedforcrypto.com"
+ }
+}
