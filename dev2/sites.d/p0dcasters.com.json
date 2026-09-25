@@ -1,0 +1,1 @@
+{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"], "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/p0dcasters#29); next build runs at container start against DATABASE_URL" }
