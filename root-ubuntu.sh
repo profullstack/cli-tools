@@ -4858,6 +4858,19 @@ install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | s
 # threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as install_moshcode above
 install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
 
+# Enables the ONE per-box enforcing daemon, as root. Fleet-wide enablement is an
+# explicit opt-in (Anthony, 2026-09-25): the daemon auto-bans, so turning it on
+# everywhere is a blast-radius decision, not a default. Safe only on >=0.12.4 (a
+# port-scan-ban regression once took dev2 off the network); provisioning installs
+# latest, so that floor is met. `install-service` run as root writes the systemd
+# unit and starts it; non-root it would re-exec with sudo, but as_user root is
+# already uid 0. ~/.local/bin is forced onto PATH because the curl installer lands
+# there and a clean login shell may not have it yet. No-ops if threatcrush is
+# absent, so a failed install never breaks provisioning.
+enable_threatcrush_daemon() {
+	as_user root 'PATH="$HOME/.local/bin:$PATH"; command -v threatcrush >/dev/null 2>&1 && threatcrush install-service'
+}
+
 # ...and this updates the engines and workflow CLIs moshcode manages.
 #
 # The two are NOT the same command, which is the trap. The wrapper at
@@ -6766,6 +6779,12 @@ else
 		try "moshcode tools ($login)" update_moshcode_tools "$login"
 		try "threatcrush ($login)" install_threatcrush "$login"
 	done < <(printf 'root\n'; all_logins)
+
+	# One enforcing daemon per box, once, as root -- not per login. Explicit
+	# fleet-wide opt-in (see enable_threatcrush_daemon). Runs only on the host;
+	# tenants get the CLI inside their own instance, never a root daemon on shared
+	# infrastructure.
+	try "threatcrush daemon (root)" enable_threatcrush_daemon
 fi
 
 # ---------------------------------------------------------------- wrap up ---
