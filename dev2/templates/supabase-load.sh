@@ -36,7 +36,7 @@ fi
 if [ "$POST_ONLY" = 0 ]; then
   log "Extensions the cloud had"
   while read -r e <&3; do [ -n "$e" ] || continue; case $e in plpgsql|pg_graphql|pgsodium|supabase_vault|pg_stat_statements|pgjwt) continue;; esac
-    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; done 3< "$DUMP/extensions.txt"
+    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" with schema extensions cascade" >/dev/null 2>&1 && echo "    $e" || { psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e (own schema)" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; }; done 3< "$DUMP/extensions.txt"
   log "Schema"
   grep -qE 'CREATE SCHEMA "?(auth|storage)"?' "$DUMP/schema.sql" && die "schema.sql contains auth/storage DDL"
   psql_admin -f /dev/stdin < "$DUMP/schema.sql" > "$DUMP/schema.load.log" 2>&1 || true
@@ -84,7 +84,7 @@ strict -At <<SQL
 do \$\$ declare r record; n bigint; total bigint := 0; begin
   for r in select table_schema s, table_name t, column_name c, data_type d from information_schema.columns
            where table_schema not in ('pg_catalog','information_schema','auth','storage','realtime','_realtime','supabase_functions','supabase_migrations','graphql','graphql_public','extensions','vault','pgsodium','cron','net','_analytics','_supavisor')
-             and data_type in ('text','character varying','jsonb','json')
+             and data_type in ('text','character varying','jsonb','json') and is_generated = 'NEVER'
              and (table_schema, table_name) in (select schemaname, tablename from pg_tables) loop
     if r.d in ('jsonb','json') then
       execute format('update %I.%I set %I = replace(%I::text, %L, %L)::%s where %I::text like %L', r.s, r.t, r.c, r.c, 'https://$CLOUD_REF.supabase.co', 'https://$NEW_HOST', r.d, r.c, '%$CLOUD_REF.supabase.co%');
