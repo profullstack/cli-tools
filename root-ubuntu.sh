@@ -36,6 +36,8 @@
 #   6. oh-my-zsh + plugins, oh-my-tmux, irssi configs
 #   7. mise      (curl https://mise.run | sh)
 #   8. moshcode  (curl https://moshcode.sh/install.sh | sh)
+#      + threatcrush CLI (curl https://threatcrush.com/install.sh | sh); the
+#        enforcing daemon is a separate opt-in (`threatcrush install-service`)
 #   9. a per-user ssh-agent as a systemd user service
 #  10. motd from $MOTD_URL
 #  11. nginx per-user pages, per-user dev apps, TLS
@@ -3226,6 +3228,7 @@ _sandbox_tools() {
 				sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" >/dev/null 2>&1
 			curl -fsSL https://mise.run | sh >/dev/null 2>&1
 			curl -fsSL https://moshcode.sh/install.sh | sh >/dev/null 2>&1
+			curl -fsSL https://threatcrush.com/install.sh | sh >/dev/null 2>&1
 			true' >/dev/null 2>&1 \
 		|| warn "$name: one of the tool installers failed (not fatal)"
 	return 0
@@ -4842,6 +4845,16 @@ install_mise() { as_user "$1" 'curl -fsSL https://mise.run | sh'; }
 # Installs/repairs moshcode itself. Re-running is the supported update path and
 # it replaces ~/.moshcode/pkg wholesale, which is what heals a partial install.
 install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | sh'; }
+
+# Installs the ThreatCrush security-agent CLI for a login. Re-running is the
+# supported update path (the installer replaces the package in place).
+#
+# This installs the CLI only. The daemon that actually enforces (bans, firewall
+# rules) runs ONE per box, as root, and is enabled deliberately with
+# `threatcrush install-service` rather than here: fleet-wide auto-enforcement is
+# a blast-radius decision, not a provisioning default (a port-scan-ban bug once
+# took dev2 off the network), so it stays an explicit opt-in per box.
+install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
 
 # ...and this updates the engines and workflow CLIs moshcode manages.
 #
@@ -6749,6 +6762,7 @@ else
 		try "moshcode ($login)"  install_moshcode "$login"
 		# separate step: installing moshcode does not update what it manages
 		try "moshcode tools ($login)" update_moshcode_tools "$login"
+		try "threatcrush ($login)" install_threatcrush "$login"
 	done < <(printf 'root\n'; all_logins)
 fi
 
