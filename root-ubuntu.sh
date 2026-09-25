@@ -3228,6 +3228,7 @@ _sandbox_tools() {
 				sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" >/dev/null 2>&1
 			curl -fsSL https://mise.run | sh >/dev/null 2>&1
 			curl -fsSL https://moshcode.sh/install.sh | sh >/dev/null 2>&1
+			# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as mise/moshcode above
 			curl -fsSL https://threatcrush.com/install.sh | sh >/dev/null 2>&1
 			true' >/dev/null 2>&1 \
 		|| warn "$name: one of the tool installers failed (not fatal)"
@@ -4854,6 +4855,7 @@ install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | s
 # `threatcrush install-service` rather than here: fleet-wide auto-enforcement is
 # a blast-radius decision, not a provisioning default (a port-scan-ban bug once
 # took dev2 off the network), so it stays an explicit opt-in per box.
+# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as install_moshcode above
 install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
 
 # ...and this updates the engines and workflow CLIs moshcode manages.
