@@ -35,6 +35,7 @@ const SUMMARIES: Record<string, string> = {
   cal: 'The calendar from the terminal, over CalDAV: agenda, one event, add, remove',
   'cli-tools': 'This dispatcher: list, update and wire up the others',
   codeburn: 'See where your AI spend goes, by task, tool, model and project',
+  cronjob: 'Install, list and remove cron jobs without ever installing one twice',
   dl: 'Download a video, or just its audio, through yt-dlp',
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
