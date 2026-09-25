@@ -41,6 +41,10 @@ if [ "$POST_ONLY" = 0 ]; then
   grep -qE 'CREATE SCHEMA "?(auth|storage)"?' "$DUMP/schema.sql" && die "schema.sql contains auth/storage DDL"
   psql_admin -f /dev/stdin < "$DUMP/schema.sql" > "$DUMP/schema.load.log" 2>&1 || true
   echo "    schema errors: $(nerr "$DUMP/schema.load.log")"; lerr "$DUMP/schema.load.log"
+  if [ -s "$DUMP/notvalid-drop.sql" ]; then
+    log "Dropping the cloud's NOT VALID constraints before data (COPY enforces them; re-added NOT VALID after)"
+    psql_admin -f /dev/stdin < "$DUMP/notvalid-drop.sql" > "$DUMP/notvalid-drop.log" 2>&1 || true; echo "    dropped $(grep -c '^ALTER' "$DUMP/notvalid-drop.log" || true), errors $(nerr "$DUMP/notvalid-drop.log")"
+  fi
   log "Data (auth before app schemas)"
   a=$(grep -m1 -n 'COPY "auth"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); p=$(grep -m1 -n 'COPY "public"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); a=${a:-0}; p=${p:-0}
   if [ "$a" -gt 0 ] && [ "$p" -gt 0 ] && [ "$a" -gt "$p" ]; then die "data.sql has public before auth"; fi
@@ -49,6 +53,15 @@ if [ "$POST_ONLY" = 0 ]; then
   log "Grants for anon/authenticated/service_role"
   psql_admin -f /dev/stdin < "$DUMP/grants.sql" > "$DUMP/grants.load.log" 2>&1 || true
   echo "    grant errors: $(nerr "$DUMP/grants.load.log")"; lerr "$DUMP/grants.load.log"
+  if [ -s "$DUMP/notvalid-add.sql" ]; then
+    psql_admin -f /dev/stdin < "$DUMP/notvalid-add.sql" > "$DUMP/notvalid-add.log" 2>&1 || true; echo "    NOT VALID constraints re-added: $(grep -c '^ALTER' "$DUMP/notvalid-add.log" || true), errors $(nerr "$DUMP/notvalid-add.log")"; lerr "$DUMP/notvalid-add.log"
+  fi
+  if [ -s "$DUMP/vault.tsv" ]; then
+    log "Vault secrets"
+    psql_admin -c "create extension if not exists supabase_vault cascade" >/dev/null 2>&1 || true
+    while IFS=$'\t' read -r vn vs vd <&3; do [ -n "$vn" ] || continue
+      psql_admin -v n="$vn" -v s="$vs" -v d="$vd" -At -c "select vault.create_secret(:'s', :'n', :'d') where not exists (select 1 from vault.secrets where name = :'n')" >/dev/null && echo "    $vn" || echo "    $vn: FAILED"; done 3< "$DUMP/vault.tsv"
+  fi
   log "Ownership: app schemas to postgres (they were created by supabase_admin)"
   psql_admin -At -v ON_ERROR_STOP=1 <<'SQL'
 do $$ declare r record; begin
@@ -64,7 +77,7 @@ fi
 
 log "Buckets"
 while IFS=$'\t' read -r id name pub limit mimes <&3; do [ -n "$id" ] || continue; case "$pub" in t|true) ps=true;; *) ps=false;; esac
-  strict -c "insert into storage.buckets (id, name, public) values ('$id','$name',$ps) on conflict (id) do update set public=excluded.public" >/dev/null; done 3< "$DUMP/buckets.tsv"
+  strict -c "insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) values ('$id','$name',$ps, nullif('$limit','')::bigint, case when '$mimes' = '' then null else string_to_array('$mimes', ',') end) on conflict (id) do update set public=excluded.public, file_size_limit=excluded.file_size_limit, allowed_mime_types=excluded.allowed_mime_types" >/dev/null; done 3< "$DUMP/buckets.tsv"
 
 log "Rewriting absolute https://$CLOUD_REF.supabase.co URLs to https://$NEW_HOST in every text/json column"
 strict -At <<SQL
@@ -83,7 +96,11 @@ do \$\$ declare r record; n bigint; total bigint := 0; begin
 SQL
 
 log "Realtime publication"; psql_db -f /dev/stdin < "$DUMP/realtime.sql" 2>&1 | sed 's/^/    /' || true
-log "pg_cron jobs"; psql_db -f /dev/stdin < "$DUMP/cron-jobs.sql" > "$DUMP/cron.load.log" 2>&1 || true
+log "pg_cron jobs (cloud URL and API keys inside the commands rewritten to this stack)"
+sedargs=(-e "s#https://$CLOUD_REF.supabase.co#https://$NEW_HOST#g" -e "s#$CLOUD_REF.supabase.co#$NEW_HOST#g")
+[ -n "${CLOUD_ANON_KEY:-}" ] && [ -n "${SELF_ANON_KEY:-}" ] && sedargs+=(-e "s#$CLOUD_ANON_KEY#$SELF_ANON_KEY#g")
+[ -n "${CLOUD_SERVICE_KEY:-}" ] && [ -n "${SELF_SERVICE_KEY:-}" ] && sedargs+=(-e "s#$CLOUD_SERVICE_KEY#$SELF_SERVICE_KEY#g")
+sed "${sedargs[@]}" "$DUMP/cron-jobs.sql" | psql_db -f /dev/stdin > "$DUMP/cron.load.log" 2>&1 || true
 strict -At -c "select count(*)||' cron jobs active' from cron.job where active" 2>/dev/null || true
 
 log "Snapshot AFTER (vs the cloud's estimates in counts-estimate.tsv)"

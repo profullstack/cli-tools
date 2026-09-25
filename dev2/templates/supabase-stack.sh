@@ -39,7 +39,7 @@ DBC="$SLUG-supabase-db"
 sql_admin() { docker exec -i "$DBC" psql -U supabase_admin -h localhost -d postgres -v ON_ERROR_STOP=1 -X -q -At "$@"; }
 
 # ------------------------------------------------------------ 1. the files
-install -d -m 2750 -o root -g root "$ROOT" 2>/dev/null || true
+[ -d "$ROOT" ] || install -d -m 2750 -o root -g root "$ROOT"  # never re-chown an existing site root (CI deploys as the deploy user)
 if [ -f "$DIR/.env" ] && [ -f "$DIR/docker-compose.yml" ]; then
   log "Supabase project already at $DIR; keeping its secrets"
 else
@@ -138,6 +138,8 @@ log "Overlay docker-compose.$SLUG.yml (own project name, container names, ports,
       realtime) echo "    networks:"; echo "      default:"; echo "        aliases: [realtime-dev.supabase-realtime, realtime]" ;;
       api-gw)   echo "    networks:"; echo "      default:"; echo "        aliases: [envoy, kong]"; echo "    ports: !override"; echo "      - \"127.0.0.1:${API_PORT}:8000/tcp\"" ;;
       supavisor) echo "    ports: !override"; echo "      - \"127.0.0.1:${POOLER_PORT}:6543\"" ;;
+      storage)  echo "    environment:"; echo "      FILE_SIZE_LIMIT: 5368709120" ;;   # the base file pins 50 MiB; buckets declare up to GiBs
+      functions) echo "    env_file:"; echo "      - .env"; echo "      - ./volumes/functions/secrets.env" ;;   # cloud function secrets (supabase-functions)
       db) echo "    shm_size: 512m"; echo "    ports: !override"; echo "      - \"${DB_PORT}:5432\""; echo "    volumes:"
           echo "      - ./volumes/$SLUG/$SLUG.conf:/etc/postgresql-custom/conf.d/zz-$SLUG.conf:ro,z"
           echo "      - ./volumes/$SLUG/pg_hba.conf:/etc/$SLUG/pg_hba.conf:ro,z"
@@ -151,6 +153,8 @@ log "Overlay docker-compose.$SLUG.yml (own project name, container names, ports,
   echo "        - subnet: $SUBNET"
   echo "          gateway: $GATEWAY"
 } > "$DIR/docker-compose.$SLUG.yml"
+
+[ -f "$DIR/volumes/functions/secrets.env" ] || { install -d "$DIR/volumes/functions"; (umask 077; : > "$DIR/volumes/functions/secrets.env"); }
 
 # ---------------------------------------------------------------- 3. start
 log "Starting $SLUG-supabase"

@@ -1217,10 +1217,14 @@ def sb_cloud(s, st):
     pooler = sb_api(f"projects/{ref}/config/database/pooler")
     prim = next((p for p in pooler if p.get("database_type") == "PRIMARY"), pooler[0])
     host = prim["db_host"]
-    keys = {k["id"]: k["api_key"] for k in sb_api(f"projects/{ref}/api-keys?reveal=true") if k.get("type") == "legacy"}
+    allk = sb_api(f"projects/{ref}/api-keys?reveal=true")
+    keys = {k["id"]: k["api_key"] for k in allk if k.get("type") == "legacy"}
     import urllib.parse as up
     url = f"postgres://postgres.{ref}:{up.quote(pw, safe='')}@{host}:5432/postgres"
-    st.update({"cloud_ref": ref, "cloud_db_password": pw, "cloud_db_url": url, "cloud_anon_key": keys.get("anon"), "cloud_service_key": keys.get("service_role")})
+    st.update({"cloud_ref": ref, "cloud_db_password": pw, "cloud_db_url": url, "cloud_anon_key": keys.get("anon"), "cloud_service_key": keys.get("service_role"),
+               # new-style keys (sb_publishable_/sb_secret_): the cutover maps them onto the stack's anon/service JWTs
+               "cloud_publishable_keys": [k["api_key"] for k in allk if k.get("type") == "publishable" and k.get("api_key")],
+               "cloud_secret_keys": [k["api_key"] for k in allk if k.get("type") == "secret" and k.get("api_key")]})
     save_state(s["site"], st)
     return vars_
 
@@ -1272,7 +1276,8 @@ def cmd_supabase_load(args):
         if not st.get(k): die(f"state has no {k}: run supabase-stack and supabase-pull first")
     log(f"Loading {st['sb_dump']} into {st['sb_slug']}-supabase-db")
     ssh_put(tmpl("supabase-load.sh"), "/root/dev2-kit/supabase-load.sh", "0700")
-    res = ssh("root", f"env DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} RESET={'1' if getattr(args, 'reset', False) else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
+    keyenv = " ".join(f"{k}={shlex.quote(st.get(v) or '')}" for k, v in (("CLOUD_ANON_KEY", "cloud_anon_key"), ("CLOUD_SERVICE_KEY", "cloud_service_key"), ("SELF_ANON_KEY", "sb_anon_key"), ("SELF_SERVICE_KEY", "sb_service_key")))
+    res = ssh("root", f"env {keyenv} DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} RESET={'1' if getattr(args, 'reset', False) else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
     print(res[-6000:])
     mark(s["site"], "supabase-load")
 
@@ -1295,22 +1300,37 @@ def cmd_supabase_cutover(args):
     for k in ("cloud_ref", "sb_host", "sb_anon_key", "sb_service_key", "sb_database_url", "sb_pg_password"):
         if not st.get(k): die(f"state has no {k}")
     vars_ = site_variables(s)
+    # An app whose backend is Edge Functions 500s the moment it points at a stack without them (saasrow).
+    if "supabase-functions" not in st["steps"]:
+        try: fns = [f.get("slug") or f.get("name") for f in sb_api(f"projects/{st['cloud_ref']}/functions")]
+        except Exception: fns = []
+        if fns: die(f"cloud project has {len(fns)} Edge Functions ({', '.join(fns[:8])}{'...' if len(fns) > 8 else ''}); run `dev2-site supabase-functions {s['site']}` first")
     ov = {}
     # Which of the new values are credentials, known by where they came from
     # rather than by the spelling of the key.
-    secret = set()
+    secret = set(); s3 = False
     for k, v in vars_.items():
         if not isinstance(v, str): continue
         nv = v
+        if f"{st['cloud_ref']}.storage.supabase.co" in nv:  # S3-protocol endpoint (LiveKit egress etc.)
+            nv = nv.replace(f"{st['cloud_ref']}.storage.supabase.co", st["sb_host"]); s3 = True
         if f"{st['cloud_ref']}.supabase.co" in nv:
             nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
             if nv.startswith("postgres"): nv = st["sb_database_url"]; secret.add(k)
         if st.get("cloud_anon_key") and v == st["cloud_anon_key"]: nv = st["sb_anon_key"]; secret.add(k)
         if st.get("cloud_service_key") and v == st["cloud_service_key"]: nv = st["sb_service_key"]; secret.add(k)
+        if v in (st.get("cloud_publishable_keys") or []): nv = st["sb_anon_key"]; secret.add(k)
+        if v in (st.get("cloud_secret_keys") or []): nv = st["sb_service_key"]; secret.add(k)
         if k == "SUPABASE_DB_PASSWORD": nv = st["sb_pg_password"]; secret.add(k)
         if k in ("SUPABASE_JWT_SECRET", "JWT_SECRET") and st.get("sb_jwt_secret") and len(v) > 20: nv = st["sb_jwt_secret"]; secret.add(k)
         if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF") and v == st["cloud_ref"]: warn(f"{k}={v}: the app derives URLs from the ref; it needs a code change to use SUPABASE_URL")
         if nv != v: ov[k] = nv
+    if s3:  # the S3 protocol has its own per-stack credentials
+        s3env = dict(l.split("=", 1) for l in ssh("root", f"grep -E '^S3_PROTOCOL_ACCESS_KEY_(ID|SECRET)=' {WWW}/{s['site']}/supabase/.env", check=False).splitlines() if "=" in l)
+        for k in vars_:
+            if re.search(r"S3.*(ACCESS_)?KEY_ID$", k) and s3env.get("S3_PROTOCOL_ACCESS_KEY_ID"): ov[k] = s3env["S3_PROTOCOL_ACCESS_KEY_ID"]; secret.add(k)
+            elif re.search(r"S3.*SECRET", k) and s3env.get("S3_PROTOCOL_ACCESS_KEY_SECRET"): ov[k] = s3env["S3_PROTOCOL_ACCESS_KEY_SECRET"]; secret.add(k)
+        note(f"S3 endpoint re-pointed; stack S3 credentials: {', '.join(k for k in ov if 'S3' in k) or 'NONE FOUND (set them by hand)'}")
     sd_path = os.path.join(SITES_D, f"{s['site']}.json")
     sd = json.load(open(sd_path)) if os.path.exists(sd_path) else {}
     env_ov, vaulted = dict(sd.get("env_overrides") or {}), []
@@ -1328,13 +1348,50 @@ def cmd_supabase_cutover(args):
     cmd_verify(argparse.Namespace(site=s["site"], public=("dns" in load_state(s["site"])["steps"])))
     if st.get("cloud_db_url"):
         log("Unscheduling the CLOUD project's cron jobs")
-        out = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select case when to_regclass('cron.job') is null then 'no pg_cron' else (select coalesce(string_agg(jobname, ', '), 'none') from cron.job where active) end\" 2>&1 | tail -n 3", check=False).strip()
+        has = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select to_regclass('cron.job') is not null\" 2>&1 | tail -n 1", check=False).strip()
+        out = "no pg_cron" if has != "t" else ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select coalesce(string_agg(jobname, ', '), 'none') from cron.job where active\" 2>&1 | tail -n 1", check=False).strip()
         if out and out not in ("no pg_cron", "none"):
             ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select cron.unschedule(jobname) from cron.job where active\" >/dev/null 2>&1", check=False)
             note(f"unscheduled: {out}")
         else: note(out or "none")
     mark(s["site"], "supabase-cutover")
     log(f"{s['site']} now runs on its own Supabase. Cloud project {st['cloud_ref']} stays until `retire` (delete it in the dashboard or with the management API).")
+
+def cmd_supabase_functions(args):
+    """Port the repo's supabase/functions/* onto the stack's edge runtime and copy the cloud
+    project's function secrets. The self-hosted `functions` service serves /functions/v1/<name>
+    from volumes/functions/<name>/index.ts (its `main` router); workers inherit the container env."""
+    import base64, io, tarfile
+    s = site(args.site); st = load_state(s["site"])
+    for k in ("sb_slug", "sb_ports"):
+        if not st.get(k): die(f"state has no {k}; run supabase-stack first")
+    src = os.path.join(st.get("checkout") or "", "supabase", "functions")
+    if not os.path.isdir(src): die(f"no {src}; the app keeps its Edge Functions elsewhere (set `checkout` or port by hand)")
+    names = sorted(d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d)) and not d.startswith(".") and d not in ("node_modules", "main"))
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for d in names + [d for d in os.listdir(src) if os.path.isfile(os.path.join(src, d))]:
+            tar.add(os.path.join(src, d), arcname=d, filter=lambda ti: None if "/node_modules/" in ti.name or ti.name.endswith((".env", ".env.local")) else ti)
+    fdir = f"{WWW}/{s['site']}/supabase/volumes/functions"
+    log(f"Edge Functions -> {fdir}: {', '.join(n for n in names if not n.startswith('_'))}")
+    ssh("root", f"mkdir -p {fdir} && base64 -d | tar -xzf - -C {fdir} && chmod -R a+rX {fdir}", input=base64.b64encode(buf.getvalue()).decode())
+    # Function secrets: everything the cloud had except the SUPABASE_* the stack injects itself.
+    secrets = {}
+    if st.get("cloud_ref"):
+        try: secrets = {x["name"]: x["value"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")}
+        except Exception as e: warn(f"could not read cloud function secrets: {e}")
+    ssh_put("".join(f"{k}={v}\n" for k, v in sorted(secrets.items())), f"{fdir}/secrets.env", "0600")
+    note(f"{len(secrets)} function secrets written to secrets.env: {', '.join(sorted(secrets)) or '-'}")
+    # Older overlays predate the env_file line; add it, then restart the runtime.
+    ov = f"{WWW}/{s['site']}/supabase/docker-compose.{st['sb_slug']}.yml"
+    ssh("root", f"grep -q 'functions/secrets.env' {ov} || sed -i '/^  functions:$/a\\    env_file:\\n      - .env\\n      - ./volumes/functions/secrets.env' {ov}; cd {WWW}/{s['site']}/supabase && docker compose up -d --force-recreate functions >/dev/null 2>&1; sleep 4; docker logs --tail 5 {st['sb_slug']}-supabase-functions 2>&1 | tail -n 3")
+    probe = next((n for n in names if not n.startswith("_")), None)
+    if probe:
+        code = ssh("root", f"curl -s -o /dev/null -w '%{{http_code}}' -m 20 -H 'Authorization: Bearer {st.get('sb_anon_key', '')}' -H 'apikey: {st.get('sb_anon_key', '')}' -X OPTIONS http://127.0.0.1:{st['sb_ports']['api']}/functions/v1/{probe}", check=False).strip()
+        body = ssh("root", f"curl -s -m 20 -H 'Authorization: Bearer {st.get('sb_anon_key', '')}' -H 'apikey: {st.get('sb_anon_key', '')}' http://127.0.0.1:{st['sb_ports']['api']}/functions/v1/{probe} | head -c 200", check=False)
+        if "InvalidWorkerCreation" in body or "entrypoint" in body: die(f"/functions/v1/{probe} still fails: {body}")
+        note(f"/functions/v1/{probe}: OPTIONS {code}, GET -> {body[:120]!r}")
+    mark(s["site"], "supabase-functions", functions=names)
 
 # ----------------------------------------------------------------- main
 
@@ -1356,7 +1413,7 @@ def main():
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
-    for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover)):
+    for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover), ("supabase-functions", cmd_supabase_functions)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
     p = sub.add_parser("supabase-pull"); p.add_argument("site"); p.add_argument("--reset-password", action="store_true"); p.set_defaults(fn=cmd_supabase_pull)
     p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.add_argument("--reset", action="store_true", help="drop the earlier load first (fresh dump before cutover)"); p.set_defaults(fn=cmd_supabase_load)

@@ -28,7 +28,7 @@ log "Data (auth + app schemas + storage buckets)"
 pg pg_dump --dbname="$CLOUD_DB_URL" --data-only --no-owner --no-privileges --quote-all-identifiers --disable-triggers \
   --schema=auth "${SCHEMA_ARGS[@]}" --schema=storage \
   --exclude-table-data='storage.objects' --exclude-table-data='storage.migrations' --exclude-table-data='storage.s3_multipart_uploads*' --exclude-table-data='storage.prefixes' \
-  --exclude-table-data='auth.schema_migrations' --exclude-table-data='auth.audit_log_entries' --exclude-table-data='auth.refresh_tokens' --exclude-table-data='auth.sessions' --exclude-table-data='auth.flow_state' \
+  --exclude-table-data='auth.schema_migrations' --exclude-table-data='auth.audit_log_entries' --exclude-table-data='auth.refresh_tokens' --exclude-table-data='auth.sessions' --exclude-table-data='auth.flow_state' --exclude-table-data='auth.one_time_tokens' --exclude-table-data='auth.scim_*' \
   ${EXCLUDE_TABLE_DATA:-} > "$OUT/data.sql"
 
 log "Grants and RLS policies (the schema dump drops privileges; PostgREST needs them back)"
@@ -38,6 +38,14 @@ psqlc -c "select 'grant '||privilege_type||' on '||quote_ident(table_schema)||'.
 psqlc -c "select 'revoke execute on function '||p.oid::regprocedure::text||' from public;' from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname not in ($SYS) and n.nspname not like 'pg_%' and p.prokind in ('f','p') and p.proacl is not null and not exists (select 1 from aclexplode(p.proacl) a where a.grantee=0 and a.privilege_type='EXECUTE') order by 1" >> "$OUT/grants.sql" || true
 psqlc -c "select 'grant execute on function '||p.oid::regprocedure::text||' to '||quote_ident(r.rolname)||';' from pg_proc p join pg_namespace n on n.oid=p.pronamespace join aclexplode(p.proacl) a on true join pg_roles r on r.oid=a.grantee where n.nspname not in ($SYS) and n.nspname not like 'pg_%' and p.prokind in ('f','p') and a.privilege_type='EXECUTE' and r.rolname in ('anon','authenticated','service_role') order by 1" >> "$OUT/grants.sql" || true
 psqlc -c "select 'grant usage, select on all sequences in schema '||quote_ident(nspname)||' to anon, authenticated, service_role;' from pg_namespace where nspname not in ($SYS) and nspname not like 'pg_%'" >> "$OUT/grants.sql"
+
+log "NOT VALID constraints (COPY would enforce them; the load drops them before data and re-adds them NOT VALID after)"
+psqlc -c "select format('alter table %s drop constraint %I;', conrelid::regclass, conname) from pg_constraint where not convalidated and contype in ('c','f') and connamespace::regnamespace::text not in ($SYS) order by 1" > "$OUT/notvalid-drop.sql" || : > "$OUT/notvalid-drop.sql"
+psqlc -c "select format('alter table %s add constraint %I %s not valid;', conrelid::regclass, conname, pg_get_constraintdef(oid)) from pg_constraint where not convalidated and contype in ('c','f') and connamespace::regnamespace::text not in ($SYS) order by 1" > "$OUT/notvalid-add.sql" || : > "$OUT/notvalid-add.sql"
+
+log "Vault secrets (pg_cron http jobs read them)"
+psqlc -F$'\t' -c "select name, decrypted_secret, coalesce(description,'') from vault.decrypted_secrets order by 1" > "$OUT/vault.tsv" 2>/dev/null || : > "$OUT/vault.tsv"
+chmod 600 "$OUT/vault.tsv"
 
 log "pg_cron jobs"
 psqlc -c "select 'select cron.schedule(' || quote_literal(jobname) || ', ' || quote_literal(schedule) || ', ' || quote_literal(command) || ');' from cron.job where active order by jobid" > "$OUT/cron-jobs.sql" 2>/dev/null || : > "$OUT/cron-jobs.sql"
@@ -56,5 +64,6 @@ psqlc -F$'\t' -c "select n.nspname||'.'||c.relname, c.reltuples::bigint from pg_
   echo "dumped_at=$(date -u +%FT%TZ)"; echo "schema_bytes=$(stat -c%s "$OUT/schema.sql")"; echo "data_bytes=$(stat -c%s "$OUT/data.sql")"
   echo "storage_objects=$(wc -l < "$OUT/storage-inventory.tsv")"; echo "storage_bytes=$(awk -F'\t' '{s+=$4} END{print s+0}' "$OUT/storage-inventory.tsv")"
   echo "cron_jobs=$(grep -c '^select cron.schedule' "$OUT/cron-jobs.sql" || true)"; echo "auth_users=$(grep -c '' <(psqlc -c 'select id from auth.users'))"
+  echo "notvalid_constraints=$(grep -c '^alter' "$OUT/notvalid-drop.sql" || true)"; echo "vault_secrets=$(grep -c '' "$OUT/vault.tsv" || true)"
 } > "$OUT/MANIFEST"
 log "Done: $OUT"; cat "$OUT/MANIFEST"
