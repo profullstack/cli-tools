@@ -1,0 +1,4 @@
+{
+ "health_path": "/healthz",
+ "db_sslparams": "sslmode=require"
+}

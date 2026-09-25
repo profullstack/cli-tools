@@ -1,0 +1,9 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.brisk.news",
+   "port": 8238,
+   "max_body": "512m"
+  }
+ ]
+}

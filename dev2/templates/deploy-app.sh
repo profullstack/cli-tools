@@ -1,0 +1,173 @@
+#!/usr/bin/env bash
+#
+# Deploy one site under /home/anthony/www/<site> on dev2. GitHub Actions calls
+# this over ssh on every merge; you run it by hand to roll forward or back.
+#
+#   deploy-app.sh <git-sha|ref>       build that revision and switch to it
+#   deploy-app.sh --rollback          go back to the previously deployed sha
+#   deploy-app.sh --status            what is deployed and healthy right now
+#
+# Everything site-specific comes from deploy.env beside this script (written by
+# cli-tools/dev2/dev2-site provision): REPO, APP_PORT, BUILD_SERVICES,
+# HEALTH_PATH. Builds happen on the box because NEXT_PUBLIC_*-style values are
+# baked in at build time and live only in app.env here.
+#
+set -euo pipefail
+
+ROOT=${ROOT:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}
+APP_DIR="$ROOT/app"
+STATE="$ROOT/.deploy-state"
+# shellcheck disable=SC1091
+. "$ROOT/deploy.env"
+: "${APP_PORT:?deploy.env needs APP_PORT}"
+[ "${IMAGE_ONLY:-0}" = 1 ] || : "${REPO:?deploy.env needs REPO}"
+BUILD_SERVICES=${BUILD_SERVICES:-app}
+HEALTH_PATH=${HEALTH_PATH:-/}
+HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-300}
+
+log() { printf '\n===> %s\n' "$*"; }
+die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+
+compose() { (cd "$ROOT" && docker compose -f docker-compose.app.yml --env-file "$ROOT/deploy.env" "$@"); }
+
+health() {
+  local i
+  for i in $(seq 1 "$((HEALTH_TIMEOUT / 5))"); do
+    # Any HTTP answer counts: a 3xx redirect or a 401 from the app is alive.
+    if curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}${HEALTH_PATH}" | grep -Eq '^[1-4]'; then return 0; fi
+    sleep 5
+  done
+  return 1
+}
+
+case "${1:-}" in
+  --status)
+    compose ps
+    curl -sS -m 5 -o /dev/null -w 'app http %{http_code} in %{time_total}s\n' "http://127.0.0.1:${APP_PORT}${HEALTH_PATH}" || echo "app not answering"
+    [ -f "$STATE" ] && cat "$STATE"
+    exit 0
+    ;;
+  --rollback)
+    [ -f "$STATE" ] || die "no deploy state to roll back to"
+    # shellcheck disable=SC1090
+    . "$STATE"
+    [ -n "${PREVIOUS_SHA:-}" ] || die "no PREVIOUS_SHA recorded"
+    log "Rolling back to $PREVIOUS_SHA"
+    exec "$0" "$PREVIOUS_SHA"
+    ;;
+esac
+
+TARGET=${1:?usage: deploy-app.sh <git-sha|ref> | --rollback | --status}
+
+[ -f "$ROOT/app.env" ] || die "missing $ROOT/app.env (the app's secrets)"
+
+if [ "${IMAGE_ONLY:-0}" = 1 ]; then
+  # A stock image with Railway's start command: nothing to clone or build.
+  log "Pulling image and starting"
+  compose pull -q || true
+  compose up -d --remove-orphans
+  if health; then
+    log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
+    { echo "DEPLOYED_SHA=image"; echo "PREVIOUS_SHA="; echo "DEPLOYED_AT=$(date -u +%FT%TZ)"; } > "$STATE"
+    compose ps; exit 0
+  fi
+  compose logs --tail 60 || true
+  die "image-only deploy failed health check"
+fi
+
+CURRENT=""
+[ -d "$APP_DIR/.git" ] && CURRENT=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+if [ ! -d "$APP_DIR/.git" ]; then
+  log "First deploy: cloning $REPO"
+  git clone --filter=blob:none "$REPO" "$APP_DIR"
+fi
+
+log "Fetching $TARGET"
+git -C "$APP_DIR" fetch --all --tags --prune -q
+
+# Resolve to a sha first: `checkout --detach <missing ref>` gives a useless
+# error, and a bare branch name only resolves as origin/<name>.
+SHA=$(git -C "$APP_DIR" rev-parse --verify --quiet "origin/$TARGET^{commit}" \
+   || git -C "$APP_DIR" rev-parse --verify --quiet "$TARGET^{commit}" \
+   || true)
+[ -n "$SHA" ] || die "cannot resolve '$TARGET' to a commit"
+git -C "$APP_DIR" checkout -q --detach "$SHA"
+# The deploy account's umask leaves files 0640; an image that runs as a non-root
+# user (node, bun) then dies with EACCES reading its own source. Railway's git
+# uploads were world-readable, so match that.
+chmod -R u+rwX,go+rX "$APP_DIR" 2>/dev/null || true
+log "At $SHA"
+
+log "Building $BUILD_SERVICES"
+# Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) come from app.env through the
+# compose build args; export just those so ${K} interpolates. app.env is a compose env
+# file, not shell (unquoted values may contain spaces), so parse it line by line.
+while IFS= read -r line || [ -n "$line" ]; do
+  case $line in ''|'#'*) continue ;; esac
+  key=${line%%=*}; val=${line#*=}
+  case $key in
+    NEXT_PUBLIC_*|VITE_*|PUBLIC_*|NUXT_PUBLIC_*|EXPO_PUBLIC_*|REACT_APP_*|SVELTEKIT_PUBLIC_*)
+      case $val in \"*\") val=${val#\"}; val=${val%\"} ;; esac
+      export "$key=$val" ;;
+  esac
+done < "$ROOT/app.env"
+# shellcheck disable=SC2086
+compose build $BUILD_SERVICES
+
+# If the compose network's subnet changed (the kit moved sites to explicit
+# 10.200.x.0/24 subnets), `up -d` recreates the network in place and Docker's
+# embedded DNS then answers SERVFAIL for service aliases like `redis` while
+# container names still resolve. A clean down/up avoids that.
+WANT_SUBNET=$(grep -oE 'subnet: [0-9./]+' "$ROOT/docker-compose.app.yml" | awk '{print $2}' | head -n1)
+APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
+if [ -n "$WANT_SUBNET" ] && [ -n "$APP_CID" ]; then
+  NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$APP_CID" 2>/dev/null | head -n1)
+  HAVE_SUBNET=$(docker network inspect "$NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
+  if [ -n "$HAVE_SUBNET" ] && [ "$HAVE_SUBNET" != "$WANT_SUBNET" ]; then
+    log "Network subnet changes ($HAVE_SUBNET -> $WANT_SUBNET): recreating the stack"
+    compose down --remove-orphans
+  fi
+fi
+
+log "Starting"
+compose up -d --remove-orphans
+
+# Docker's embedded DNS can keep stale alias state after a network was recreated in
+# place: container names resolve, service names (`redis`) answer SERVFAIL, and the app
+# hangs at boot with a green health check. Prove every sibling service resolves from
+# inside the app; if not, recreate the stack once.
+APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
+if [ -n "$APP_CID" ]; then
+  for svc in $(awk '/^services:/{f=1;next} /^[a-z]/{f=0} f && /^  [a-z][a-z0-9_-]*:$/{gsub(/[ :]/,""); print}' "$ROOT/docker-compose.app.yml" | grep -vx app); do
+    if docker exec "$APP_CID" sh -c 'command -v getent >/dev/null' 2>/dev/null; then
+      if ! docker exec "$APP_CID" sh -c "getent hosts $svc" >/dev/null 2>&1; then
+        log "Service '$svc' does not resolve inside the app container (stale embedded DNS): recreating the stack"
+        compose down --remove-orphans
+        compose up -d --remove-orphans
+        break
+      fi
+    fi
+  done
+fi
+
+if health; then
+  log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
+  {
+    echo "DEPLOYED_SHA=$SHA"
+    echo "PREVIOUS_SHA=$CURRENT"
+    echo "DEPLOYED_AT=$(date -u +%FT%TZ)"
+  } > "$STATE"
+  compose ps
+else
+  log "UNHEALTHY after ${HEALTH_TIMEOUT}s - last 60 lines:"
+  compose logs --tail 60 || true
+  if [ -n "$CURRENT" ] && [ "$CURRENT" != "$SHA" ]; then
+    log "Restoring $CURRENT"
+    git -C "$APP_DIR" checkout -q --detach "$CURRENT"
+    # shellcheck disable=SC2086
+    compose build $BUILD_SERVICES && compose up -d
+    health && log "Restored to $CURRENT" || log "ROLLBACK ALSO UNHEALTHY - site is down"
+  fi
+  die "deploy of $SHA failed health check"
+fi

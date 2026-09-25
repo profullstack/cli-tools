@@ -1,0 +1,2753 @@
+{
+ "generated_at": "2026-09-25T09:22:59+00:00",
+ "dev2": {
+  "host": "dev2.profullstack.com",
+  "ip": "23.95.228.174"
+ },
+ "sites": {
+  "advis0r.com": {
+   "site": "advis0r.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "advis0r.com",
+   "service_id": "ffa577ce-ae37-4fe8-8981-46e1a751119d",
+   "repo": "profullstack/advis0r.com",
+   "image": null,
+   "domains": [
+    "advis0r.com",
+    "www.advis0r.com"
+   ],
+   "railway_domains": [
+    "advis0r.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3277
+  },
+  "agenticjobs.work": {
+   "site": "agenticjobs.work",
+   "project": "agenticjobs",
+   "project_id": "a14390f1-b9be-42ed-9b1b-a190c951f42d",
+   "environment_id": "f6ccb1aa-844d-4ed6-8ad5-6051bfb21000",
+   "service": "web",
+   "service_id": "a63f1af8-014e-4e98-9a2f-39da42810d84",
+   "repo": "profullstack/agenticjobs",
+   "image": null,
+   "domains": [
+    "www.agenticjobs.work",
+    "agenticjobs.work"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "18bdb97c-3b41-4edd-a0c4-a319f9559f5f",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "6df559c8-3b43-46c8-8678-315b168bc80e",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1146
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3214
+  },
+  "aiornot.vote": {
+   "site": "aiornot.vote",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "aiornot.vote",
+   "service_id": "db027ffb-534d-4247-b730-86ece253b1a7",
+   "repo": "profullstack/aiornot.vote",
+   "image": null,
+   "domains": [
+    "aiornot.vote",
+    "www.aiornot.vote"
+   ],
+   "railway_domains": [
+    "aiornot.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "aiornot.vote-volume",
+     "id": "7dc3bc20-a3cd-4f72-8697-d745f008127c",
+     "mountPath": "/data",
+     "sizeMB": 1510
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3269
+  },
+  "app.logicsrc.com": {
+   "site": "app.logicsrc.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "app.logicsrc.com",
+   "service_id": "262dd5a9-a0e2-4593-8971-f89ba9b8d463",
+   "repo": "profullstack/logicsrc",
+   "image": null,
+   "domains": [
+    "app.logicsrc.com"
+   ],
+   "railway_domains": [
+    "logicsrc-credentials-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": true,
+   "port": 3229
+  },
+  "app.moshcode.sh": {
+   "site": "app.moshcode.sh",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "moshcode",
+   "service_id": "a42fe297-0c08-44d6-b522-bb5144fdf3ef",
+   "repo": "moshcoder/moshcode",
+   "image": null,
+   "domains": [
+    "app.moshcode.sh",
+    "pit.moshcode.sh"
+   ],
+   "railway_domains": [
+    "app-moshcode.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3253
+  },
+  "avenasea.com": {
+   "site": "avenasea.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "avenasea.com",
+   "service_id": "10cad33c-4ea1-4985-bc4e-616077870184",
+   "repo": "avenasea/avenasea-web",
+   "image": null,
+   "domains": [
+    "avenasea.com",
+    "www.avenasea.com"
+   ],
+   "railway_domains": [
+    "avenaseacom-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3224
+  },
+  "b1dz.com": {
+   "site": "b1dz.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "b1dz.com",
+   "service_id": "5287943c-f7c4-4b03-94c3-ba87cd3e9ec3",
+   "repo": "profullstack/b1dz.com",
+   "image": null,
+   "domains": [
+    "b1dz.com",
+    "www.b1dz.com"
+   ],
+   "railway_domains": [
+    "web-production-2ff45.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3240
+  },
+  "bbs.hqtui.com": {
+   "site": "bbs.hqtui.com",
+   "project": "bbs.hqtui.com",
+   "project_id": "8b87e9fd-9fb5-4bdd-adbb-08e898013716",
+   "environment_id": "dac3c02b-909b-4e94-9738-36ff209111ab",
+   "service": "bbs",
+   "service_id": "ee0b6928-56e6-4e90-803d-6229fc35ba32",
+   "repo": "profullstack/tsbb",
+   "image": null,
+   "domains": [
+    "bbs.hqtui.com"
+   ],
+   "railway_domains": [],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "bbs-volume",
+     "id": "51e0252d-3066-4fea-91fa-96eabab44cf8",
+     "mountPath": "/app/data",
+     "sizeMB": 1400
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3218
+  },
+  "bg0ne.com": {
+   "site": "bg0ne.com",
+   "project": "bg0ne.com",
+   "project_id": "c1682f92-c096-459b-b52d-420e31c1768f",
+   "environment_id": "0bf0cc6c-23ec-4f23-bed5-0072b6750ae9",
+   "service": "bg0ne",
+   "service_id": "4c9ccb38-21dd-4ae8-b384-64eb51958fa9",
+   "repo": "profullstack/bg0ne.com",
+   "image": null,
+   "domains": [
+    "bg0ne.com",
+    "www.bg0ne.com"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "fae6babd-240d-448e-98ff-5e73d1aef6b4",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "c0d89f21-22b5-479d-b653-de22b838595d",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 884
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3201
+  },
+  "bl0ggers.com": {
+   "site": "bl0ggers.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "bl0ggers.com",
+   "service_id": "ab99794c-c03e-4917-bc3f-87eff2551a5e",
+   "repo": "profullstack/bl0ggers",
+   "image": null,
+   "domains": [
+    "bl0ggers.com",
+    "*.bl0ggers.com"
+   ],
+   "railway_domains": [
+    "bl0ggers-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3257
+  },
+  "brisk.news": {
+   "site": "brisk.news",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "brisk.news",
+   "service_id": "5043992d-20e9-4ff6-8993-d65986a503cd",
+   "repo": "profullstack/brisk.news",
+   "image": null,
+   "domains": [
+    "www.brisk.news",
+    "brisk.news"
+   ],
+   "railway_domains": [
+    "brisknews-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": true,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": "redis.railway.internal",
+   "infra": [
+    {
+     "name": "Redis",
+     "id": "b4cbc724-fa68-4513-acf6-c06f3cc9346f",
+     "role": "redis",
+     "image": "redis:8.2.9",
+     "volumes": [
+      {
+       "name": "redis-volume",
+       "id": "39dde17d-9ffd-410c-91da-85d54cf6efd9",
+       "mountPath": "/data",
+       "sizeMB": 1591
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3238
+  },
+  "bufferoverride.com": {
+   "site": "bufferoverride.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "bufferoverride",
+   "service_id": "91b06d88-9d05-41a2-8c1f-a77402bc1f8f",
+   "repo": "profullstack/bufferoverride",
+   "image": null,
+   "domains": [
+    "bufferoverride.com",
+    "www.bufferoverride.com"
+   ],
+   "railway_domains": [
+    "bufferoverride.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "bufferoverride-volume",
+     "id": "3700e8a9-b9e3-4ec5-9c1d-3cfbb1751adc",
+     "mountPath": "/data",
+     "sizeMB": 791
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3251
+  },
+  "c0mpute.com": {
+   "site": "c0mpute.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "c0mpute.com",
+   "service_id": "a4c2fc8a-a78b-4bd9-967c-8137fca11904",
+   "repo": "profullstack/c0mpute",
+   "image": null,
+   "domains": [
+    "c0mpute.com",
+    "www.c0mpute.com"
+   ],
+   "railway_domains": [
+    "c0mpute.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3254
+  },
+  "c0ncerts.com": {
+   "site": "c0ncerts.com",
+   "project": "Concert Platform",
+   "project_id": "1805cbb5-ea36-49d0-955e-42a4c56b15c3",
+   "environment_id": "7035b33a-895d-439d-b00e-5b9efeb6c8fc",
+   "service": "c0ncerts.com",
+   "service_id": "93bbb1e2-ea95-4e1b-8f20-32e5aeee77e1",
+   "repo": "profullstack/c0ncerts.com",
+   "image": null,
+   "domains": [
+    "c0ncerts.com",
+    "www.c0ncerts.com"
+   ],
+   "railway_domains": [
+    "c0ncerts.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3278
+  },
+  "c0upons.com": {
+   "site": "c0upons.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "c0upons.com",
+   "service_id": "2aaba4f5-f5c8-41c3-8e01-efcacd14b604",
+   "repo": "profullstack/c0upons",
+   "image": null,
+   "domains": [
+    "www.c0upons.com",
+    "c0upons.com"
+   ],
+   "railway_domains": [
+    "c0upons.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3231
+  },
+  "chovy.com": {
+   "site": "chovy.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "chovy-ai",
+   "service_id": "4da42bd8-c973-4705-aae3-2a606430f8ac",
+   "repo": "profullstack/chovy-ai",
+   "image": null,
+   "domains": [
+    "www.chovy.com",
+    "chovy.com"
+   ],
+   "railway_domains": [
+    "chovy.up.railway.app"
+   ],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "chovy-ai-volume",
+     "id": "4b33b294-1dbe-4210-8503-eb57b1aff121",
+     "mountPath": "/data",
+     "sizeMB": 801
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "815793bb-9f7b-4703-9bc2-1f170dccb836",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "9fddd62a-78b2-4327-af9d-fe0ffcdc700d",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1164
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3237
+  },
+  "cigarunderground.org": {
+   "site": "cigarunderground.org",
+   "project": "cigarunderground.org",
+   "project_id": "20ba700a-93f7-4c4a-a248-9a429b24201b",
+   "environment_id": "6beedd07-a61a-47e8-bee4-4d5ddff618c7",
+   "service": "cigarunderground.org",
+   "service_id": "97be88d1-56ba-4df0-9365-b066d1febdf6",
+   "repo": "profullstack/cigarunderground.org",
+   "image": null,
+   "domains": [
+    "cigarunderground.org",
+    "www.cigarunderground.org"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "5e383fc6-82db-4674-9801-f87c7ab9fa59",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "eaedafc5-a246-445f-8c89-a1f8b9795c08",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 866
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3203
+  },
+  "coinpayportal.com": {
+   "site": "coinpayportal.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "coinpayportal.com",
+   "service_id": "e8b5a637-b1de-4d54-a75c-e1c3e93e7bb4",
+   "repo": "profullstack/coinpayportal",
+   "image": null,
+   "domains": [
+    "www.coinpayportal.com",
+    "mta-sts.coinpayportal.com",
+    "coinpayportal.com"
+   ],
+   "railway_domains": [
+    "coinpayportal-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "coinpayportal-volume",
+     "id": "d30af3d8-6360-4826-97c3-3557c5701aaa",
+     "mountPath": "/mnt/files",
+     "sizeMB": 1120
+    }
+   ],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3273
+  },
+  "communitygardensasappleseeds.info": {
+   "site": "communitygardensasappleseeds.info",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "communitygardensasappleseeds.info",
+   "service_id": "54672478-27cc-4d57-a176-79e381b9da09",
+   "repo": "profullstack/communitygardens-web",
+   "image": null,
+   "domains": [
+    "www.communitygardensasappleseeds.info",
+    "communitygardensasappleseeds.info"
+   ],
+   "railway_domains": [
+    "communitygardensasappleseedsinfo-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "communitygardensasappleseeds.info-volume",
+     "id": "3625af85-e519-42a8-a676-eaf604066568",
+     "mountPath": "/data/db",
+     "sizeMB": 181
+    }
+   ],
+   "port_var": "9420",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3241
+  },
+  "cryptoshot.space": {
+   "site": "cryptoshot.space",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "cryptoshot.space",
+   "service_id": "c74cdf0b-bc45-4a8d-9611-e45fd363781c",
+   "repo": "profullstack/cryptoshot.space",
+   "image": null,
+   "domains": [
+    "cryptoshot.space",
+    "www.cryptoshot.space"
+   ],
+   "railway_domains": [
+    "places-production-758c.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3265
+  },
+  "d0rz.com": {
+   "site": "d0rz.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "d0rz.com",
+   "service_id": "25b2c41d-2973-4496-a39c-9a0537c6da76",
+   "repo": "profullstack/d0rz",
+   "image": null,
+   "domains": [
+    "d0rz.com",
+    "www.d0rz.com"
+   ],
+   "railway_domains": [
+    "d0rzcom-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3228
+  },
+  "d1sks.com": {
+   "site": "d1sks.com",
+   "project": "d1sks.com",
+   "project_id": "9f17fa49-126b-4248-acaf-1458b0f1ba7b",
+   "environment_id": "a04222ee-b94e-4348-b677-356d8f046939",
+   "service": "d1sks.com",
+   "service_id": "b3dd4d0e-f229-4271-ba40-a0f49e2a33c2",
+   "repo": "profullstack/d1sks.com",
+   "image": null,
+   "domains": [
+    "d1sks.com",
+    "www.d1sks.com"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "c82c3180-0cc4-4f96-a69a-48fc553d8c81",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "8130599b-09ed-497a-a5f5-71b314888c0c",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 861
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3207
+  },
+  "d3vices.com": {
+   "site": "d3vices.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "d3vices.com",
+   "service_id": "619d6906-9ea7-46c1-add6-7fffec3d6202",
+   "repo": "profullstack/d3vices.com",
+   "image": null,
+   "domains": [
+    "d3vices.com",
+    "www.d3vices.com"
+   ],
+   "railway_domains": [
+    "d3vicescom-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3242
+  },
+  "demo.movie": {
+   "site": "demo.movie",
+   "project": "demo.movie",
+   "project_id": "ecbe6ee4-1b5d-4c36-b7c1-18dd5d763505",
+   "environment_id": "1579b73a-a06b-4dd6-a40e-92c1d16cf243",
+   "service": "demo.movie",
+   "service_id": "e591be59-2fa5-43bd-8ef6-0c8b7b378838",
+   "repo": "profullstack/demo.movie",
+   "image": null,
+   "domains": [
+    "demo.movie"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "demo.movie-volume",
+     "id": "97e1dc15-f2f1-4f1a-abb5-cf3b0bffa1fd",
+     "mountPath": "/data",
+     "sizeMB": 1127
+    }
+   ],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "867f948b-0cc2-4a15-aecb-f3d54253fdd1",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "fc0bbef1-b92b-498c-aabc-f2157b8fbc70",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 872
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3200
+  },
+  "diskpush.com": {
+   "site": "diskpush.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "diskpush-web",
+   "service_id": "f956b101-4919-480c-bf30-51fe2e5b01e9",
+   "repo": "profullstack/diskpush",
+   "image": null,
+   "domains": [
+    "diskpush.com",
+    "www.diskpush.com"
+   ],
+   "railway_domains": [
+    "diskpush-web-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3275
+  },
+  "feedback.profullstack.com": {
+   "site": "feedback.profullstack.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "feedback.profullstack.com",
+   "service_id": "949f4453-745c-47e1-9294-65600f34aafa",
+   "repo": "profullstack/feedback.profullstack.com",
+   "image": null,
+   "domains": [
+    "feedback.profullstack.com"
+   ],
+   "railway_domains": [
+    "feedbackprofullstackcom-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3252
+  },
+  "fleetsysops.com": {
+   "site": "fleetsysops.com",
+   "project": "fleetsysops.com",
+   "project_id": "f76db785-d53c-40eb-b4b5-f9ac4176c2b9",
+   "environment_id": "c02ff655-fa72-4e10-a182-0f309f72d073",
+   "service": "fleetsysops.com",
+   "service_id": "bcd92cae-b3a9-4624-ae96-6fdf45f7a75a",
+   "repo": "profullstack/fleetsysops.com",
+   "image": null,
+   "domains": [
+    "www.fleetsysops.com",
+    "fleetsysops.com"
+   ],
+   "railway_domains": [],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3206
+  },
+  "g1tz.hqtui.com": {
+   "site": "g1tz.hqtui.com",
+   "project": "g1tz",
+   "project_id": "0cb66bef-6093-4ed3-9934-b6a1ae86b2e9",
+   "environment_id": "892fcfb1-8a6a-42e1-8d24-d67d42a796aa",
+   "service": "g1tz",
+   "service_id": "6f2addf8-c4e4-41da-a35b-2efc629f4aa2",
+   "repo": "profullstack/g1tz",
+   "image": null,
+   "domains": [
+    "g1tz.hqtui.com"
+   ],
+   "railway_domains": [],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "g1tz-volume",
+     "id": "8ba1417a-d840-437b-853b-9b591643179e",
+     "mountPath": "/data",
+     "sizeMB": 793
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3205
+  },
+  "genrewatch.com": {
+   "site": "genrewatch.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "genrewatch.com",
+   "service_id": "d500ee4f-8e1a-4e47-8121-bf1b3f21a10a",
+   "repo": "profullstack/genrewatch.com",
+   "image": null,
+   "domains": [
+    "genrewatch.com",
+    "www.genrewatch.com"
+   ],
+   "railway_domains": [
+    "genrewatchcom-production.up.railway.app"
+   ],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": true,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [
+    {
+     "name": "genrewatch-worker",
+     "id": "920af9df-d6da-4b26-a9f6-4cf3aeac1935",
+     "volumes": [],
+     "db": "pg",
+     "redis": true
+    }
+   ],
+   "db_host": "postgres-ivty.railway.internal",
+   "redis_host": "redis-wssw.railway.internal",
+   "infra": [
+    {
+     "name": "Redis-wSsW",
+     "id": "1517a765-b3e7-41b7-b57d-3eb29af2506d",
+     "role": "redis",
+     "image": "redis:8.2",
+     "volumes": [
+      {
+       "name": "redis-volume-uVea",
+       "id": "6e4965b8-813e-485c-ae58-64cd17309369",
+       "mountPath": "/data",
+       "sizeMB": 1062
+      }
+     ]
+    },
+    {
+     "name": "Postgres-iVtY",
+     "id": "2683bc3d-9755-421e-950f-8de56c097528",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume-RlJf",
+       "id": "536c1ed5-73cd-44f6-be61-c8cdf3165d82",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 3410
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3267
+  },
+  "getprivacycode.com": {
+   "site": "getprivacycode.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "getprivacycode",
+   "service_id": "296a85da-6cf6-4928-9c07-bceb25c8440a",
+   "repo": "profullstack/getprivacycode",
+   "image": null,
+   "domains": [
+    "www.getprivacycode.com",
+    "getprivacycode.com"
+   ],
+   "railway_domains": [
+    "getprivacycode.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3230
+  },
+  "goingbroke.now": {
+   "site": "goingbroke.now",
+   "project": "goingbroke.now",
+   "project_id": "270a98e2-8b37-4448-8740-eb3f62c101cb",
+   "environment_id": "d24710e5-d75d-4ab3-a8d2-188c6e3b63b2",
+   "service": "goingbroke.now",
+   "service_id": "6ad8dd57-b92d-4c22-9bc5-fce5199a1a1f",
+   "repo": "profullstack/goingbroke.now",
+   "image": null,
+   "domains": [
+    "www.goingbroke.now",
+    "goingbroke.now"
+   ],
+   "railway_domains": [
+    "goingbroke-web-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3221
+  },
+  "hqtui.com": {
+   "site": "hqtui.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "hqtui",
+   "service_id": "041faa6b-9aae-4937-a847-e14f89cf8ef2",
+   "repo": "profullstack/hqtui",
+   "image": null,
+   "domains": [
+    "hqtui.com"
+   ],
+   "railway_domains": [
+    "hqtui-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3222
+  },
+  "icemap.app": {
+   "site": "icemap.app",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "icemap.app",
+   "service_id": "be75d792-eef1-4972-ac9e-1addba108ec7",
+   "repo": "profullstack/icemap.app",
+   "image": null,
+   "domains": [
+    "www.icemap.app",
+    "icemap.app"
+   ],
+   "railway_domains": [
+    "icemapapp-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3262
+  },
+  "infernetprotocol.com": {
+   "site": "infernetprotocol.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "infernetprotocol.com",
+   "service_id": "1f89ec5b-d30d-4808-be19-9ac10c188903",
+   "repo": "InfernetProtocol/infernet-protocol",
+   "image": null,
+   "domains": [
+    "infernetprotocol.com",
+    "www.infernetprotocol.com"
+   ],
+   "railway_domains": [
+    "infernet.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3227
+  },
+  "installer.pairux.com": {
+   "site": "installer.pairux.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "installer.pairux.com",
+   "service_id": "b115e7d5-bb2b-4d91-8c8c-f742080d7ca0",
+   "repo": "profullstack/pairux.com",
+   "image": null,
+   "domains": [
+    "installer.pairux.com"
+   ],
+   "railway_domains": [],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": true,
+   "port": 3258
+  },
+  "launch.anapp.now": {
+   "site": "launch.anapp.now",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "launch.anapp.now",
+   "service_id": "7797ad26-923b-40d0-b4f4-3e521297742c",
+   "repo": "profullstack/launch.anapp.now",
+   "image": null,
+   "domains": [
+    "launch.anapp.now"
+   ],
+   "railway_domains": [],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3245
+  },
+  "logicsrc.com": {
+   "site": "logicsrc.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "logicsrc",
+   "service_id": "e77a59ca-2ec7-4641-ae6b-b166db856291",
+   "repo": "profullstack/logicsrc",
+   "image": null,
+   "domains": [
+    "logicsrc.com",
+    "www.logicsrc.com"
+   ],
+   "railway_domains": [
+    "logicsrc.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": true,
+   "port": 3272
+  },
+  "makedemo.app": {
+   "site": "makedemo.app",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "makedemo.app",
+   "service_id": "4c954ea9-20ee-4ceb-8e7c-e69684f057ec",
+   "repo": "profullstack/makedemo",
+   "image": null,
+   "domains": [
+    "www.makedemo.app",
+    "makedemo.app"
+   ],
+   "railway_domains": [
+    "makedemo.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3236
+  },
+  "marksyncr.com": {
+   "site": "marksyncr.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "marksyncr.com",
+   "service_id": "b7bb1d44-e198-42b3-9ad6-7a2f87040a4d",
+   "repo": "profullstack/marksyncr.com",
+   "image": null,
+   "domains": [
+    "www.marksyncr.com",
+    "marksyncr.com"
+   ],
+   "railway_domains": [
+    "web-production-4f64.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3260
+  },
+  "media2markdown.com": {
+   "site": "media2markdown.com",
+   "project": "media2markdown",
+   "project_id": "f1f3621f-be27-43d8-9469-0bf337163cf8",
+   "environment_id": "8a9c1902-5193-45c2-8f85-e77a477d5bfb",
+   "service": "media2markdown",
+   "service_id": "c93bf09f-8ee3-47e4-a583-65a76e5cd4e1",
+   "repo": null,
+   "image": null,
+   "domains": [
+    "media2markdown.com",
+    "www.media2markdown.com"
+   ],
+   "railway_domains": [
+    "media2markdown-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3217
+  },
+  "mediaanalyzer.pro": {
+   "site": "mediaanalyzer.pro",
+   "project": "mediaanalyzer.pro",
+   "project_id": "995b8b85-2c92-4e68-a957-342b74522179",
+   "environment_id": "bcfb5ae7-88dd-4a2c-923d-2fe599c8b61b",
+   "service": "mediaanalyzer.pro",
+   "service_id": "9bfa5a89-f57f-4d75-b0ec-01d61090ae48",
+   "repo": "profullstack/mediaanalyzer.pro",
+   "image": null,
+   "domains": [
+    "www.mediaanalyzer.pro",
+    "mediaanalyzer.pro"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "001274d0-fccb-4f4e-b02d-ac366ac28f05",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "58b11232-a943-4943-86ff-bbfc920e1527",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1017
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3202
+  },
+  "meshhook.com": {
+   "site": "meshhook.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "meshhook",
+   "service_id": "e44067bd-39b6-4a72-891e-b53c4fb6917c",
+   "repo": "profullstack/meshhook",
+   "image": null,
+   "domains": [
+    "www.meshhook.com",
+    "meshhook.com"
+   ],
+   "railway_domains": [
+    "meshhook.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3271
+  },
+  "moshcode.sh": {
+   "site": "moshcode.sh",
+   "project": "moshcode-sh",
+   "project_id": "340108c8-1509-43ae-af15-0cb1cb92201c",
+   "environment_id": "ef18b7c3-e566-4b15-a0cc-17c8fa04b26f",
+   "service": "moshcode-sh",
+   "service_id": "2897bb88-3553-4d67-9b26-54f9c92ef7ca",
+   "repo": "moshcoder/moshcode.sh",
+   "image": null,
+   "domains": [
+    "moshcode.sh",
+    "www.moshcode.sh"
+   ],
+   "railway_domains": [
+    "moshcode-sh-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3204
+  },
+  "moshcoding.com": {
+   "site": "moshcoding.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "moshcoding.com",
+   "service_id": "0aca36d5-e800-4099-ba55-10f89c65ce3a",
+   "repo": "moshcoder/moshcoding",
+   "image": null,
+   "domains": [
+    "moshcoding.com",
+    "www.moshcoding.com",
+    "moshscript.com",
+    "www.moshscript.com",
+    "moshcoders.com",
+    "www.moshcoders.com"
+   ],
+   "railway_domains": [
+    "moshcoding.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "moshcoding.com-volume",
+     "id": "1356dbe9-c42d-4593-a2da-739bedcb3b2f",
+     "mountPath": "/data",
+     "sizeMB": 836
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3223
+  },
+  "mynaposter.com": {
+   "site": "mynaposter.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "mynaposter.com",
+   "service_id": "b8230632-901f-4d2e-a259-a1dd929ab6b6",
+   "repo": "profullstack/mynaposter",
+   "image": null,
+   "domains": [
+    "mynaposter.com",
+    "www.mynaposter.com"
+   ],
+   "railway_domains": [
+    "mynaposter-web-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [
+    {
+     "name": "mynaposter-api",
+     "id": "103a1a67-1f34-4d81-a0d1-3470a4266790",
+     "volumes": [],
+     "db": "pg",
+     "redis": false
+    }
+   ],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3261
+  },
+  "naallo.com": {
+   "site": "naallo.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "naallo.com",
+   "service_id": "b5a3e003-efa2-4abd-bf89-9726959273ab",
+   "repo": "profullstack/naallo",
+   "image": null,
+   "domains": [
+    "www.naallo.com",
+    "naallo.com"
+   ],
+   "railway_domains": [
+    "naallocom-production.up.railway.app",
+    "naallocom-production-4ec0.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3259
+  },
+  "nightcell7.com": {
+   "site": "nightcell7.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "nightcell7",
+   "service_id": "902a2a45-f1b6-4e5b-b0ee-7e4aa2aff895",
+   "repo": "profullstack/nightcell7",
+   "image": null,
+   "domains": [
+    "www.nightcell7.com",
+    "nightcell7.com"
+   ],
+   "railway_domains": [
+    "nightcell7.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": true,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": "redis.railway.internal",
+   "infra": [
+    {
+     "name": "Redis",
+     "id": "b4cbc724-fa68-4513-acf6-c06f3cc9346f",
+     "role": "redis",
+     "image": "redis:8.2.9",
+     "volumes": [
+      {
+       "name": "redis-volume",
+       "id": "39dde17d-9ffd-410c-91da-85d54cf6efd9",
+       "mountPath": "/data",
+       "sizeMB": 1591
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3250
+  },
+  "nixamp.com": {
+   "site": "nixamp.com",
+   "project": "nixamp",
+   "project_id": "2b76bfa5-97fd-4c14-8a9c-e5434ee41cd4",
+   "environment_id": "9b73cdb5-8338-4644-8786-34ce2396f65f",
+   "service": "nixamp-web",
+   "service_id": "4f0b85e7-41e4-485e-a114-631ae75c74a7",
+   "repo": "profullstack/nixamp",
+   "image": null,
+   "domains": [
+    "www.nixamp.com",
+    "nixamp.com",
+    "www.backtoschool.help",
+    "backtoschool.help"
+   ],
+   "railway_domains": [
+    "nixamp-web-production.up.railway.app"
+   ],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres-9wpC",
+     "id": "93ac8cea-8825-4a3a-b9ef-6723d92d4a9b",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume-ohPc",
+       "id": "dc0003af-aee0-4d37-a79d-bec7ed6586ec",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 845
+      }
+     ]
+    },
+    {
+     "name": "Postgres-ew1o",
+     "id": "b7c6bea5-d8e8-458a-91cc-5330e3b5df55",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume-654u",
+       "id": "18c24886-1c76-49fc-99fd-ac86681bc1e8",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 845
+      }
+     ]
+    },
+    {
+     "name": "Postgres",
+     "id": "c643a46e-bc18-4fd0-abfd-a67ee48eae1f",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "9ccd40d5-b7e0-4e8e-9ba1-29139b1835ae",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1141
+      }
+     ]
+    },
+    {
+     "name": "Postgres-Cypz",
+     "id": "e8cf5d29-b3e9-4c46-bfcd-df30f2b8fccc",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume-Fpi-",
+       "id": "4af2c93a-2a8f-4718-9873-145d658dec37",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1107
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3216
+  },
+  "obscura.openmcp.logicsrc.com": {
+   "site": "obscura.openmcp.logicsrc.com",
+   "project": "openmcp",
+   "project_id": "18ad173b-dc9c-402c-8b98-a4ed280c6cb0",
+   "environment_id": "a4164fa9-8459-4483-bc62-c52beeece729",
+   "service": "openmcp",
+   "service_id": "df82e9da-33c6-434f-b915-c5526b58ac16",
+   "repo": null,
+   "image": "node:24-bookworm-slim",
+   "domains": [
+    "obscura.openmcp.logicsrc.com",
+    "openmcp.logicsrc.com"
+   ],
+   "railway_domains": [
+    "openmcp-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "openmcp-volume",
+     "id": "9591caf5-71ae-4bbd-8c49-79d6f74e3208",
+     "mountPath": "/data",
+     "sizeMB": 1065
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3213
+  },
+  "openaccess.logicsrc.com": {
+   "site": "openaccess.logicsrc.com",
+   "project": "openaccess",
+   "project_id": "1f0f952f-1270-4480-a586-7980ae0d71ea",
+   "environment_id": "d6d01a2e-6a4c-4d0c-b73c-b6942aad0fc2",
+   "service": "openaccess",
+   "service_id": "3e3b78e2-f5a0-4994-a97c-2af1fd0a436b",
+   "repo": null,
+   "image": "node:24-alpine",
+   "domains": [
+    "openaccess.logicsrc.com"
+   ],
+   "railway_domains": [],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "openaccess-volume",
+     "id": "bc9857ae-4d10-444a-a12d-f16f7e6d9e94",
+     "mountPath": "/data",
+     "sizeMB": 1065
+    }
+   ],
+   "port_var": "8791",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3212
+  },
+  "opensocial.chat": {
+   "site": "opensocial.chat",
+   "project": "opensocial",
+   "project_id": "007ac72c-ab2e-4208-a409-203acbb5b36c",
+   "environment_id": "b2470c69-7308-411e-afa1-1e2fbdaf877c",
+   "service": "opensocial",
+   "service_id": "8c63f03e-6101-4300-a198-5ac1175ac627",
+   "repo": null,
+   "image": null,
+   "domains": [
+    "opensocial.chat"
+   ],
+   "railway_domains": [
+    "opensocial-production.up.railway.app"
+   ],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3100",
+   "companions": [],
+   "db_host": "postgres-13bf.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "redis",
+     "id": "889a35dd-f168-47f1-b9c5-8a088c5c07a8",
+     "role": "redis",
+     "image": "redis:7-alpine",
+     "volumes": []
+    },
+    {
+     "name": "postgres",
+     "id": "a773b321-5782-4cd0-ab9d-80bad72846f0",
+     "role": "pg",
+     "image": "postgres:17-alpine",
+     "volumes": []
+    }
+   ],
+   "shared_repo": false,
+   "port": 3210
+  },
+  "opensourcelegends.com": {
+   "site": "opensourcelegends.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "opensourcelegends.com",
+   "service_id": "3826f326-47fb-4ad5-aeb2-8fce6d7022b6",
+   "repo": "profullstack/opensourcelegends.com",
+   "image": null,
+   "domains": [
+    "www.opensourcelegends.com",
+    "opensourcelegends.com"
+   ],
+   "railway_domains": [
+    "opensourcelegends.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3232
+  },
+  "outreachgraph.com": {
+   "site": "outreachgraph.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "outreachgraph.com",
+   "service_id": "84358cda-e67c-4133-8275-40be706ff5f1",
+   "repo": "profullstack/outreachgraph",
+   "image": null,
+   "domains": [
+    "outreachgraph.com",
+    "www.outreachgraph.com"
+   ],
+   "railway_domains": [
+    "outreachgraph.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3248
+  },
+  "p0dcasters.com": {
+   "site": "p0dcasters.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "p0dcasters",
+   "service_id": "4c7743d5-d77a-4e36-a21e-96cb26a47bef",
+   "repo": "profullstack/p0dcasters",
+   "image": null,
+   "domains": [
+    "p0dcasters.com"
+   ],
+   "railway_domains": [
+    "p0dcasters-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3235
+  },
+  "pairux.com": {
+   "site": "pairux.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "pairux.com",
+   "service_id": "e992e4d9-ccc6-41e4-9964-c3743a060339",
+   "repo": "profullstack/pairux.com",
+   "image": null,
+   "domains": [
+    "www.pairux.com",
+    "pairux.com"
+   ],
+   "railway_domains": [
+    "pairuxcom-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": true,
+   "port": 3274
+  },
+  "phonenumbers.bot": {
+   "site": "phonenumbers.bot",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "phonenumbers.bot",
+   "service_id": "d788ac23-dcff-411d-a617-1821e7de26df",
+   "repo": "profullstack/phonenumbers.bot",
+   "image": null,
+   "domains": [
+    "www.phonenumbers.bot",
+    "phonenumbers.bot"
+   ],
+   "railway_domains": [
+    "phonenumbersbot-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3268
+  },
+  "postammo.com": {
+   "site": "postammo.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "postammo.com",
+   "service_id": "780f555f-3bd5-4aa9-b39e-741ada071cb1",
+   "repo": "profullstack/postammo.com",
+   "image": null,
+   "domains": [
+    "www.postammo.com",
+    "postammo.com"
+   ],
+   "railway_domains": [
+    "postammocom-production.up.railway.app",
+    "postammocom-production-cb78.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3246
+  },
+  "profullstack.com": {
+   "site": "profullstack.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "profullstack.com",
+   "service_id": "82d1ee66-dd81-4399-bb2b-73f862e3d63b",
+   "repo": "profullstack/profullstack-web",
+   "image": null,
+   "domains": [
+    "profullstack.com",
+    "www.profullstack.com"
+   ],
+   "railway_domains": [
+    "profullstack-web-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "9450",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3247
+  },
+  "qaaas.dev": {
+   "site": "qaaas.dev",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "qaaas.dev",
+   "service_id": "d29ccdec-8a71-468a-a9aa-c3ca336e09a7",
+   "repo": "profullstack/qaaas.dev",
+   "image": null,
+   "domains": [
+    "www.qaaas.dev",
+    "qaaas.dev"
+   ],
+   "railway_domains": [
+    "qaaasdev-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3266
+  },
+  "qrypt.chat": {
+   "site": "qrypt.chat",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "qrypt.chat",
+   "service_id": "51064b81-862c-4807-8a98-b39920b07e94",
+   "repo": "profullstack/qryptchat-web",
+   "image": null,
+   "domains": [
+    "qrypt.chat",
+    "www.qrypt.chat"
+   ],
+   "railway_domains": [],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "qrypt.chat-volume",
+     "id": "4686da3e-5f3e-4dc5-a978-7d29cb9b2655",
+     "mountPath": "/var/lib/tor/hidden_service",
+     "sizeMB": 149
+    }
+   ],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3239
+  },
+  "r4ck.dev": {
+   "site": "r4ck.dev",
+   "project": "r4ck.dev",
+   "project_id": "1dc5c231-3265-4364-9af5-2cf78e49b5ba",
+   "environment_id": "ed427967-4a95-49be-99aa-df50d63396a4",
+   "service": "r4ck.dev",
+   "service_id": "f5403a69-0928-4b9a-a124-61992c4bba66",
+   "repo": "profullstack/r4ck.dev",
+   "image": null,
+   "domains": [
+    "www.r4ck.dev",
+    "r4ck.dev"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": "3000",
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "a97aad71-cee6-4d22-a843-499fce794de0",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "3a1a006c-a5a7-4407-a675-204b9c12db32",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 1150
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3208
+  },
+  "readm3.com": {
+   "site": "readm3.com",
+   "project": "readm3",
+   "project_id": "d0006e18-8efd-414d-b892-49e790f412d6",
+   "environment_id": "15239234-70ef-4711-b772-599746e1bcd5",
+   "service": "readm3",
+   "service_id": "1c17f152-cbaa-4f7a-ab61-2886dbdd71b7",
+   "repo": "profullstack/readm3",
+   "image": null,
+   "domains": [
+    "readm3.com",
+    "www.readm3.com"
+   ],
+   "railway_domains": [
+    "readm3-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "readm3-volume",
+     "id": "1a841205-164f-4c51-8042-a53368016814",
+     "mountPath": "/data",
+     "sizeMB": 796
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3211
+  },
+  "recipepdfs.com": {
+   "site": "recipepdfs.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "recipepdfs.com",
+   "service_id": "c55ab9d4-2219-4114-9868-d484b95c5dd6",
+   "repo": "profullstack/recipepdfs.com",
+   "image": null,
+   "domains": [
+    "www.recipepdfs.com",
+    "recipepdfs.com"
+   ],
+   "railway_domains": [
+    "recipepdfscom-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3263
+  },
+  "reeleel.com": {
+   "site": "reeleel.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "reeleel",
+   "service_id": "1bdbef00-a8a1-4618-9f57-00d9b62622ba",
+   "repo": "profullstack/reeleel",
+   "image": null,
+   "domains": [
+    "www.reeleel.com",
+    "reeleel.com"
+   ],
+   "railway_domains": [
+    "reeleel.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "reeleel-volume",
+     "id": "4fd6fc14-bc49-4600-a067-58f7f8227ab7",
+     "mountPath": "/data",
+     "sizeMB": 6189
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3226
+  },
+  "ringhuman.com": {
+   "site": "ringhuman.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "ringhuman.com",
+   "service_id": "3a674a4e-a95d-4e2a-bc40-27c965c19ecc",
+   "repo": "profullstack/ringhuman.com",
+   "image": null,
+   "domains": [
+    "ringhuman.com",
+    "www.ringhuman.com"
+   ],
+   "railway_domains": [
+    "ringhumancom.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3233
+  },
+  "saasrow.com": {
+   "site": "saasrow.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "saasrow-web",
+   "service_id": "f9899f2e-493e-43b2-a1fe-c757d844e047",
+   "repo": "profullstack/saasrow-web",
+   "image": null,
+   "domains": [
+    "www.saasrow.com",
+    "saasrow.com"
+   ],
+   "railway_domains": [
+    "saasrow-web-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3276
+  },
+  "sh1pt.com": {
+   "site": "sh1pt.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "sh1pt.com",
+   "service_id": "72b41681-f139-45e3-a4b6-3972a628761b",
+   "repo": "profullstack/sh1pt",
+   "image": null,
+   "domains": [
+    "www.sh1pt.com",
+    "sh1pt.com"
+   ],
+   "railway_domains": [
+    "sh1ptcom-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3244
+  },
+  "sinkstate.com": {
+   "site": "sinkstate.com",
+   "project": "sinkstate",
+   "project_id": "56fbc164-6d3d-4e46-acea-6b4f332ec6af",
+   "environment_id": "f00b8b53-13d9-4526-bc16-22532abe33c8",
+   "service": "sinkstate",
+   "service_id": "3e298e05-2757-4d7c-92af-8eba08cf7a19",
+   "repo": "profullstack/sinkstate",
+   "image": null,
+   "domains": [
+    "sinkstate.com"
+   ],
+   "railway_domains": [
+    "sinkstate-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3219
+  },
+  "smshub.dev": {
+   "site": "smshub.dev",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "smshub.dev",
+   "service_id": "a9c818d5-2784-4137-8932-a33bcbd064cf",
+   "repo": "profullstack/smshub",
+   "image": null,
+   "domains": [
+    "smshub.dev",
+    "www.smshub.dev"
+   ],
+   "railway_domains": [
+    "smshub-production-65a6.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3256
+  },
+  "sorrycheck.com": {
+   "site": "sorrycheck.com",
+   "project": "sorrycheck",
+   "project_id": "a645aa8a-c5aa-4e37-bc40-c04ffeb7abd6",
+   "environment_id": "72061725-bbd5-4284-841d-a4ff1145e859",
+   "service": "sorrycheck",
+   "service_id": "2e48d286-0127-4530-8067-f00dd24395f1",
+   "repo": "profullstack/sorrycheck",
+   "image": null,
+   "domains": [
+    "sorrycheck.com"
+   ],
+   "railway_domains": [
+    "sorrycheck-production.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3220
+  },
+  "threatcrush.com": {
+   "site": "threatcrush.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "threatcrush.com",
+   "service_id": "dc38426b-e3db-4526-b0e4-913810a431bb",
+   "repo": "profullstack/threatcrush",
+   "image": null,
+   "domains": [
+    "www.threatcrush.com",
+    "threatcrush.com"
+   ],
+   "railway_domains": [
+    "threatcrush-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3270
+  },
+  "tipoffwatch.com": {
+   "site": "tipoffwatch.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "tipoffwatch.com",
+   "service_id": "1af0d67d-2204-4c26-99d8-e2765464bc8a",
+   "repo": "profullstack/tipoffwatch.com",
+   "image": null,
+   "domains": [
+    "tipoffwatch.com"
+   ],
+   "railway_domains": [
+    "tipoffwatch.up.railway.app"
+   ],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": true,
+   "volumes": [],
+   "port_var": "8080",
+   "companions": [],
+   "db_host": "postgres-q7ea.railway.internal",
+   "redis_host": "redis-g3yk.railway.internal",
+   "infra": [
+    {
+     "name": "Postgres-q7ea",
+     "id": "19103667-0f74-4494-82f6-f1fc9db5d951",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume-iLQ4",
+       "id": "c308610d-58e4-4c8b-bef2-7a8173cf1a3f",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 3782
+      }
+     ]
+    },
+    {
+     "name": "Redis-g3Yk",
+     "id": "b0a4bdf4-582a-4daf-b268-51952fc255e9",
+     "role": "redis",
+     "image": "redis:8.10.1",
+     "volumes": [
+      {
+       "name": "redis-volume-1uCi",
+       "id": "c6380555-a444-4ab0-b18e-0ec81349b94a",
+       "mountPath": "/data",
+       "sizeMB": 1210
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3225
+  },
+  "tronbrowser.dev": {
+   "site": "tronbrowser.dev",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "tronbrowser.dev",
+   "service_id": "c621b6d1-eb39-41ba-a3ef-303ba7de20d5",
+   "repo": "profullstack/tronbrowser.dev",
+   "image": null,
+   "domains": [
+    "tronbrowser.dev",
+    "www.tronbrowser.dev"
+   ],
+   "railway_domains": [
+    "tronbrowser.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "tronbrowser.dev-volume",
+     "id": "e45333b0-dc74-4ada-aa97-cc86b0254992",
+     "mountPath": "/var/lib/tor/hidden_service",
+     "sizeMB": 1060
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3264
+  },
+  "tsbb.dev": {
+   "site": "tsbb.dev",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "tsbb",
+   "service_id": "a5434b3a-b418-4a7d-82d9-c8cbfcf136a9",
+   "repo": "profullstack/tsbb",
+   "image": null,
+   "domains": [
+    "tsbb.dev",
+    "www.tsbb.dev"
+   ],
+   "railway_domains": [
+    "tsbb.up.railway.app"
+   ],
+   "db": "turso",
+   "db_kinds": [
+    "turso"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3255
+  },
+  "ugig.net": {
+   "site": "ugig.net",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "ugig.net",
+   "service_id": "86b45c1d-4a7b-4063-8694-74e646a2ccb9",
+   "repo": "profullstack/ugig.net",
+   "image": null,
+   "domains": [
+    "ugig.net",
+    "www.ugig.net"
+   ],
+   "railway_domains": [
+    "ugignet-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3249
+  },
+  "vu1nz.com": {
+   "site": "vu1nz.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "vu1nz.com",
+   "service_id": "4169ee16-78e0-460d-8e06-a3feff6c2324",
+   "repo": "profullstack/vu1nz.com",
+   "image": null,
+   "domains": [
+    "vu1nz.com",
+    "www.vu1nz.com"
+   ],
+   "railway_domains": [
+    "vu1nzcom-production.up.railway.app"
+   ],
+   "db": "none",
+   "db_kinds": [],
+   "redis": false,
+   "volumes": [
+    {
+     "name": "vu1nz.com-volume",
+     "id": "abfba90b-d5b0-4a1a-9c86-b71e41b3e88a",
+     "mountPath": "/app/data",
+     "sizeMB": 1067
+    }
+   ],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3234
+  },
+  "w3bs.org": {
+   "site": "w3bs.org",
+   "project": "w3bs",
+   "project_id": "0e7a6bd2-79be-4a92-86d3-6a15ef3dec79",
+   "environment_id": "ea846dc0-96dd-43d6-be9f-cb00fb16eaf5",
+   "service": "w3bs",
+   "service_id": "571bb8cd-8ebc-4929-954d-97452e078a4c",
+   "repo": "profullstack/w3bs.org",
+   "image": null,
+   "domains": [
+    "w3bs.org",
+    "www.w3bs.org",
+    "prompt.w3bs.org",
+    "browse.w3bs.org",
+    "specs.w3bs.org"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": null,
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "4350856e-bd50-49e1-8457-132d5db21030",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "dbf40f23-444c-4165-ba97-7d8a386c1f80",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 862
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3209
+  },
+  "watchnews.now": {
+   "site": "watchnews.now",
+   "project": "watchnews.now",
+   "project_id": "46002072-eb98-49cd-8eba-2d1d6b09d1a3",
+   "environment_id": "10459e11-1a4d-4d71-890a-f4a1173b6201",
+   "service": "watchnews.now",
+   "service_id": "f6196b0e-98ee-4b77-9d99-152832e4997b",
+   "repo": "profullstack/watchnews.now",
+   "image": null,
+   "domains": [
+    "www.watchnews.now",
+    "watchnews.now"
+   ],
+   "railway_domains": [],
+   "db": "pg",
+   "db_kinds": [
+    "pg"
+   ],
+   "redis": true,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": "postgres.railway.internal",
+   "redis_host": "redis.railway.internal",
+   "infra": [
+    {
+     "name": "Postgres",
+     "id": "23bdde3e-9d16-4a45-b1b1-b3fc9fbafc0d",
+     "role": "pg",
+     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+     "volumes": [
+      {
+       "name": "postgres-volume",
+       "id": "0283a6e2-aa2d-43e3-8ae9-a8f35aa0d347",
+       "mountPath": "/var/lib/postgresql/data",
+       "sizeMB": 3872
+      }
+     ]
+    },
+    {
+     "name": "Redis",
+     "id": "77628875-109a-4264-b55d-70eed867673c",
+     "role": "redis",
+     "image": "redis:8.2",
+     "volumes": [
+      {
+       "name": "redis-volume",
+       "id": "24e869be-b04b-404a-8c4c-8c29531449c9",
+       "mountPath": "/data",
+       "sizeMB": 1060
+      }
+     ]
+    }
+   ],
+   "shared_repo": false,
+   "port": 3215
+  },
+  "weedforcrypto.com": {
+   "site": "weedforcrypto.com",
+   "project": "Profullstack, Inc.",
+   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
+   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
+   "service": "weedforcrypto",
+   "service_id": "63cf71c9-a1ee-47e8-8391-2c3e44390f0e",
+   "repo": "profullstack/weedforcrypto",
+   "image": null,
+   "domains": [
+    "www.weedforcrypto.com",
+    "weedforcrypto.com"
+   ],
+   "railway_domains": [
+    "weedforcrypto-production.up.railway.app"
+   ],
+   "db": "supabase",
+   "db_kinds": [
+    "supabase"
+   ],
+   "redis": false,
+   "volumes": [],
+   "port_var": null,
+   "companions": [],
+   "db_host": null,
+   "redis_host": null,
+   "infra": [],
+   "shared_repo": false,
+   "port": 3243
+  }
+ }
+}

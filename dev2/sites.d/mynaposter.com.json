@@ -1,0 +1,32 @@
+{
+ "db": "pg",
+ "db_host": "postgres.railway.internal",
+ "infra": [
+  {
+   "name": "Postgres",
+   "id": "815793bb-9f7b-4703-9bc2-1f170dccb836",
+   "role": "pg",
+   "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+   "volumes": []
+  }
+ ],
+ "companion_ports": {
+  "mynaposter-api": {
+   "host": 3361,
+   "inside": "8787"
+  }
+ },
+ "proxies": [
+  {
+   "host": "api.mynaposter.com",
+   "port": 3361,
+   "max_body": "64m"
+  }
+ ],
+ "notes": "the CLI (packages/core/src/store/cloud.ts DEFAULT_SERVER) called the API at its railway.app URL; api.mynaposter.com replaces it",
+ "start_command": "bun apps/web/src/build.ts && bun apps/web/src/server.ts",
+ "companion_commands": {
+  "mynaposter-api": "bun apps/api/src/server.ts"
+ },
+ "node_version": "22"
+}

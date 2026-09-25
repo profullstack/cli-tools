@@ -23,3 +23,8 @@ credentials.json
 # land in the checkout that owns the links, which for a contributor is this
 # repo, so without this a 37MB stripe binary shows up as untracked.
 vendor/
+
+# Python bytecode. dev2/dev2-site has no .py suffix but is imported by its
+# tests, which is enough for CPython to write one next to it.
+__pycache__/
+*.pyc
