@@ -86,6 +86,9 @@ chmod -R u+rwX,go+rX "$APP_DIR" 2>/dev/null || true
 log "At $SHA"
 
 log "Building $BUILD_SERVICES"
+# Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) come from app.env through the
+# compose build args; export the file so ${K} interpolates. Never printed.
+set -a; . "$ROOT/app.env"; set +a
 # shellcheck disable=SC2086
 compose build $BUILD_SERVICES
 

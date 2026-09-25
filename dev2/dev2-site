@@ -386,7 +386,19 @@ def cmd_scaffold(args):
             nix = shutil.which("nixpacks") or os.path.expanduser("~/.local/bin/nixpacks")
             env = dict(os.environ)
             if cfg.get("startCommand"): env["NIXPACKS_START_CMD"] = cfg["startCommand"]
+            env.setdefault("NIXPACKS_NODE_VERSION", s.get("node_version", "22"))  # nixpacks defaults to 18, too old for Next 16
             sh([nix, "build", wt, "--out", wt], env=env)
+            # Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) are baked into the bundle at
+            # `build`; Railway had them in the build environment. Declare them as ARGs so the
+            # compose build args (provision) reach the build, then keep them as ENV for runtime.
+            pub = public_keys(rw_variables(s["project_id"], s["environment_id"], s["service_id"]))
+            dfp = os.path.join(wt, ".nixpacks", "Dockerfile")
+            if pub and os.path.exists(dfp):
+                lines = open(dfp).read().split("\n")
+                at = next((i for i, l in enumerate(lines) if l.startswith("WORKDIR")), 0) + 1
+                lines[at:at] = [f"ARG {k}\nENV {k}=${k}" for k in pub]
+                open(dfp, "w").write("\n".join(lines))
+                note(f"build args declared in .nixpacks/Dockerfile: {', '.join(pub)}")
             gi = os.path.join(wt, ".gitignore")
             if os.path.exists(gi) and re.search(r"^\.?nixpacks", open(gi).read(), re.M):
                 with open(gi, "a") as f: f.write("\n!.nixpacks\n")
@@ -419,6 +431,11 @@ def env_quote(v):
     if not re.search(r'[\n\r"#]|^\s|\s$', s): return s
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+PUBLIC_PREFIXES = ("NEXT_PUBLIC_", "VITE_", "PUBLIC_", "NUXT_PUBLIC_", "EXPO_PUBLIC_", "REACT_APP_", "SVELTEKIT_PUBLIC_")
+
+def public_keys(vars_):
+    return sorted(k for k in vars_ if k.startswith(PUBLIC_PREFIXES) and isinstance(vars_[k], str))
+
 def render_env(vars_, s, st, service_name=None):
     """Railway's rendered variables, minus Railway, with the data services re-pointed."""
     out = {}
@@ -446,7 +463,7 @@ def render_env(vars_, s, st, service_name=None):
     lines += [f"{k}={env_quote(v)}" for k, v in out.items()]
     return "\n".join(lines) + "\n", out
 
-def render_compose(s, st, app_port_inside):
+def render_compose(s, st, app_port_inside, build_args=()):
     df = st.get("dockerfile") or "Dockerfile"
     img = s["site"].replace(".", "-")
     y = [f"# {s['site']} on dev2: rendered by cli-tools dev2/dev2-site provision. Re-run provision to change.",
@@ -454,6 +471,8 @@ def render_compose(s, st, app_port_inside):
     def service(name, envfile, command=None, ports=True, vols=()):
         y.append(f"  {name}:")
         y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
+        if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
+            y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
         y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
         y.append(f"    environment:\n      PORT: \"{app_port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
         if command: y.append(f"    command: {json.dumps(shlex.split(command))}")
@@ -504,7 +523,7 @@ def cmd_provision(args):
         st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
     branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
     hp = st.get("health_path") or health_url(s, cfg)[1]
-    compose = render_compose(s, st, inside)
+    compose = render_compose(s, st, inside, build_args=public_keys(merged))
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
     # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
     # deploy key (the alias keeps one key per repo); some orgs (moshcoder) disable deploy
