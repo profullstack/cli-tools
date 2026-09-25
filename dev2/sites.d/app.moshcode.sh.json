@@ -1,4 +1,5 @@
 {
  "health_path": "/healthz",
- "notes": "web app is apps/pwa (own deps); plain Dockerfile on the deploy branch, health /healthz"
+ "env_remove": ["DATABASE_AUTH_TOKEN"],
+ "notes": "web app is apps/pwa (own deps); plain Dockerfile on main, health /healthz. Turso -> shared Postgres 2026-09-25 (moshcoder/moshcode#551): DATABASE_URL is rewritten to the cluster URL by provision, the Turso token retired"
 }
