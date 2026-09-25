@@ -742,6 +742,9 @@ def cmd_vhost(args):
 def cmd_verify(args):
     s = site(args.site); st = load_state(s["site"])
     hp = st.get("health_path") or "/"
+    # Without the vhost nginx's default server answers the pinned SNI and a 200 means nothing.
+    if ssh("root", f"test -e /etc/nginx/sites-enabled/{shlex.quote(s['site'])} && echo yes", check=False).strip() != "yes":
+        die(f"no nginx vhost for {s['site']} yet: run `dev2-site vhost {s['site']}` first")
     ok = True
     for d in s["domains"]:
         resolve = [] if args.public else ["--resolve", f"{d}:443:{DEV2_IP}"]
