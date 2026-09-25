@@ -500,10 +500,13 @@ def cmd_provision(args):
     hp = st.get("health_path") or health_url(s, cfg)[1]
     compose = render_compose(s, st, inside)
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
-    # The box clones over ssh with a read-only GitHub deploy key (private repos have
-    # no https path for the deploy account); the alias keeps one key per repo.
+    # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
+    # deploy key (the alias keeps one key per repo); some orgs (moshcoder) disable deploy
+    # keys, which only matters when the repo is private.
+    private = sh(["gh", "api", f"repos/{s['repo']}", "--jq", ".private"], check=False).strip() == "true"
     key_alias = f"github.com-{s['repo'].replace('/', '__')}"
-    deploy_env = f"SITE={s['site']}\nREPO=git@{key_alias}:{s['repo']}.git\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
+    repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
+    deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES={build_services}\nHEALTH_PATH={hp}\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")
@@ -525,8 +528,12 @@ def cmd_provision(args):
     slug = s["repo"].replace("/", "__")
     have = sh(["gh", "api", f"repos/{s['repo']}/keys", "--jq", ".[].key"], check=False)
     if pub.split()[1] not in have:
-        sh(["gh", "repo", "deploy-key", "add", key + ".pub", "--repo", s["repo"], "--title", "dev2 deploy (dev2-site)"])
-        note("read-only deploy key added to the GitHub repo")
+        try:
+            sh(["gh", "repo", "deploy-key", "add", key + ".pub", "--repo", s["repo"], "--title", "dev2 deploy (dev2-site)"])
+            note("read-only deploy key added to the GitHub repo")
+        except RuntimeError as e:
+            if private: die(f"{s['repo']} is private and GitHub refused a deploy key ({str(e)[-200:].strip()}); enable deploy keys for the org or make the repo public")
+            note("GitHub refused a deploy key (org setting); the repo is public, so the box clones over https")
     ssh_put(open(key).read(), f"/home/{DEPLOY_USER}/.ssh/deploy-keys/{slug}", "0600", own) if ssh("root", f"install -d -m 700 -o {DEPLOY_USER} -g {DEPLOY_USER} /home/{DEPLOY_USER}/.ssh/deploy-keys && echo ok").strip() == "ok" else None
     ssh("root", f"f=/home/{DEPLOY_USER}/.ssh/config; touch $f; chown {DEPLOY_USER}:{DEPLOY_USER} $f; chmod 600 $f; grep -q '^Host {key_alias}$' $f || printf 'Host {key_alias}\n  HostName github.com\n  User git\n  IdentityFile ~/.ssh/deploy-keys/{slug}\n  IdentitiesOnly yes\n  StrictHostKeyChecking accept-new\n\n' >> $f")
     ssh("root", f"k=/home/{DEPLOY_USER}/.ssh/known_hosts; grep -q '^github.com ' $k 2>/dev/null || ssh-keyscan github.com >> $k 2>/dev/null; chown {DEPLOY_USER}:{DEPLOY_USER} $k")
