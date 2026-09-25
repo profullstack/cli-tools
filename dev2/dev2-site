@@ -986,10 +986,10 @@ def cmd_cert_http(s, domains):
     log(f"Certificate for {', '.join(domains)} (acme.sh, HTTP-01 through nginx, zone not at Porkbun)")
     conf = "server {\n    listen 80;\n    listen [::]:80;\n    server_name " + " ".join(domains) + ";\n    location ^~ /.well-known/acme-challenge/ { root /var/www/acme; default_type \"text/plain\"; }\n    location / { return 301 https://$host$request_uri; }\n}\n"
     ssh_put(conf, f"/etc/nginx/sites-available/{s['site']}", "0644")
-    ssh("root", f"install -d -m 0755 /var/www/acme && ln -sf /etc/nginx/sites-available/{s['site']} /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    ssh("root", f"install -d -m 0755 /var/www/acme && ln -sf /etc/nginx/sites-available/{s['site']} /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
-    out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root /root/.acme.sh/acme.sh --issue --server letsencrypt --webroot /var/www/acme {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
+    out = ssh("root", f"install -d -m 0750 {cert_dir} && umask 022 && env HOME=/root /root/.acme.sh/acme.sh --issue --server letsencrypt --webroot /var/www/acme {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
     if out.strip() and "Cert success" not in out: die(out)
     ssh("root", f"env HOME=/root /root/.acme.sh/acme.sh --install-cert -d {shlex.quote(domains[0])} --fullchain-file {cert_dir}/fullchain.pem --key-file {cert_dir}/privkey.pem --reloadcmd 'systemctl reload nginx' >/dev/null")
     note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
@@ -1049,7 +1049,7 @@ def cmd_vhost(args):
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
     ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
-    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
     mark(s["site"], "vhost")
 
 def cmd_verify(args):
