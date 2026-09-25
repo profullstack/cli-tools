@@ -8,6 +8,8 @@
  ],
  "env_overrides": {
   "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
-  "SUPABASE_URL": "https://supabase.phonenumbers.bot"
+  "SUPABASE_URL": "https://supabase.phonenumbers.bot",
+  "SUPABAsE_URL": "https://supabase.phonenumbers.bot",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD"
  }
 }

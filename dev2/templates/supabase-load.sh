@@ -16,6 +16,9 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 psql_db() { docker exec -i "$DBC" psql -U postgres -h localhost -d postgres -X "$@"; }
 psql_admin() { docker exec -i "$DBC" psql -U supabase_admin -h localhost -d postgres -X "$@"; }
 strict() { psql_db -v ON_ERROR_STOP=1 "$@"; }
+# psql -f /dev/stdin prefixes every message with "psql:/dev/stdin:N: ", so match ERROR after that too.
+nerr() { grep -cE '^(psql:[^ ]*:[0-9]+: )?ERROR' "$1" 2>/dev/null || true; }
+lerr() { grep -E '^(psql:[^ ]*:[0-9]+: )?ERROR' "$1" 2>/dev/null | sed -E 's/^psql:[^ ]*:[0-9]+: //' | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true; }
 docker exec "$DBC" pg_isready -U postgres -h localhost >/dev/null || die "$DBC not ready"
 
 log "Snapshot BEFORE"
@@ -23,29 +26,29 @@ strict -At -c "select 'tables='||(select count(*) from information_schema.tables
 
 if [ "$POST_ONLY" = 0 ] && [ "$RESET" = 1 ]; then
   log "RESET: dropping app schemas and auth/storage rows from the earlier load"
-  while read -r sch; do [ -n "$sch" ] || continue
+  while read -r sch <&3; do [ -n "$sch" ] || continue
     psql_admin -v ON_ERROR_STOP=1 -c "drop schema if exists \"$sch\" cascade; create schema \"$sch\"; grant usage on schema \"$sch\" to anon, authenticated, service_role; grant all on schema \"$sch\" to postgres" >/dev/null && echo "    dropped+recreated schema $sch"
-  done < "$DUMP/schemas.txt"
+  done 3< "$DUMP/schemas.txt"
   psql_admin -v ON_ERROR_STOP=1 -c "truncate auth.users cascade" -c "truncate storage.buckets cascade" >/dev/null && echo "    auth.users / storage.buckets truncated"
   psql_admin -c "select cron.unschedule(jobname) from cron.job" >/dev/null 2>&1 || true
 fi
 
 if [ "$POST_ONLY" = 0 ]; then
   log "Extensions the cloud had"
-  while read -r e; do [ -n "$e" ] || continue; case $e in plpgsql|pg_graphql|pgsodium|supabase_vault|pg_stat_statements|pgjwt) continue;; esac
-    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; done < "$DUMP/extensions.txt"
+  while read -r e <&3; do [ -n "$e" ] || continue; case $e in plpgsql|pg_graphql|pgsodium|supabase_vault|pg_stat_statements|pgjwt) continue;; esac
+    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; done 3< "$DUMP/extensions.txt"
   log "Schema"
   grep -qE 'CREATE SCHEMA "?(auth|storage)"?' "$DUMP/schema.sql" && die "schema.sql contains auth/storage DDL"
   psql_admin -f /dev/stdin < "$DUMP/schema.sql" > "$DUMP/schema.load.log" 2>&1 || true
-  echo "    schema errors: $(grep -c '^ERROR' "$DUMP/schema.load.log" || true)"; grep '^ERROR' "$DUMP/schema.load.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true
+  echo "    schema errors: $(nerr "$DUMP/schema.load.log")"; lerr "$DUMP/schema.load.log"
   log "Data (auth before app schemas)"
   a=$(grep -m1 -n 'COPY "auth"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); p=$(grep -m1 -n 'COPY "public"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); a=${a:-0}; p=${p:-0}
   if [ "$a" -gt 0 ] && [ "$p" -gt 0 ] && [ "$a" -gt "$p" ]; then die "data.sql has public before auth"; fi
   psql_admin -f /dev/stdin < "$DUMP/data.sql" > "$DUMP/data.load.log" 2>&1 || true
-  echo "    data errors: $(grep -c '^ERROR' "$DUMP/data.load.log" || true)"; grep '^ERROR' "$DUMP/data.load.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true
+  echo "    data errors: $(nerr "$DUMP/data.load.log")"; lerr "$DUMP/data.load.log"
   log "Grants for anon/authenticated/service_role"
   psql_admin -f /dev/stdin < "$DUMP/grants.sql" > "$DUMP/grants.load.log" 2>&1 || true
-  echo "    grant errors: $(grep -c '^ERROR' "$DUMP/grants.load.log" || true)"
+  echo "    grant errors: $(nerr "$DUMP/grants.load.log")"; lerr "$DUMP/grants.load.log"
   log "Ownership: app schemas to postgres (they were created by supabase_admin)"
   psql_admin -At -v ON_ERROR_STOP=1 <<'SQL'
 do $$ declare r record; begin
@@ -60,8 +63,8 @@ SQL
 fi
 
 log "Buckets"
-while IFS=$'\t' read -r id name pub limit mimes; do [ -n "$id" ] || continue; case "$pub" in t|true) ps=true;; *) ps=false;; esac
-  strict -c "insert into storage.buckets (id, name, public) values ('$id','$name',$ps) on conflict (id) do update set public=excluded.public" >/dev/null; done < "$DUMP/buckets.tsv"
+while IFS=$'\t' read -r id name pub limit mimes <&3; do [ -n "$id" ] || continue; case "$pub" in t|true) ps=true;; *) ps=false;; esac
+  strict -c "insert into storage.buckets (id, name, public) values ('$id','$name',$ps) on conflict (id) do update set public=excluded.public" >/dev/null; done 3< "$DUMP/buckets.tsv"
 
 log "Rewriting absolute https://$CLOUD_REF.supabase.co URLs to https://$NEW_HOST in every text/json column"
 strict -At <<SQL

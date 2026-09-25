@@ -33,7 +33,10 @@ pg pg_dump --dbname="$CLOUD_DB_URL" --data-only --no-owner --no-privileges --quo
 
 log "Grants and RLS policies (the schema dump drops privileges; PostgREST needs them back)"
 psqlc -c "select 'grant '||privilege_type||' on '||quote_ident(table_schema)||'.'||quote_ident(table_name)||' to '||quote_ident(grantee)||';' from information_schema.role_table_grants where grantee in ('anon','authenticated','service_role') and table_schema not in ($SYS) order by 1" > "$OUT/grants.sql"
-psqlc -c "select 'grant '||privilege_type||' on '||quote_ident(routine_schema)||'.'||quote_ident(routine_name)||' to '||quote_ident(grantee)||';' from information_schema.role_routine_grants where grantee in ('anon','authenticated','service_role') and routine_schema not in ($SYS) order by 1" >> "$OUT/grants.sql" || true
+# Functions: "grant execute on function schema.name(argtypes)" -- routine_name alone is a relation to psql, so every
+# grant failed before. A function with no PUBLIC execute on the cloud was locked down on purpose: revoke PUBLIC there too.
+psqlc -c "select 'revoke execute on function '||p.oid::regprocedure::text||' from public;' from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname not in ($SYS) and n.nspname not like 'pg_%' and p.prokind in ('f','p') and p.proacl is not null and not exists (select 1 from aclexplode(p.proacl) a where a.grantee=0 and a.privilege_type='EXECUTE') order by 1" >> "$OUT/grants.sql" || true
+psqlc -c "select 'grant execute on function '||p.oid::regprocedure::text||' to '||quote_ident(r.rolname)||';' from pg_proc p join pg_namespace n on n.oid=p.pronamespace join aclexplode(p.proacl) a on true join pg_roles r on r.oid=a.grantee where n.nspname not in ($SYS) and n.nspname not like 'pg_%' and p.prokind in ('f','p') and a.privilege_type='EXECUTE' and r.rolname in ('anon','authenticated','service_role') order by 1" >> "$OUT/grants.sql" || true
 psqlc -c "select 'grant usage, select on all sequences in schema '||quote_ident(nspname)||' to anon, authenticated, service_role;' from pg_namespace where nspname not in ($SYS) and nspname not like 'pg_%'" >> "$OUT/grants.sql"
 
 log "pg_cron jobs"
