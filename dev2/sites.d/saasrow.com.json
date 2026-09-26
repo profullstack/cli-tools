@@ -18,5 +18,13 @@
   "RESEND_API_KEY": "secret:RESEND_API_KEY",
   "RESEND_DOMAIN": "secret:RESEND_DOMAIN",
   "GEMINI_API_KEY": "secret:GEMINI_API_KEY"
+ },
+ "env_overrides": {
+  "SUPABASE_ANON_KEY": "secret:SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.saasrow.com",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_URL": "https://supabase.saasrow.com",
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_EDGE_ANON_JWT": "secret:SUPABASE_EDGE_ANON_JWT"
  }
 }
