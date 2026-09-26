@@ -1193,13 +1193,14 @@ def cmd_backup_install(args):
         print(ssh("root", "tail -n 40 /var/log/dev2-pg-backup.log"))
 
 def cmd_backup_offbox_install(args):
-    """Install the off-box pull on THIS box: ~/.local/bin/dev2-backup-pull.sh from the template and a
-    crontab line at 06:30 UTC (after dev2's 05:20 full). --run pulls right away (tens of GB the first time)."""
+    """Install the off-box STORAGE-FILE pull on THIS box (the dumps are already pulled 4-hourly by
+    ~/.local/bin/pull-dev2-backups.sh): ~/.local/bin/dev2-backup-pull.sh from the template and a crontab
+    line at 06:30 UTC (after dev2's 05:20 full). --run pulls right away (~13 GB the first time)."""
     import shutil
     dst = os.path.expanduser("~/.local/bin/dev2-backup-pull.sh"); os.makedirs(os.path.dirname(dst), exist_ok=True)
     shutil.copy(os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "dev2-backup-pull.sh"), dst); os.chmod(dst, 0o755)
     cur = sh(["crontab", "-l"], check=False)
-    line = f"30 6 * * * {dst}  # dev2-site backup-offbox-install: mirror dev2's /var/backups/postgres here"
+    line = f"30 6 * * * {dst}  # dev2-site backup-offbox-install: mirror dev2's Supabase storage files here (dumps: pull-dev2-backups.sh)"
     if "dev2-backup-pull.sh" not in cur:
         subprocess.run(["crontab", "-"], input=cur.rstrip("\n") + "\n" + line + "\n", text=True, check=True); note("crontab line added (06:30 UTC daily)")
     else: note("crontab line already present")
