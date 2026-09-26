@@ -56,6 +56,11 @@ if [ "$POST_ONLY" = 0 ]; then
   if [ -s "$DUMP/notvalid-add.sql" ]; then
     psql_admin -f /dev/stdin < "$DUMP/notvalid-add.sql" > "$DUMP/notvalid-add.log" 2>&1 || true; echo "    NOT VALID constraints re-added: $(grep -c '^ALTER' "$DUMP/notvalid-add.log" || true), errors $(nerr "$DUMP/notvalid-add.log")"; lerr "$DUMP/notvalid-add.log"
   fi
+  if [ -s "$DUMP/auth-triggers.sql" ]; then
+    log "Triggers on auth.*/storage.* (handle_new_user and friends; their functions were loaded with the app schema)"
+    psql_admin -f /dev/stdin < "$DUMP/auth-triggers.sql" > "$DUMP/auth-triggers.load.log" 2>&1 || true
+    echo "    triggers created: $(grep -c '^CREATE TRIGGER' "$DUMP/auth-triggers.load.log" || true), errors $(nerr "$DUMP/auth-triggers.load.log")"; lerr "$DUMP/auth-triggers.load.log"
+  fi
   if [ -s "$DUMP/vault.tsv" ]; then
     log "Vault secrets"
     psql_admin -c "create extension if not exists supabase_vault cascade" >/dev/null 2>&1 || true

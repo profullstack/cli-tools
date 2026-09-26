@@ -47,6 +47,9 @@ log "Vault secrets (pg_cron http jobs read them)"
 psqlc -F$'\t' -c "select name, decrypted_secret, coalesce(description,'') from vault.decrypted_secrets order by 1" > "$OUT/vault.tsv" 2>/dev/null || : > "$OUT/vault.tsv"
 chmod 600 "$OUT/vault.tsv"
 
+log "Triggers on auth.* / storage.* tables (pg_dump files them under the table's schema, which the schema dump excludes)"
+psqlc -c "select pg_get_triggerdef(t.oid)||';' from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace where not t.tgisinternal and n.nspname in ('auth','storage') order by 1" > "$OUT/auth-triggers.sql" 2>/dev/null || : > "$OUT/auth-triggers.sql"
+
 log "pg_cron jobs"
 psqlc -c "select 'select cron.schedule(' || quote_literal(jobname) || ', ' || quote_literal(schedule) || ', ' || quote_literal(command) || ');' from cron.job where active order by jobid" > "$OUT/cron-jobs.sql" 2>/dev/null || : > "$OUT/cron-jobs.sql"
 
@@ -64,6 +67,6 @@ psqlc -F$'\t' -c "select n.nspname||'.'||c.relname, c.reltuples::bigint from pg_
   echo "dumped_at=$(date -u +%FT%TZ)"; echo "schema_bytes=$(stat -c%s "$OUT/schema.sql")"; echo "data_bytes=$(stat -c%s "$OUT/data.sql")"
   echo "storage_objects=$(wc -l < "$OUT/storage-inventory.tsv")"; echo "storage_bytes=$(awk -F'\t' '{s+=$4} END{print s+0}' "$OUT/storage-inventory.tsv")"
   echo "cron_jobs=$(grep -c '^select cron.schedule' "$OUT/cron-jobs.sql" || true)"; echo "auth_users=$(grep -c '' <(psqlc -c 'select id from auth.users'))"
-  echo "notvalid_constraints=$(grep -c '^alter' "$OUT/notvalid-drop.sql" || true)"; echo "vault_secrets=$(grep -c '' "$OUT/vault.tsv" || true)"
+  echo "notvalid_constraints=$(grep -c '^alter' "$OUT/notvalid-drop.sql" || true)"; echo "vault_secrets=$(grep -c '' "$OUT/vault.tsv" || true)"; echo "auth_triggers=$(grep -c 'CREATE' "$OUT/auth-triggers.sql" || true)"
 } > "$OUT/MANIFEST"
 log "Done: $OUT"; cat "$OUT/MANIFEST"
