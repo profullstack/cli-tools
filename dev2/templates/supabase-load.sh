@@ -56,6 +56,15 @@ if [ "$POST_ONLY" = 0 ]; then
   if [ -s "$DUMP/notvalid-add.sql" ]; then
     psql_admin -f /dev/stdin < "$DUMP/notvalid-add.sql" > "$DUMP/notvalid-add.log" 2>&1 || true; echo "    NOT VALID constraints re-added: $(grep -c '^ALTER' "$DUMP/notvalid-add.log" || true), errors $(nerr "$DUMP/notvalid-add.log")"; lerr "$DUMP/notvalid-add.log"
   fi
+  # After the data, never before: on_auth_user_created firing during the auth.users COPY would
+  # insert a second profile for every user.
+  log "App triggers and RLS policies on auth/storage tables"
+  if [ -f "$DUMP/auth-storage-triggers.sql" ] && [ -f "$DUMP/auth-storage-policies.sql" ]; then
+    cat "$DUMP/auth-storage-triggers.sql" "$DUMP/auth-storage-policies.sql" | psql_admin -f /dev/stdin > "$DUMP/auth-storage.load.log" 2>&1 || true
+    echo "    triggers: $(grep -c '' "$DUMP/auth-storage-triggers.sql" || true), policies: $(grep -c '' "$DUMP/auth-storage-policies.sql" || true), errors $(nerr "$DUMP/auth-storage.load.log")"; lerr "$DUMP/auth-storage.load.log"
+  else
+    echo "    WARNING: dump predates auth-storage-*.sql; auth.users triggers and storage policies are NOT restored (re-pull)"
+  fi
   if [ -s "$DUMP/vault.tsv" ]; then
     log "Vault secrets"
     psql_admin -c "create extension if not exists supabase_vault cascade" >/dev/null 2>&1 || true
