@@ -1,0 +1,15 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.postammo.com",
+   "port": 8246,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
+  "SUPABASE_URL": "https://supabase.postammo.com",
+  "SUPABASE_JWT_JWKS_URL": "https://supabase.postammo.com/auth/v1/.well-known/jwks.json"
+ }
+}

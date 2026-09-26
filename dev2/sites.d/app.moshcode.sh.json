@@ -1,1 +1,5 @@
-{"start_command": "node apps/pwa/src/server.mjs", "health_path": "/healthz", "notes": "Railway ran this service from apps/pwa (its railway.json: npm start -> node src/server.mjs, /healthz); the repo root start is the moshcode CLI"}
+{
+ "health_path": "/healthz",
+ "env_remove": ["DATABASE_AUTH_TOKEN"],
+ "notes": "web app is apps/pwa (own deps); plain Dockerfile on main, health /healthz. Turso -> shared Postgres 2026-09-25 (moshcoder/moshcode#551): DATABASE_URL is rewritten to the cluster URL by provision, the Turso token retired"
+}

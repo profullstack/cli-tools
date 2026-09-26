@@ -1,1 +1,30 @@
-{ "health_path": "/api/health" }
+{
+ "health_path": "/api/health",
+ "proxies": [
+  {
+   "host": "supabase.coinpayportal.com",
+   "port": 8273,
+   "max_body": "512m"
+  }
+ ],
+ "crons": [
+  {
+   "schedule": "* * * * *",
+   "path": "/api/cron/monitor-payments",
+   "auth_env": "CRON_SECRET",
+   "timeout": 55
+  }
+ ],
+ "notes": "Payment/escrow/lightning monitor ran as a Vercel cron every minute (vercel.json); on dev2 it is the cron.d entry rendered from `crons`.",
+ "env_overrides": {
+  "JWT_SECRET": "secret:JWT_SECRET",
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.coinpayportal.com",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
+  "SUPABASE_JWT_SECRET": "secret:SUPABASE_JWT_SECRET",
+  "SUPABASE_PUBLISHABLE_KEY": "secret:SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SECRETMAT_KEY": "secret:SUPABASE_SECRETMAT_KEY",
+  "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY"
+ }
+}

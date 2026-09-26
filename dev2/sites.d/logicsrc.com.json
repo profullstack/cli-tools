@@ -1,0 +1,16 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.logicsrc.com",
+   "port": 8272,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "SUPABASE_ANON_KEY": "secret:SUPABASE_ANON_KEY",
+  "SUPABASE_PUBLISHABLE_KEY": "secret:SUPABASE_PUBLISHABLE_KEY",
+  "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
+  "SUPABASE_URL": "https://supabase.logicsrc.com"
+ }
+}

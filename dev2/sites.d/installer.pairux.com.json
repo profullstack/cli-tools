@@ -1,14 +1,8 @@
 {
- "proxies": [
-  {
-   "host": "supabase.brisk.news",
-   "port": 8238,
-   "max_body": "512m"
-  }
- ],
  "env_overrides": {
   "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
-  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.brisk.news"
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.pairux.com",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD"
  }
 }

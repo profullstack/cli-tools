@@ -6,33 +6,62 @@
 set -euo pipefail
 : "${DUMP:?}" "${DBC:?}" "${CLOUD_REF:?}" "${NEW_HOST:?}"
 POST_ONLY=${POST_ONLY:-0}
+# RESET=1 drops the app schemas (public and any other non-system schema the dump carries) plus
+# the auth/storage ROWS before loading, so a fresh dump can replace an earlier load without
+# duplicate-key errors. The stack's own auth/storage structure is untouched.
+RESET=${RESET:-0}
 log() { printf '\n===> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [ -d "$DUMP" ] || die "no dump at $DUMP"
 psql_db() { docker exec -i "$DBC" psql -U postgres -h localhost -d postgres -X "$@"; }
 psql_admin() { docker exec -i "$DBC" psql -U supabase_admin -h localhost -d postgres -X "$@"; }
 strict() { psql_db -v ON_ERROR_STOP=1 "$@"; }
+# psql -f /dev/stdin prefixes every message with "psql:/dev/stdin:N: ", so match ERROR after that too.
+nerr() { grep -cE '^(psql:[^ ]*:[0-9]+: )?ERROR' "$1" 2>/dev/null || true; }
+lerr() { grep -E '^(psql:[^ ]*:[0-9]+: )?ERROR' "$1" 2>/dev/null | sed -E 's/^psql:[^ ]*:[0-9]+: //' | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true; }
 docker exec "$DBC" pg_isready -U postgres -h localhost >/dev/null || die "$DBC not ready"
 
 log "Snapshot BEFORE"
 strict -At -c "select 'tables='||(select count(*) from information_schema.tables where table_schema='public')||' users='||(select count(*) from auth.users)"
 
+if [ "$POST_ONLY" = 0 ] && [ "$RESET" = 1 ]; then
+  log "RESET: dropping app schemas and auth/storage rows from the earlier load"
+  while read -r sch <&3; do [ -n "$sch" ] || continue
+    psql_admin -v ON_ERROR_STOP=1 -c "drop schema if exists \"$sch\" cascade; create schema \"$sch\"; grant usage on schema \"$sch\" to anon, authenticated, service_role; grant all on schema \"$sch\" to postgres" >/dev/null && echo "    dropped+recreated schema $sch"
+  done 3< "$DUMP/schemas.txt"
+  psql_admin -v ON_ERROR_STOP=1 -c "truncate auth.users cascade" -c "truncate storage.buckets cascade" >/dev/null && echo "    auth.users / storage.buckets truncated"
+  psql_admin -c "select cron.unschedule(jobname) from cron.job" >/dev/null 2>&1 || true
+fi
+
 if [ "$POST_ONLY" = 0 ]; then
   log "Extensions the cloud had"
-  while read -r e; do [ -n "$e" ] || continue; case $e in plpgsql|pg_graphql|pgsodium|supabase_vault|pg_stat_statements|pgjwt) continue;; esac
-    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; done < "$DUMP/extensions.txt"
+  while read -r e <&3; do [ -n "$e" ] || continue; case $e in plpgsql|pg_graphql|pgsodium|supabase_vault|pg_stat_statements|pgjwt) continue;; esac
+    psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" with schema extensions cascade" >/dev/null 2>&1 && echo "    $e" || { psql_admin -v ON_ERROR_STOP=1 -c "create extension if not exists \"$e\" cascade" >/dev/null 2>&1 && echo "    $e (own schema)" || echo "    $e: NOT AVAILABLE (dump may fail on objects using it)"; }; done 3< "$DUMP/extensions.txt"
   log "Schema"
   grep -qE 'CREATE SCHEMA "?(auth|storage)"?' "$DUMP/schema.sql" && die "schema.sql contains auth/storage DDL"
   psql_admin -f /dev/stdin < "$DUMP/schema.sql" > "$DUMP/schema.load.log" 2>&1 || true
-  echo "    schema errors: $(grep -c '^ERROR' "$DUMP/schema.load.log" || true)"; grep '^ERROR' "$DUMP/schema.load.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true
+  echo "    schema errors: $(nerr "$DUMP/schema.load.log")"; lerr "$DUMP/schema.load.log"
+  if [ -s "$DUMP/notvalid-drop.sql" ]; then
+    log "Dropping the cloud's NOT VALID constraints before data (COPY enforces them; re-added NOT VALID after)"
+    psql_admin -f /dev/stdin < "$DUMP/notvalid-drop.sql" > "$DUMP/notvalid-drop.log" 2>&1 || true; echo "    dropped $(grep -c '^ALTER' "$DUMP/notvalid-drop.log" || true), errors $(nerr "$DUMP/notvalid-drop.log")"
+  fi
   log "Data (auth before app schemas)"
   a=$(grep -m1 -n 'COPY "auth"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); p=$(grep -m1 -n 'COPY "public"' "$DUMP/data.sql" | cut -d: -f1 || echo 0); a=${a:-0}; p=${p:-0}
   if [ "$a" -gt 0 ] && [ "$p" -gt 0 ] && [ "$a" -gt "$p" ]; then die "data.sql has public before auth"; fi
   psql_admin -f /dev/stdin < "$DUMP/data.sql" > "$DUMP/data.load.log" 2>&1 || true
-  echo "    data errors: $(grep -c '^ERROR' "$DUMP/data.load.log" || true)"; grep '^ERROR' "$DUMP/data.load.log" | sort | uniq -c | sort -rn | head -15 | sed 's/^/    /' || true
+  echo "    data errors: $(nerr "$DUMP/data.load.log")"; lerr "$DUMP/data.load.log"
   log "Grants for anon/authenticated/service_role"
   psql_admin -f /dev/stdin < "$DUMP/grants.sql" > "$DUMP/grants.load.log" 2>&1 || true
-  echo "    grant errors: $(grep -c '^ERROR' "$DUMP/grants.load.log" || true)"
+  echo "    grant errors: $(nerr "$DUMP/grants.load.log")"; lerr "$DUMP/grants.load.log"
+  if [ -s "$DUMP/notvalid-add.sql" ]; then
+    psql_admin -f /dev/stdin < "$DUMP/notvalid-add.sql" > "$DUMP/notvalid-add.log" 2>&1 || true; echo "    NOT VALID constraints re-added: $(grep -c '^ALTER' "$DUMP/notvalid-add.log" || true), errors $(nerr "$DUMP/notvalid-add.log")"; lerr "$DUMP/notvalid-add.log"
+  fi
+  if [ -s "$DUMP/vault.tsv" ]; then
+    log "Vault secrets"
+    psql_admin -c "create extension if not exists supabase_vault cascade" >/dev/null 2>&1 || true
+    while IFS=$'\t' read -r vn vs vd <&3; do [ -n "$vn" ] || continue
+      psql_admin -v n="$vn" -v s="$vs" -v d="$vd" -At -c "select vault.create_secret(:'s', :'n', :'d') where not exists (select 1 from vault.secrets where name = :'n')" >/dev/null && echo "    $vn" || echo "    $vn: FAILED"; done 3< "$DUMP/vault.tsv"
+  fi
   log "Ownership: app schemas to postgres (they were created by supabase_admin)"
   psql_admin -At -v ON_ERROR_STOP=1 <<'SQL'
 do $$ declare r record; begin
@@ -47,15 +76,15 @@ SQL
 fi
 
 log "Buckets"
-while IFS=$'\t' read -r id name pub limit mimes; do [ -n "$id" ] || continue; case "$pub" in t|true) ps=true;; *) ps=false;; esac
-  strict -c "insert into storage.buckets (id, name, public) values ('$id','$name',$ps) on conflict (id) do update set public=excluded.public" >/dev/null; done < "$DUMP/buckets.tsv"
+while IFS=$'\t' read -r id name pub limit mimes <&3; do [ -n "$id" ] || continue; case "$pub" in t|true) ps=true;; *) ps=false;; esac
+  strict -c "insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types) values ('$id','$name',$ps, nullif('$limit','')::bigint, case when '$mimes' = '' then null else string_to_array('$mimes', ',') end) on conflict (id) do update set public=excluded.public, file_size_limit=excluded.file_size_limit, allowed_mime_types=excluded.allowed_mime_types" >/dev/null; done 3< "$DUMP/buckets.tsv"
 
 log "Rewriting absolute https://$CLOUD_REF.supabase.co URLs to https://$NEW_HOST in every text/json column"
 strict -At <<SQL
 do \$\$ declare r record; n bigint; total bigint := 0; begin
   for r in select table_schema s, table_name t, column_name c, data_type d from information_schema.columns
            where table_schema not in ('pg_catalog','information_schema','auth','storage','realtime','_realtime','supabase_functions','supabase_migrations','graphql','graphql_public','extensions','vault','pgsodium','cron','net','_analytics','_supavisor')
-             and data_type in ('text','character varying','jsonb','json')
+             and data_type in ('text','character varying','jsonb','json') and is_generated = 'NEVER'
              and (table_schema, table_name) in (select schemaname, tablename from pg_tables) loop
     if r.d in ('jsonb','json') then
       execute format('update %I.%I set %I = replace(%I::text, %L, %L)::%s where %I::text like %L', r.s, r.t, r.c, r.c, 'https://$CLOUD_REF.supabase.co', 'https://$NEW_HOST', r.d, r.c, '%$CLOUD_REF.supabase.co%');
@@ -67,7 +96,11 @@ do \$\$ declare r record; n bigint; total bigint := 0; begin
 SQL
 
 log "Realtime publication"; psql_db -f /dev/stdin < "$DUMP/realtime.sql" 2>&1 | sed 's/^/    /' || true
-log "pg_cron jobs"; psql_db -f /dev/stdin < "$DUMP/cron-jobs.sql" > "$DUMP/cron.load.log" 2>&1 || true
+log "pg_cron jobs (cloud URL and API keys inside the commands rewritten to this stack)"
+sedargs=(-e "s#https://$CLOUD_REF.supabase.co#https://$NEW_HOST#g" -e "s#$CLOUD_REF.supabase.co#$NEW_HOST#g")
+[ -n "${CLOUD_ANON_KEY:-}" ] && [ -n "${SELF_ANON_KEY:-}" ] && sedargs+=(-e "s#$CLOUD_ANON_KEY#$SELF_ANON_KEY#g")
+[ -n "${CLOUD_SERVICE_KEY:-}" ] && [ -n "${SELF_SERVICE_KEY:-}" ] && sedargs+=(-e "s#$CLOUD_SERVICE_KEY#$SELF_SERVICE_KEY#g")
+sed "${sedargs[@]}" "$DUMP/cron-jobs.sql" | psql_db -f /dev/stdin > "$DUMP/cron.load.log" 2>&1 || true
 strict -At -c "select count(*)||' cron jobs active' from cron.job where active" 2>/dev/null || true
 
 log "Snapshot AFTER (vs the cloud's estimates in counts-estimate.tsv)"

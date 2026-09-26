@@ -1,0 +1,6 @@
+{
+ "start_command": "npm --workspace @logicsrc/pwa run start",
+ "health_path": "/healthz",
+ "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"],
+ "notes": "The service is apps/pwa (Railway rootDirectory); the root .nixpacks CMD starts the Next marketing site instead, so the compose command overrides it. Turso -> shared Postgres 2026-09-25 (profullstack/logicsrc#218)."
+}

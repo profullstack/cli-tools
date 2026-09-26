@@ -1,0 +1,16 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.icemap.app",
+   "port": 8262,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_URL": "https://supabase.icemap.app"
+ },
+ "extensions": [
+  "postgis"
+ ]
+}

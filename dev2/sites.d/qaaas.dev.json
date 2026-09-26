@@ -1,0 +1,17 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.qaaas.dev",
+   "port": 8266,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_ANON_KEY": "secret:SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
+  "SUPABASE_URL": "https://supabase.qaaas.dev",
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.qaaas.dev"
+ }
+}

@@ -148,6 +148,35 @@ def rw_variables(pid, eid, sid):
     return gql("query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}",
                {"p": pid, "e": eid, "s": sid})["variables"] or {}
 
+def parse_env_file(text):
+    """A compose env file as `render_env` writes it (double-quoted values may hold newlines)."""
+    out, key, buf = {}, None, None
+    for line in text.split("\n"):
+        if key is not None:
+            buf += "\n" + line
+            if line.endswith('"') and not line.endswith('\\"'):
+                out[key] = buf[1:-1].replace('\\"', '"').replace("\\\\", "\\"); key, buf = None, None
+            continue
+        if not line or line.startswith("#") or "=" not in line: continue
+        k, v = line.split("=", 1)
+        if v.startswith('"') and not (v.endswith('"') and len(v) > 1 and not v.endswith('\\"')): key, buf = k, v; continue
+        if v.startswith('"') and v.endswith('"') and len(v) > 1: v = v[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+        out[k] = v
+    return out
+
+def site_variables(s, sid=None, envfile="app.env"):
+    """The service's environment: Railway while the service exists, else the live app.env on
+    dev2 (a retired service has no variables left anywhere else). Values from dev2 are already
+    the rendered ones, which is what a re-render should start from."""
+    vars_ = {}
+    try: vars_ = rw_variables(s["project_id"], s["environment_id"], sid or s["service_id"])
+    except RuntimeError as e: warn(f"railway variables: {str(e)[:120]}")
+    if vars_: return vars_
+    txt = ssh("root", f"cat {WWW}/{shlex.quote(s['site'])}/{shlex.quote(envfile)} 2>/dev/null", check=False)
+    if not txt.strip(): die(f"{s['site']}: no variables on Railway and no {envfile} on dev2 to fall back to")
+    note(f"{s['site']}: Railway has no variables (service retired); using the live {envfile} from dev2")
+    return parse_env_file(txt)
+
 def rw_ssh_user(pid, eid, service_name):
     out = sh(["railway", "ssh", "config", "--dry-run", "-i", RAILWAY_SSH_KEY, "--project", pid,
               "--environment", eid, "--service", service_name])
@@ -585,7 +614,8 @@ def render_compose(s, st, app_port_inside, build_args=()):
     y = [f"# {s['site']} on dev2: rendered by cli-tools dev2/dev2-site provision. Re-run provision to change.",
          "# nginx on the host terminates TLS and proxies to 127.0.0.1:${APP_PORT}.", "services:"]
     image_only = bool(s.get("image")) and not s.get("repo")
-    def service(name, envfile, command=None, ports=True, vols=()):
+    def service(name, envfile, command=None, ports=True, vols=(), port_inside=None):
+        port_inside = port_inside or app_port_inside
         y.append(f"  {name}:")
         if image_only:  # Railway ran a stock image with a start command; no repo, nothing to build
             y.append(f"    image: {s['image']}\n    restart: unless-stopped\n    env_file: {envfile}")
@@ -594,7 +624,7 @@ def render_compose(s, st, app_port_inside, build_args=()):
             if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
                 y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
             y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
-        y.append(f"    environment:\n      PORT: \"{app_port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
+        y.append(f"    environment:\n      PORT: \"{port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
         if command:
             # A nixpacks image's entrypoint is `/bin/bash -l -c`, and bash -c takes ONE script
             # argument: an argv list would run only the first word (Bun's help text, exit 0,
@@ -612,7 +642,7 @@ def render_compose(s, st, app_port_inside, build_args=()):
         # companion_ports {"name": {"host": 3301, "inside": 3000}} publishes a companion on
         # loopback so a `proxies` entry can give it its own hostname (an API the web app calls).
         cp = (s.get("companion_ports") or {}).get(c["name"])
-        service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []))
+        service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []), port_inside=(cp or {}).get("inside"))
         if cp: y.insert(len(y) - (2 if s["redis"] else 1), f"    ports:\n      - \"127.0.0.1:{cp['host']}:{cp['inside']}\"")
     if s["redis"]:
         y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
@@ -636,6 +666,20 @@ def deploy_key(repo):
         sh(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", f"github-actions-deploy@{repo}", "-f", path])
     return path
 
+def render_crons(s):
+    """sites.d "crons": [{"schedule": "* * * * *", "path": "/api/cron/x", "auth_env": "CRON_SECRET", "timeout": 55}]
+    -> /etc/cron.d/dev2-site-<slug>. Replaces the Vercel/Railway cron the app used to rely on: root curls the
+    site's own URL with the bearer taken from app.env at run time (nothing secret lands in the cron file)."""
+    path = f"/etc/cron.d/dev2-site-{sb_slug(s)}"
+    crons = s.get("crons") or []
+    if not crons: ssh("root", f"rm -f {path}", check=False); return
+    lines = [f"# {s['site']}: managed by cli-tools dev2-site (sites.d crons); do not edit", "SHELL=/bin/sh", "PATH=/usr/local/bin:/usr/bin:/bin", ""]
+    for c in crons:
+        hdr = f' -H "Authorization: Bearer $(grep -m1 ^{c["auth_env"]}= {WWW}/{s["site"]}/app.env | cut -d= -f2-)"' if c.get("auth_env") else ""
+        lines.append(f'{c["schedule"]} root curl -fsS -m {int(c.get("timeout", 55))} -o /dev/null{hdr} https://{s["site"]}{c["path"]} >/dev/null 2>&1')
+    ssh_put("\n".join(lines) + "\n", path, "0644")
+    note(f"{len(crons)} cron job(s) in {path}: " + ", ".join(f"{c['schedule']} {c['path']}" for c in crons))
+
 def cmd_provision(args):
     s = site(args.site); st = load_state(s["site"])
     root = f"{WWW}/{s['site']}"
@@ -643,7 +687,7 @@ def cmd_provision(args):
     if s["db"] == "pg" and not st.get("database_url"): die("run `dev2-site db` first (the app env needs the new DATABASE_URL)")
     if s["db"] in ("supabase", "turso") and not st.get("database_url") and not s.get("env_overrides"):
         warn(f"db kind {s['db']}: app.env keeps pointing at the current {s['db']} until its own migration; set env_overrides in sites.overrides.json when ready")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     image_only = bool(s.get("image")) and not s.get("repo")
     inside = s.get("port_var") or ("3000" if image_only else dockerfile_port(st.get("checkout") or checkout_dir(s), st.get("dockerfile")) or "3000")
     app_env, merged = render_env(vars_, s, st)
@@ -656,7 +700,7 @@ def cmd_provision(args):
         if not st.get("dockerfile"):
             st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
         branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
-        hp = st.get("health_path") or health_url(s, cfg)[1]
+        hp = s.get("health_path") or st.get("health_path") or health_url(s, cfg)[1]  # sites.d wins over the state file (app.logicsrc.com)
     compose = render_compose(s, st, inside, build_args=public_keys(merged))
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
     # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
@@ -675,7 +719,7 @@ def cmd_provision(args):
     own = f"{DEPLOY_USER}:{DEPLOY_USER}"
     ssh_put(app_env, f"{root}/app.env", "0600", own)
     for c in s["companions"]:
-        cv = rw_variables(s["project_id"], s["environment_id"], c["id"])
+        cv = site_variables(s, c["id"], f"{c['name']}.env")
         cenv, _ = render_env(cv, s, st, c["name"])
         ssh_put(cenv, f"{root}/{c['name']}.env", "0600", own)
     ssh_put(deploy_env, f"{root}/deploy.env", "0640", own)
@@ -705,6 +749,7 @@ def cmd_provision(args):
     for name, val in (("DEV2_SSH_KEY", open(key).read()), ("DEV2_KNOWN_HOSTS", known), ("DEV2_HOST", DEV2_HOST), ("DEV2_USER", DEPLOY_USER)):
         sh(["gh", "secret", "set", name, "--repo", s["repo"]], input=val)
     note(f"deploy key {os.path.basename(key)} authorized on dev2; DEV2_* secrets set on {s['repo']}")
+    render_crons(s)
     mark(s["site"], "provision", root=root, branch=branch, health_path=hp, dockerfile=st["dockerfile"], checkout=st.get("checkout") or checkout_dir(s))
 
 # ------------------------------------------------------------------- db
@@ -716,13 +761,19 @@ def pg_admin(sql, db="postgres"):
     return ssh("root", f"docker exec -i {PG_CONTAINER} psql -U supabase_admin -h localhost -d {shlex.quote(db)} -X -At -v ON_ERROR_STOP=1", input=sql)
 
 def sslparams_for(s, st):
-    """`sslmode=no-verify` for node-postgres repos, `sslmode=require` for everything else."""
+    """`sslmode=no-verify` for repos that use node-postgres directly (pg reads `require` as
+    verify-full and rejects the cluster's self-signed cert); `sslmode=require` for Bun.SQL,
+    postgres.js and @profullstack/libsql-pg (whose own parser turns `no-verify` into a plain
+    connection that pg_hba rejects). Read from the repo's DEFAULT BRANCH on origin, not the
+    working tree: local checkouts lag behind merged ports."""
     d = st.get("checkout") or (checkout_dir(s) if s.get("repo") else None)
-    if d:
-        try:
-            out = sh(f"grep -rls --include=package.json -E '\"pg\"\\s*:' {shlex.quote(d)} --exclude-dir=node_modules --exclude-dir=.git | head -n 1", check=False)
-            if out.strip(): return "sslmode=no-verify"
-        except RuntimeError: pass
+    if d and s.get("repo"):
+        branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
+        sh(["git", "-C", d, "fetch", "-q", "origin", branch], check=False)
+        pkgs = sh(["git", "-C", d, "grep", "-l", "-E", r'"pg"\s*:', f"origin/{branch}", "--", "package.json", "*/package.json", "*/*/package.json"], check=False)
+        uses_pg = bool(pkgs.strip())
+        uses_shim = bool(sh(["git", "-C", d, "grep", "-l", "@profullstack/libsql-pg", f"origin/{branch}", "--", "package.json", "*/package.json", "*/*/package.json"], check=False).strip())
+        if uses_pg and not uses_shim: return "sslmode=no-verify"
     return "sslmode=require"
 
 def db_name_for(s):
@@ -935,10 +986,10 @@ def cmd_cert_http(s, domains):
     log(f"Certificate for {', '.join(domains)} (acme.sh, HTTP-01 through nginx, zone not at Porkbun)")
     conf = "server {\n    listen 80;\n    listen [::]:80;\n    server_name " + " ".join(domains) + ";\n    location ^~ /.well-known/acme-challenge/ { root /var/www/acme; default_type \"text/plain\"; }\n    location / { return 301 https://$host$request_uri; }\n}\n"
     ssh_put(conf, f"/etc/nginx/sites-available/{s['site']}", "0644")
-    ssh("root", f"install -d -m 0755 /var/www/acme && ln -sf /etc/nginx/sites-available/{s['site']} /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    ssh("root", f"install -d -m 0755 /var/www/acme && ln -sf /etc/nginx/sites-available/{s['site']} /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
-    out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root /root/.acme.sh/acme.sh --issue --server letsencrypt --webroot /var/www/acme {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
+    out = ssh("root", f"install -d -m 0750 {cert_dir} && umask 022 && env HOME=/root /root/.acme.sh/acme.sh --issue --server letsencrypt --webroot /var/www/acme {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
     if out.strip() and "Cert success" not in out: die(out)
     ssh("root", f"env HOME=/root /root/.acme.sh/acme.sh --install-cert -d {shlex.quote(domains[0])} --fullchain-file {cert_dir}/fullchain.pem --key-file {cert_dir}/privkey.pem --reloadcmd 'systemctl reload nginx' >/dev/null")
     note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
@@ -962,13 +1013,21 @@ def cmd_cert(args):
         for r in recs:
             if r.get("type") == "CNAME" and r.get("name", "").startswith("_acme-challenge") and "railwaydns" in r.get("content", ""):
                 sh(["porkbun", "rm", zone, r["name"][: -len(zone) - 1], "--type", "CNAME", "--yes"], check=False); note(f"removed Railway acme CNAME {r['name']}")
+            # An interrupted acme.sh run leaves its TXT challenge behind, and the Porkbun hook
+            # then fails the next issuance with DUPLICATE_RECORD.
+            if r.get("type") == "TXT" and r.get("name", "") in (host + "." + zone if host != "_acme-challenge" else "_acme-challenge." + zone,):
+                sh(["porkbun", "rm", zone, r["id"], "--yes"], check=False); note(f"removed stale acme TXT {r['name']}")
     ssh("root", "test -x /root/.acme.sh/acme.sh || curl -fsSL https://get.acme.sh | env HOME=/root sh -s email=" + ACME_EMAIL + " >/dev/null")
     ds = " ".join(f"-d {shlex.quote(d)}" for d in domains)
     # A certificate acme.sh issued in the last day is reused (a retry after a dropped
     # ssh session must not burn Let's Encrypt's duplicate-certificate quota).
     fresh = ssh("root", f"find /root/.acme.sh/{shlex.quote(domains[0])}_ecc -name fullchain.cer -mmin -1440 2>/dev/null | head -n1", check=False).strip()
+    if fresh:  # only if it covers every name we need now (a stack adds supabase.<site> later in the day)
+        sans = ssh("root", f"openssl x509 -in {shlex.quote(fresh)} -noout -ext subjectAltName 2>/dev/null | tr ',' '\\n' | sed -n 's/.*DNS://p'", check=False).split()
+        missing = [d for d in domains if d not in sans]
+        if missing: note(f"fresh certificate lacks {', '.join(missing)}; issuing a new one"); fresh = ""
     if fresh:
-        note("certificate issued within the last day; installing it")
+        note("certificate issued within the last day covers every name; installing it")
     else:
         out = ssh("root", f"install -d -m 0750 {cert_dir} && env HOME=/root PORKBUN_API_KEY={shlex.quote(k)} PORKBUN_SECRET_API_KEY={shlex.quote(sk)} /root/.acme.sh/acme.sh --issue --server letsencrypt --dns dns_porkbun {ds} --force >/tmp/acme-{s['site']}.log 2>&1 || {{ tail -n 25 /tmp/acme-{s['site']}.log; exit 1; }}", check=False, timeout=1800)
         if out.strip() and "Cert success" not in out: die(out)
@@ -990,12 +1049,12 @@ def cmd_vhost(args):
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
     ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
-    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && nginx -t 2>&1 | tail -n1 && systemctl reload nginx")
+    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
     mark(s["site"], "vhost")
 
 def cmd_verify(args):
     s = site(args.site); st = load_state(s["site"])
-    hp = st.get("health_path") or "/"
+    hp = s.get("health_path") or st.get("health_path") or "/"
     # Without the vhost nginx's default server answers the pinned SNI and a 200 means nothing.
     if ssh("root", f"test -e /etc/nginx/sites-enabled/{shlex.quote(s['site'])} && echo yes", check=False).strip() != "yes":
         die(f"no nginx vhost for {s['site']} yet: run `dev2-site vhost {s['site']}` first")
@@ -1089,6 +1148,7 @@ def cmd_merge(args):
 
 def cmd_migrate(args):
     s = site(args.site); st = load_state(s["site"])
+    if s.get("skip"): die(f"{s['site']} is marked skip in sites.d: {s.get('notes', '')}")
     steps = [("scaffold", cmd_scaffold), ("db", cmd_db) if s["db"] == "pg" else None, ("provision", cmd_provision), ("volumes", cmd_volumes),
              ("deploy", cmd_deploy), ("cert", cmd_cert), ("vhost", cmd_vhost), ("verify", cmd_verify),
              ("refresh-db", cmd_refresh_db) if s["db"] == "pg" else None, ("dns", cmd_dns),
@@ -1118,6 +1178,20 @@ def cmd_firewall(args):
     ssh_put(tmpl("firewall-data-ports.sh"), "/root/dev2-kit/firewall-data-ports.sh", "0700")
     print(ssh("root", f"env PORTS={shlex.quote(' '.join(map(str, sorted(ports))))} bash /root/dev2-kit/firewall-data-ports.sh 2>&1"))
 
+def cmd_backup_install(args):
+    """Install /usr/local/bin/dev2-pg-backup.sh + /etc/cron.d/dev2-pg-backup from the templates
+    (shared cluster every 4h, per-site Supabase stacks, storage files daily). --run does a
+    frequent pass right away and shows the log."""
+    log("Installing dev2-pg-backup.sh + cron")
+    ssh_put(tmpl("dev2-pg-backup.sh"), "/usr/local/bin/dev2-pg-backup.sh", "0755")
+    ssh_put(tmpl("dev2-pg-backup.cron"), "/etc/cron.d/dev2-pg-backup", "0644")
+    ssh("root", "bash -n /usr/local/bin/dev2-pg-backup.sh && grep -c supabase-db /usr/local/bin/dev2-pg-backup.sh >/dev/null")
+    note("installed; runs frequent at 0 */4 and full at 05:20 UTC")
+    if getattr(args, "run", False):
+        log("Running a frequent pass now (all databases; a few minutes)")
+        ssh("root", "/usr/local/bin/dev2-pg-backup.sh frequent", check=False, timeout=3600)
+        print(ssh("root", "tail -n 40 /var/log/dev2-pg-backup.log"))
+
 def cmd_box_tune(args):
     ssh("root", "install -d -m 700 /root/dev2-kit")
     ssh_put(tmpl("box-tune.sh"), "/root/dev2-kit/box-tune.sh", "0700")
@@ -1125,6 +1199,7 @@ def cmd_box_tune(args):
 
 def cmd_retire(args):
     s = site(args.site); st = load_state(s["site"])
+    if s.get("skip"): die(f"{s['site']} is marked skip in sites.d: {s.get('notes', '')}")
     if "verify-public" not in st["steps"] and not args.force: die("site not verified public on dev2; refuse to delete Railway services (or --force)")
     if not args.yes: die("--yes required")
     targets = [{"name": s["service"], "id": s["service_id"]}] + s["companions"] + s["infra"]
@@ -1154,7 +1229,7 @@ def sb_slug(s): return re.sub(r"[^a-z0-9]+", "-", s["site"].lower()).strip("-")
 
 def sb_cloud(s, st):
     """Cloud project ref + db password + pooler host, from the app's Railway variables and the management API."""
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     refs = {m.group(1) for v in vars_.values() if isinstance(v, str) for m in re.finditer(r"https?://([a-z]{20})\.supabase\.co", v)}
     refs |= {v for k, v in vars_.items() if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF", "SUPABASE_REF") and isinstance(v, str) and re.fullmatch(r"[a-z]{20}", v)}
     ref = s.get("cloud_ref") or st.get("cloud_ref")
@@ -1171,10 +1246,14 @@ def sb_cloud(s, st):
     pooler = sb_api(f"projects/{ref}/config/database/pooler")
     prim = next((p for p in pooler if p.get("database_type") == "PRIMARY"), pooler[0])
     host = prim["db_host"]
-    keys = {k["id"]: k["api_key"] for k in sb_api(f"projects/{ref}/api-keys?reveal=true") if k.get("type") == "legacy"}
+    allk = sb_api(f"projects/{ref}/api-keys?reveal=true")
+    keys = {k["id"]: k["api_key"] for k in allk if k.get("type") == "legacy"}
     import urllib.parse as up
     url = f"postgres://postgres.{ref}:{up.quote(pw, safe='')}@{host}:5432/postgres"
-    st.update({"cloud_ref": ref, "cloud_db_password": pw, "cloud_db_url": url, "cloud_anon_key": keys.get("anon"), "cloud_service_key": keys.get("service_role")})
+    st.update({"cloud_ref": ref, "cloud_db_password": pw, "cloud_db_url": url, "cloud_anon_key": keys.get("anon"), "cloud_service_key": keys.get("service_role"),
+               # new-style keys (sb_publishable_/sb_secret_): the cutover maps them onto the stack's anon/service JWTs
+               "cloud_publishable_keys": [k["api_key"] for k in allk if k.get("type") == "publishable" and k.get("api_key")],
+               "cloud_secret_keys": [k["api_key"] for k in allk if k.get("type") == "secret" and k.get("api_key")]})
     save_state(s["site"], st)
     return vars_
 
@@ -1187,7 +1266,7 @@ def cmd_supabase_stack(args):
     host = f"supabase.{s['site']}"
     log(f"Self-hosted Supabase for {s['site']}: {slug}-supabase, api :{ports['api']}, db :{ports['db']}, pooler :{ports['pooler']}, {ports['subnet']}")
     smtp = cred("RESEND_API_KEY")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
     smtp = vars_.get("RESEND_API_KEY") or smtp or ""
     ssh("root", "install -d -m 700 /root/dev2-kit")
     ssh_put(tmpl("supabase-stack.sh"), "/root/dev2-kit/supabase-stack.sh", "0700")
@@ -1226,7 +1305,8 @@ def cmd_supabase_load(args):
         if not st.get(k): die(f"state has no {k}: run supabase-stack and supabase-pull first")
     log(f"Loading {st['sb_dump']} into {st['sb_slug']}-supabase-db")
     ssh_put(tmpl("supabase-load.sh"), "/root/dev2-kit/supabase-load.sh", "0700")
-    res = ssh("root", f"env DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
+    keyenv = " ".join(f"{k}={shlex.quote(st.get(v) or '')}" for k, v in (("CLOUD_ANON_KEY", "cloud_anon_key"), ("CLOUD_SERVICE_KEY", "cloud_service_key"), ("SELF_ANON_KEY", "sb_anon_key"), ("SELF_SERVICE_KEY", "sb_service_key")))
+    res = ssh("root", f"env {keyenv} DUMP={st['sb_dump']} DBC={st['sb_slug']}-supabase-db CLOUD_REF={st['cloud_ref']} NEW_HOST={st['sb_host']} POST_ONLY={'1' if args.post_only else '0'} RESET={'1' if getattr(args, 'reset', False) else '0'} bash /root/dev2-kit/supabase-load.sh 2>&1", timeout=6 * 3600)
     print(res[-6000:])
     mark(s["site"], "supabase-load")
 
@@ -1248,23 +1328,38 @@ def cmd_supabase_cutover(args):
     s = site(args.site); st = load_state(s["site"])
     for k in ("cloud_ref", "sb_host", "sb_anon_key", "sb_service_key", "sb_database_url", "sb_pg_password"):
         if not st.get(k): die(f"state has no {k}")
-    vars_ = rw_variables(s["project_id"], s["environment_id"], s["service_id"])
+    vars_ = site_variables(s)
+    # An app whose backend is Edge Functions 500s the moment it points at a stack without them (saasrow).
+    if "supabase-functions" not in st["steps"]:
+        try: fns = [f.get("slug") or f.get("name") for f in sb_api(f"projects/{st['cloud_ref']}/functions")]
+        except Exception: fns = []
+        if fns: die(f"cloud project has {len(fns)} Edge Functions ({', '.join(fns[:8])}{'...' if len(fns) > 8 else ''}); run `dev2-site supabase-functions {s['site']}` first")
     ov = {}
     # Which of the new values are credentials, known by where they came from
     # rather than by the spelling of the key.
-    secret = set()
+    secret = set(); s3 = False
     for k, v in vars_.items():
         if not isinstance(v, str): continue
         nv = v
+        if f"{st['cloud_ref']}.storage.supabase.co" in nv:  # S3-protocol endpoint (LiveKit egress etc.)
+            nv = nv.replace(f"{st['cloud_ref']}.storage.supabase.co", st["sb_host"]); s3 = True
         if f"{st['cloud_ref']}.supabase.co" in nv:
             nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
             if nv.startswith("postgres"): nv = st["sb_database_url"]; secret.add(k)
         if st.get("cloud_anon_key") and v == st["cloud_anon_key"]: nv = st["sb_anon_key"]; secret.add(k)
         if st.get("cloud_service_key") and v == st["cloud_service_key"]: nv = st["sb_service_key"]; secret.add(k)
+        if v in (st.get("cloud_publishable_keys") or []): nv = st["sb_anon_key"]; secret.add(k)
+        if v in (st.get("cloud_secret_keys") or []): nv = st["sb_service_key"]; secret.add(k)
         if k == "SUPABASE_DB_PASSWORD": nv = st["sb_pg_password"]; secret.add(k)
         if k in ("SUPABASE_JWT_SECRET", "JWT_SECRET") and st.get("sb_jwt_secret") and len(v) > 20: nv = st["sb_jwt_secret"]; secret.add(k)
         if k in ("SUPABASE_DB_REF", "SUPABASE_PROJECT_REF") and v == st["cloud_ref"]: warn(f"{k}={v}: the app derives URLs from the ref; it needs a code change to use SUPABASE_URL")
         if nv != v: ov[k] = nv
+    if s3:  # the S3 protocol has its own per-stack credentials
+        s3env = dict(l.split("=", 1) for l in ssh("root", f"grep -E '^S3_PROTOCOL_ACCESS_KEY_(ID|SECRET)=' {WWW}/{s['site']}/supabase/.env", check=False).splitlines() if "=" in l)
+        for k in vars_:
+            if re.search(r"S3.*(ACCESS_)?KEY_ID$", k) and s3env.get("S3_PROTOCOL_ACCESS_KEY_ID"): ov[k] = s3env["S3_PROTOCOL_ACCESS_KEY_ID"]; secret.add(k)
+            elif re.search(r"S3.*SECRET", k) and s3env.get("S3_PROTOCOL_ACCESS_KEY_SECRET"): ov[k] = s3env["S3_PROTOCOL_ACCESS_KEY_SECRET"]; secret.add(k)
+        note(f"S3 endpoint re-pointed; stack S3 credentials: {', '.join(k for k in ov if 'S3' in k) or 'NONE FOUND (set them by hand)'}")
     sd_path = os.path.join(SITES_D, f"{s['site']}.json")
     sd = json.load(open(sd_path)) if os.path.exists(sd_path) else {}
     env_ov, vaulted = dict(sd.get("env_overrides") or {}), []
@@ -1282,13 +1377,66 @@ def cmd_supabase_cutover(args):
     cmd_verify(argparse.Namespace(site=s["site"], public=("dns" in load_state(s["site"])["steps"])))
     if st.get("cloud_db_url"):
         log("Unscheduling the CLOUD project's cron jobs")
-        out = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select case when to_regclass('cron.job') is null then 'no pg_cron' else (select coalesce(string_agg(jobname, ', '), 'none') from cron.job where active) end\" 2>&1 | tail -n 3", check=False).strip()
+        has = ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select to_regclass('cron.job') is not null\" 2>&1 | tail -n 1", check=False).strip()
+        out = "no pg_cron" if has != "t" else ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select coalesce(string_agg(jobname, ', '), 'none') from cron.job where active\" 2>&1 | tail -n 1", check=False).strip()
         if out and out not in ("no pg_cron", "none"):
             ssh("root", f"docker run --rm -i --network host postgres:17 psql {shlex.quote(st['cloud_db_url'])} -At -X -c \"select cron.unschedule(jobname) from cron.job where active\" >/dev/null 2>&1", check=False)
             note(f"unscheduled: {out}")
         else: note(out or "none")
     mark(s["site"], "supabase-cutover")
     log(f"{s['site']} now runs on its own Supabase. Cloud project {st['cloud_ref']} stays until `retire` (delete it in the dashboard or with the management API).")
+
+def cmd_supabase_functions(args):
+    """Port the repo's supabase/functions/* onto the stack's edge runtime and copy the cloud
+    project's function secrets. The self-hosted `functions` service serves /functions/v1/<name>
+    from volumes/functions/<name>/index.ts (its `main` router); workers inherit the container env."""
+    import base64, io, tarfile
+    s = site(args.site); st = load_state(s["site"])
+    for k in ("sb_slug", "sb_ports"):
+        if not st.get(k): die(f"state has no {k}; run supabase-stack first")
+    src = os.path.join(st.get("checkout") or "", "supabase", "functions")
+    if not os.path.isdir(src): die(f"no {src}; the app keeps its Edge Functions elsewhere (set `checkout` or port by hand)")
+    names = sorted(d for d in os.listdir(src) if os.path.isdir(os.path.join(src, d)) and not d.startswith(".") and d not in ("node_modules", "main"))
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for d in names + [d for d in os.listdir(src) if os.path.isfile(os.path.join(src, d))]:
+            tar.add(os.path.join(src, d), arcname=d, filter=lambda ti: None if "/node_modules/" in ti.name or ti.name.endswith((".env", ".env.local")) else ti)
+    fdir = f"{WWW}/{s['site']}/supabase/volumes/functions"
+    log(f"Edge Functions -> {fdir}: {', '.join(n for n in names if not n.startswith('_'))}")
+    ssh("root", f"mkdir -p {fdir} && base64 -d | tar -xzf - -C {fdir} && chmod -R a+rX {fdir}", input=base64.b64encode(buf.getvalue()).decode())
+    # Function secrets: the management API lists their NAMES (the "value" it returns is a digest),
+    # so take each value from the app's own variables, which carry the same keys.
+    secrets, missing = {}, []
+    if st.get("cloud_ref"):
+        try: snames = [x["name"] for x in sb_api(f"projects/{st['cloud_ref']}/secrets") if not x["name"].startswith("SUPABASE_")]
+        except Exception as e: snames = []; warn(f"could not list cloud function secrets: {e}")
+        vars_ = site_variables(s)
+        # sites.d "function_secrets": {"NAME": "secret:NAME"} (values in credentials.json as <site>.fn.NAME) wins over app variables.
+        fs = {k: (cred(f"{s['site']}.fn.{v[7:]}", v[7:]) if isinstance(v, str) and v.startswith("secret:") else v) for k, v in (s.get("function_secrets") or {}).items()}
+        for n in snames:
+            v = fs.get(n) or vars_.get(n)
+            if isinstance(v, str) and v: secrets[n] = v
+            else: missing.append(n)
+        if missing: warn(f"function secrets with no value in the site's variables (add them to {fdir}/secrets.env by hand): {', '.join(missing)}")
+    # Secrets that name the cloud project (URL, keys) must point at this stack instead.
+    for k, v in list(secrets.items()):
+        nv = v
+        if st.get("cloud_ref"): nv = re.sub(rf"https?://{st['cloud_ref']}\.supabase\.co", f"https://{st['sb_host']}", nv).replace(f"{st['cloud_ref']}.supabase.co", st["sb_host"])
+        if st.get("cloud_anon_key") and v == st["cloud_anon_key"] or v in (st.get("cloud_publishable_keys") or []): nv = st["sb_anon_key"]
+        if st.get("cloud_service_key") and v == st["cloud_service_key"] or v in (st.get("cloud_secret_keys") or []): nv = st["sb_service_key"]
+        if nv != v: secrets[k] = nv; note(f"{k}: re-pointed at the stack")
+    ssh_put("".join(f"{k}={v}\n" for k, v in sorted(secrets.items())), f"{fdir}/secrets.env", "0600")
+    note(f"{len(secrets)} function secrets written to secrets.env: {', '.join(sorted(secrets)) or '-'}")
+    # Older overlays predate the env_file line; add it, then restart the runtime.
+    ov = f"{WWW}/{s['site']}/supabase/docker-compose.{st['sb_slug']}.yml"
+    ssh("root", f"grep -q 'functions/secrets.env' {ov} || sed -i '/^  functions:$/a\\    env_file:\\n      - .env\\n      - ./volumes/functions/secrets.env' {ov}; cd {WWW}/{s['site']}/supabase && docker compose up -d --force-recreate functions >/dev/null 2>&1; sleep 4; docker logs --tail 5 {st['sb_slug']}-supabase-functions 2>&1 | tail -n 3")
+    probe = next((n for n in names if not n.startswith("_")), None)
+    if probe:
+        code = ssh("root", f"curl -s -o /dev/null -w '%{{http_code}}' -m 20 -H 'Authorization: Bearer {st.get('sb_anon_key', '')}' -H 'apikey: {st.get('sb_anon_key', '')}' -X OPTIONS http://127.0.0.1:{st['sb_ports']['api']}/functions/v1/{probe}", check=False).strip()
+        body = ssh("root", f"curl -s -m 20 -H 'Authorization: Bearer {st.get('sb_anon_key', '')}' -H 'apikey: {st.get('sb_anon_key', '')}' http://127.0.0.1:{st['sb_ports']['api']}/functions/v1/{probe} | head -c 200", check=False)
+        if "InvalidWorkerCreation" in body or "entrypoint" in body: die(f"/functions/v1/{probe} still fails: {body}")
+        note(f"/functions/v1/{probe}: OPTIONS {code}, GET -> {body[:120]!r}")
+    mark(s["site"], "supabase-functions", functions=names)
 
 # ----------------------------------------------------------------- main
 
@@ -1297,6 +1445,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("registry").set_defaults(fn=cmd_registry)
     sub.add_parser("firewall").set_defaults(fn=cmd_firewall)
+    p = sub.add_parser("backup-install"); p.add_argument("--run", action="store_true"); p.set_defaults(fn=cmd_backup_install)
     sub.add_parser("box-tune").set_defaults(fn=cmd_box_tune)
     p = sub.add_parser("list"); p.add_argument("--kind"); p.add_argument("--status"); p.set_defaults(fn=cmd_list)
     p = sub.add_parser("scaffold"); p.add_argument("site"); p.add_argument("--regen", action="store_true", help="regenerate .nixpacks even if the branch already has one"); p.set_defaults(fn=cmd_scaffold)
@@ -1310,10 +1459,10 @@ def main():
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
-    for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover)):
+    for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover), ("supabase-functions", cmd_supabase_functions)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
     p = sub.add_parser("supabase-pull"); p.add_argument("site"); p.add_argument("--reset-password", action="store_true"); p.set_defaults(fn=cmd_supabase_pull)
-    p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.set_defaults(fn=cmd_supabase_load)
+    p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.add_argument("--reset", action="store_true", help="drop the earlier load first (fresh dump before cutover)"); p.set_defaults(fn=cmd_supabase_load)
     p = sub.add_parser("supabase-storage"); p.add_argument("site"); p.add_argument("--concurrency", type=int, default=8); p.set_defaults(fn=cmd_supabase_storage)
     p = sub.add_parser("retire"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_retire)
     args = ap.parse_args()

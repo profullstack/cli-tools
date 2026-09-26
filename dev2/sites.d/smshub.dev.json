@@ -1,0 +1,20 @@
+{
+ "proxies": [
+  {
+   "host": "supabase.smshub.dev",
+   "port": 8256,
+   "max_body": "512m"
+  },
+  {
+   "host": "api.smshub.dev",
+   "port": 8256,
+   "max_body": "512m"
+  }
+ ],
+ "env_overrides": {
+  "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
+  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.smshub.dev"
+ },
+ "notes": "api.smshub.dev was the Railway-hosted Supabase gateway name; kept as an alias of supabase.smshub.dev so old clients keep working."
+}
