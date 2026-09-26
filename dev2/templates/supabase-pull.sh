@@ -43,6 +43,14 @@ log "NOT VALID constraints (COPY would enforce them; the load drops them before 
 psqlc -c "select format('alter table %s drop constraint %I;', conrelid::regclass, conname) from pg_constraint where not convalidated and contype in ('c','f') and connamespace::regnamespace::text not in ($SYS) order by 1" > "$OUT/notvalid-drop.sql" || : > "$OUT/notvalid-drop.sql"
 psqlc -c "select format('alter table %s add constraint %I %s not valid;', conrelid::regclass, conname, pg_get_constraintdef(oid)) from pg_constraint where not convalidated and contype in ('c','f') and connamespace::regnamespace::text not in ($SYS) order by 1" > "$OUT/notvalid-add.sql" || : > "$OUT/notvalid-add.sql"
 
+log "App triggers and RLS policies on auth/storage tables"
+# The schema dump covers app schemas only, and pg_dump files a trigger or policy under its TABLE's
+# schema, so on_auth_user_created -> public.handle_new_user() and every storage.objects policy were
+# silently left behind on the 2026-09-25 moves (signups got no profile; uploads were denied).
+# Triggers whose function belongs to the stack's own services are the stack's, not ours.
+psqlc -c "set search_path = pg_catalog; select format('drop trigger if exists %I on %s; ', t.tgname, t.tgrelid::regclass) || pg_get_triggerdef(t.oid) || ';' from pg_trigger t join pg_class c on c.oid=t.tgrelid join pg_namespace n on n.oid=c.relnamespace join pg_proc p on p.oid=t.tgfoid join pg_roles o on o.oid=p.proowner where n.nspname in ('auth','storage') and not t.tgisinternal and o.rolname not in ('supabase_auth_admin','supabase_storage_admin') order by 1" | sed '/^SET$/d' > "$OUT/auth-storage-triggers.sql"
+psqlc -c "set search_path = pg_catalog; select format('drop policy if exists %I on %I.%I; create policy %I on %I.%I as %s for %s to %s', policyname, schemaname, tablename, policyname, schemaname, tablename, permissive, cmd, (select string_agg(case when r = 'public' then 'public' else quote_ident(r) end, ', ') from unnest(roles) r)) || coalesce(' using (' || qual || ')', '') || coalesce(' with check (' || with_check || ')', '') || ';' from pg_policies where schemaname in ('auth','storage') order by 1" | sed '/^SET$/d' > "$OUT/auth-storage-policies.sql"
+
 log "Vault secrets (pg_cron http jobs read them)"
 psqlc -F$'\t' -c "select name, decrypted_secret, coalesce(description,'') from vault.decrypted_secrets order by 1" > "$OUT/vault.tsv" 2>/dev/null || : > "$OUT/vault.tsv"
 chmod 600 "$OUT/vault.tsv"
@@ -65,5 +73,6 @@ psqlc -F$'\t' -c "select n.nspname||'.'||c.relname, c.reltuples::bigint from pg_
   echo "storage_objects=$(wc -l < "$OUT/storage-inventory.tsv")"; echo "storage_bytes=$(awk -F'\t' '{s+=$4} END{print s+0}' "$OUT/storage-inventory.tsv")"
   echo "cron_jobs=$(grep -c '^select cron.schedule' "$OUT/cron-jobs.sql" || true)"; echo "auth_users=$(grep -c '' <(psqlc -c 'select id from auth.users'))"
   echo "notvalid_constraints=$(grep -c '^alter' "$OUT/notvalid-drop.sql" || true)"; echo "vault_secrets=$(grep -c '' "$OUT/vault.tsv" || true)"
+  echo "auth_storage_triggers=$(grep -c '' "$OUT/auth-storage-triggers.sql" || true)"; echo "auth_storage_policies=$(grep -c '' "$OUT/auth-storage-policies.sql" || true)"
 } > "$OUT/MANIFEST"
 log "Done: $OUT"; cat "$OUT/MANIFEST"
