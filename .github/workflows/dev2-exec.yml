@@ -1,0 +1,45 @@
+# Break-glass: run one command on dev2 as the deploy account from a GitHub runner.
+#
+# When dev2's own defences (or its provider) drop every box we operate from, a
+# runner is the one address it has never seen. This is the generic sibling of
+# threatcrush's unban-dev2.yml: same ssh setup, arbitrary command, no sudo.
+# Dispatch only; the command is passed through the environment, never
+# interpolated into the remote shell line.
+name: Run on dev2
+
+on:
+  workflow_dispatch:
+    inputs:
+      cmd:
+        description: Shell command to run on dev2 as the deploy account
+        required: true
+        type: string
+
+concurrency:
+  group: dev2-exec
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Set up ssh
+        env:
+          SSH_KEY: ${{ secrets.DEV2_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEV2_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Run
+        env:
+          DEV2_USER: ${{ secrets.DEV2_USER }}
+          DEV2_HOST: ${{ secrets.DEV2_HOST }}
+          CMD: ${{ inputs.cmd }}
+        run: |
+          ssh -o BatchMode=yes -o ConnectTimeout=30 "$DEV2_USER@$DEV2_HOST" \
+            'export PATH="$HOME/.local/share/mise/installs/node/latest/bin:$HOME/.local/bin:$PATH"; bash -s' <<<"$CMD"

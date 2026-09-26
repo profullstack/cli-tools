@@ -36,6 +36,8 @@
 #   6. oh-my-zsh + plugins, oh-my-tmux, irssi configs
 #   7. mise      (curl https://mise.run | sh)
 #   8. moshcode  (curl https://moshcode.sh/install.sh | sh)
+#      + threatcrush CLI (curl https://threatcrush.com/install.sh | sh); the
+#        enforcing daemon is a separate opt-in (`threatcrush install-service`)
 #   9. a per-user ssh-agent as a systemd user service
 #  10. motd from $MOTD_URL
 #  11. nginx per-user pages, per-user dev apps, TLS
@@ -132,6 +134,13 @@
 #   EARLYOOM_ENABLE=1     kill the biggest hog early instead of at the wall
 #   EARLYOOM_MEM=10,5 / EARLYOOM_SWAP=10,5   SIGTERM% , SIGKILL%
 #   EARLYOOM_AVOID=... / EARLYOOM_PREFER=    unquoted regexes (see the note)
+#   LOGROTATE_ENABLE=1    nginx logs rotate early past LOGROTATE_MAXSIZE, hourly timer
+#   LOGROTATE_MAXSIZE=200M / LOGROTATE_KEEP=14
+#   FAIL2BAN_ENABLE=1     ban repeated SSH login failures
+#   FAIL2BAN_BANTIME=1h / FAIL2BAN_MAXTIME=1w   first ban, doubling to this ceiling
+#   FAIL2BAN_FINDTIME=10m / FAIL2BAN_MAXRETRY=5
+#   FAIL2BAN_IGNOREIP=    extra addresses/CIDRs never banned (your admin boxes)
+#   NETWORKD_DISPATCHER_QUIET=1   stop networkd-dispatcher when it has no hooks
 #   ASSUME_YES=1   don't prompt (defaults: $DEFAULT_GROUPS; no privkey copy)
 #   DEFAULT_GROUPS=... groups an account lands in when --groups is not passed.
 #                  An unattended run never prompts, so this is what every
@@ -3226,6 +3235,8 @@ _sandbox_tools() {
 				sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" >/dev/null 2>&1
 			curl -fsSL https://mise.run | sh >/dev/null 2>&1
 			curl -fsSL https://moshcode.sh/install.sh | sh >/dev/null 2>&1
+			# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as mise/moshcode above
+			curl -fsSL https://threatcrush.com/install.sh | sh >/dev/null 2>&1
 			true' >/dev/null 2>&1 \
 		|| warn "$name: one of the tool installers failed (not fatal)"
 	return 0
@@ -4363,6 +4374,226 @@ log "configuring OOM protection"
 try "earlyoom" configure_earlyoom
 try "zram" configure_zram
 
+# ------------------------------------------------------------- logrotate ---
+
+# Stock Ubuntu rotates nginx daily and runs logrotate once a day. That is fine
+# until a box serves real traffic: on dev2 (2026-09-25) one access log reached
+# 1.2 GB in under two days and another 516 MB. maxsize rotates a log early once
+# it passes the cap, but logrotate only looks when it runs, so the timer goes
+# hourly too; `daily` still means daily for every log that stays small.
+LOGROTATE_ENABLE="${LOGROTATE_ENABLE:-1}"     # 0 leaves rotation as the distro ships it
+LOGROTATE_MAXSIZE="${LOGROTATE_MAXSIZE:-200M}"
+LOGROTATE_KEEP="${LOGROTATE_KEEP:-14}"
+
+configure_logrotate() {
+	local timer_changed=0
+
+	if [[ -z "$LOGROTATE_ENABLE" || "$LOGROTATE_ENABLE" == 0 ]]; then
+		info "logrotate left alone (LOGROTATE_ENABLE=$LOGROTATE_ENABLE)"
+		return 0
+	fi
+
+	if ! command -v logrotate >/dev/null 2>&1; then
+		try "install logrotate" apt-get install -y -qq logrotate || return 0
+	fi
+
+	# The whole stanza, not a sed on the distro's: logrotate refuses a second
+	# stanza for the same files ("duplicate log entry"), so a drop-in next to
+	# it cannot work, and unattended-upgrades keeps a changed conffile.
+	if [[ -d /etc/nginx ]]; then
+		write_if_changed /etc/logrotate.d/nginx <<-EOF && note "nginx logs rotate daily or past $LOGROTATE_MAXSIZE, $LOGROTATE_KEEP kept"
+		# Managed by root-ubuntu.sh (LOGROTATE_MAXSIZE, LOGROTATE_KEEP).
+		/var/log/nginx/*.log {
+		    daily
+		    maxsize $LOGROTATE_MAXSIZE
+		    missingok
+		    rotate $LOGROTATE_KEEP
+		    compress
+		    delaycompress
+		    notifempty
+		    create 0640 www-data adm
+		    sharedscripts
+		    prerotate
+		        if [ -d /etc/logrotate.d/httpd-prerotate ]; then \\
+		            run-parts /etc/logrotate.d/httpd-prerotate; \\
+		        fi \\
+		    endscript
+		    postrotate
+		        invoke-rc.d nginx rotate >/dev/null 2>&1
+		    endscript
+		}
+		EOF
+	fi
+
+	mkdir -p /etc/systemd/system/logrotate.timer.d
+	write_if_changed /etc/systemd/system/logrotate.timer.d/hourly.conf <<'EOF' && timer_changed=1
+# Managed by root-ubuntu.sh: hourly, so maxsize is checked more than once a day.
+[Timer]
+OnCalendar=
+OnCalendar=hourly
+EOF
+	if (( timer_changed )); then
+		systemctl daemon-reload
+		try "logrotate hourly" systemctl restart logrotate.timer && note "logrotate runs hourly"
+	else
+		info "logrotate already hourly"
+	fi
+	systemctl enable --quiet logrotate.timer 2>/dev/null || true
+
+	# -d parses every config without rotating anything. A broken stanza
+	# anywhere in /etc/logrotate.d stops ALL rotation, so say so loudly.
+	if ! logrotate -d /etc/logrotate.conf >/dev/null 2>&1; then
+		warn "logrotate -d /etc/logrotate.conf reports errors; rotation may be stalled"
+	fi
+}
+
+# -------------------------------------------------------------- fail2ban ---
+
+# Bans an address that keeps failing SSH logins. Ubuntu's package already
+# enables the sshd jail; this layers our tuning on top in a file that sorts
+# after defaults-debian.conf: repeat offenders are banned longer each time
+# (bantime.increment doubles it, capped at FAIL2BAN_MAXTIME), and the
+# addresses that must never be locked out are written into ignoreip.
+FAIL2BAN_ENABLE="${FAIL2BAN_ENABLE:-1}"       # 0 leaves fail2ban off the box
+FAIL2BAN_BANTIME="${FAIL2BAN_BANTIME:-1h}"    # first ban; doubles on each repeat
+FAIL2BAN_MAXTIME="${FAIL2BAN_MAXTIME:-1w}"    # ceiling for the doubling
+FAIL2BAN_FINDTIME="${FAIL2BAN_FINDTIME:-10m}"
+FAIL2BAN_MAXRETRY="${FAIL2BAN_MAXRETRY:-5}"
+# Space-separated addresses or CIDRs that are never banned, on top of loopback,
+# the tailnet range and whoever is connected over SSH while this runs. Put the
+# boxes you administer from here.
+FAIL2BAN_IGNOREIP="${FAIL2BAN_IGNOREIP:-}"
+
+# Addresses logged in over SSH right now: the operator running this script.
+# Banning them is a lockout, so they go in ignoreip. "Connected" is not enough:
+# a brute-forcer mid-attempt holds an established connection too, and would be
+# exempted for good. So a peer counts only if sshd also logged a successful
+# login from it (auth.log, or the journal on a box without one).
+_fail2ban_ssh_peers() {
+	local peer accepted
+	[[ -n "${SSH_CLIENT:-}" ]] && printf '%s\n' "${SSH_CLIENT%% *}"
+	command -v ss >/dev/null 2>&1 || return 0
+	if [[ -f /var/log/auth.log ]]; then
+		accepted="$(tail -n 20000 /var/log/auth.log 2>/dev/null)"
+	else
+		accepted="$(journalctl -q --no-pager --since -2d -t sshd -t sshd-session 2>/dev/null | tail -n 20000)"
+	fi
+	accepted="$(printf '%s\n' "$accepted" | sed -n 's/.*Accepted [^ ]* for [^ ]* from \([^ ]*\) port.*/\1/p' | sort -u)"
+	[[ -n "$accepted" ]] || return 0
+	ss -tnH state established "( sport = :${SSH_PORT:-22} )" 2>/dev/null \
+		| awk '{print $4}' | while read -r peer; do
+			peer="${peer%:*}"; peer="${peer#[}"; peer="${peer%]}"
+			[[ -n "$peer" ]] && grep -qxF -- "$peer" <<<"$accepted" && printf '%s\n' "$peer"
+		done
+	return 0
+}
+
+# ignoreip, deduplicated: loopback, the tailnet, the operator's list, and the
+# SSH peers connected right now.
+_fail2ban_ignoreip() {
+	local list
+	# shellcheck disable=SC2086,SC2046  # both are space-separated lists, split on purpose
+	list="$(printf '%s\n' 127.0.0.1/8 ::1 100.64.0.0/10 $FAIL2BAN_IGNOREIP $(_fail2ban_ssh_peers) \
+		| awk 'NF && !seen[$0]++' | tr '\n' ' ')"
+	printf '%s' "${list% }"
+}
+
+configure_fail2ban() {
+	local changed=0 ignore backend
+
+	if [[ -z "$FAIL2BAN_ENABLE" || "$FAIL2BAN_ENABLE" == 0 ]]; then
+		info "fail2ban disabled (FAIL2BAN_ENABLE=$FAIL2BAN_ENABLE)"
+		return 0
+	fi
+
+	if ! dpkg -s fail2ban >/dev/null 2>&1; then
+		try "install fail2ban" apt-get install -y -qq fail2ban || return 0
+	fi
+
+	ignore="$(_fail2ban_ignoreip)"
+
+	# auth.log is what the stock sshd filter reads. A box without rsyslog has
+	# only the journal, and there fail2ban needs python3-systemd to read it.
+	backend=auto
+	if [[ ! -f /var/log/auth.log ]]; then
+		backend=systemd
+		if ! dpkg -s python3-systemd >/dev/null 2>&1; then
+			try "install python3-systemd" apt-get install -y -qq python3-systemd || return 0
+		fi
+	fi
+
+	mkdir -p /etc/fail2ban/jail.d
+	write_if_changed /etc/fail2ban/jail.d/zz-root-ubuntu.local <<EOF && changed=1
+# Managed by root-ubuntu.sh (FAIL2BAN_*). Loaded after defaults-debian.conf.
+[DEFAULT]
+ignoreip = $ignore
+bantime = $FAIL2BAN_BANTIME
+findtime = $FAIL2BAN_FINDTIME
+maxretry = $FAIL2BAN_MAXRETRY
+bantime.increment = true
+bantime.maxtime = $FAIL2BAN_MAXTIME
+
+[sshd]
+enabled = true
+port = ${SSH_PORT:-22}
+backend = $backend
+EOF
+	systemctl enable --quiet fail2ban 2>/dev/null || true
+
+	if (( changed )) || ! systemctl is-active --quiet fail2ban; then
+		try "fail2ban" systemctl restart fail2ban || return 0
+		note "fail2ban guarding sshd (ban $FAIL2BAN_BANTIME, doubling to $FAIL2BAN_MAXTIME; never: $ignore)"
+	else
+		info "fail2ban already guarding sshd"
+	fi
+
+	# A jail that failed to load leaves the service running and nothing banned.
+	# The socket takes a moment after a restart, so wait before calling it.
+	local i
+	for i in 1 2 3 4 5 6 7 8 9 10; do
+		fail2ban-client status sshd >/dev/null 2>&1 && return 0
+		sleep "${FAIL2BAN_WAIT:-1}"
+	done
+	warn "fail2ban is running but the sshd jail is not loaded: fail2ban-client status sshd"
+}
+
+# ---------------------------------------------------- networkd-dispatcher ---
+
+# networkd-dispatcher runs hook scripts on link changes. With Docker on the box,
+# every container stop deletes a veth, the dispatcher calls `networkctl status`
+# on it a moment after it is gone, and logs 'ERROR:Failed to get interface ...
+# not found': 3,895 of them in six hours on dev2 (2026-09-25), each one an
+# err-priority journal line that monitoring then reports. With no hook scripts
+# installed it does nothing else, so stop it; any box that has hooks keeps it.
+NETWORKD_DISPATCHER_QUIET="${NETWORKD_DISPATCHER_QUIET:-1}"   # 0 never touches it
+
+quiet_networkd_dispatcher() {
+	local hook
+	[[ -z "$NETWORKD_DISPATCHER_QUIET" || "$NETWORKD_DISPATCHER_QUIET" == 0 ]] && return 0
+	systemctl cat networkd-dispatcher.service >/dev/null 2>&1 || return 0
+	if ! systemctl is-enabled --quiet networkd-dispatcher 2>/dev/null \
+		&& ! systemctl is-active --quiet networkd-dispatcher 2>/dev/null; then
+		info "networkd-dispatcher already off"
+		return 0
+	fi
+	hook="$(find /etc/networkd-dispatcher /usr/lib/networkd-dispatcher -type f 2>/dev/null | head -1)"
+	if [[ -n "$hook" ]]; then
+		info "networkd-dispatcher kept: it has hook scripts ($hook)"
+		return 0
+	fi
+	try "stop networkd-dispatcher" systemctl disable --now networkd-dispatcher \
+		&& note "networkd-dispatcher off (no hooks; it only logged veth errors)"
+}
+
+log "configuring log rotation"
+try "logrotate" configure_logrotate
+
+log "configuring fail2ban"
+try "fail2ban" configure_fail2ban
+
+log "quieting networkd-dispatcher"
+try "networkd-dispatcher" quiet_networkd_dispatcher
+
 # ------------------------------------------------------------------ motd ---
 
 # Fetched into a cache file; login just cats it and kicks off a background
@@ -4842,6 +5073,30 @@ install_mise() { as_user "$1" 'curl -fsSL https://mise.run | sh'; }
 # Installs/repairs moshcode itself. Re-running is the supported update path and
 # it replaces ~/.moshcode/pkg wholesale, which is what heals a partial install.
 install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | sh'; }
+
+# Installs the ThreatCrush security-agent CLI for a login. Re-running is the
+# supported update path (the installer replaces the package in place).
+#
+# This installs the CLI only. The daemon that actually enforces (bans, firewall
+# rules) runs ONE per box, as root, and is enabled deliberately with
+# `threatcrush install-service` rather than here: fleet-wide auto-enforcement is
+# a blast-radius decision, not a provisioning default (a port-scan-ban bug once
+# took dev2 off the network), so it stays an explicit opt-in per box.
+# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as install_moshcode above
+install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
+
+# Enables the ONE per-box enforcing daemon, as root. Fleet-wide enablement is an
+# explicit opt-in (Anthony, 2026-09-25): the daemon auto-bans, so turning it on
+# everywhere is a blast-radius decision, not a default. Safe only on >=0.12.4 (a
+# port-scan-ban regression once took dev2 off the network); provisioning installs
+# latest, so that floor is met. `install-service` run as root writes the systemd
+# unit and starts it; non-root it would re-exec with sudo, but as_user root is
+# already uid 0. ~/.local/bin is forced onto PATH because the curl installer lands
+# there and a clean login shell may not have it yet. No-ops if threatcrush is
+# absent, so a failed install never breaks provisioning.
+enable_threatcrush_daemon() {
+	as_user root 'PATH="$HOME/.local/bin:$PATH"; command -v threatcrush >/dev/null 2>&1 && threatcrush install-service'
+}
 
 # ...and this updates the engines and workflow CLIs moshcode manages.
 #
@@ -6749,7 +7004,14 @@ else
 		try "moshcode ($login)"  install_moshcode "$login"
 		# separate step: installing moshcode does not update what it manages
 		try "moshcode tools ($login)" update_moshcode_tools "$login"
+		try "threatcrush ($login)" install_threatcrush "$login"
 	done < <(printf 'root\n'; all_logins)
+
+	# One enforcing daemon per box, once, as root -- not per login. Explicit
+	# fleet-wide opt-in (see enable_threatcrush_daemon). Runs only on the host;
+	# tenants get the CLI inside their own instance, never a root daemon on shared
+	# infrastructure.
+	try "threatcrush daemon (root)" enable_threatcrush_daemon
 fi
 
 # ---------------------------------------------------------------- wrap up ---
