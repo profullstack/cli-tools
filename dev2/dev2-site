@@ -385,7 +385,8 @@ def resolved_env_overrides(s):
 def with_overrides(s):
     """sites.d/<site>.json is merged over the registry entry: one small file per site,
     so parallel migrations never edit a shared file. Keys are the entry's keys
-    (port, health_path, start_command, companion_commands, env_overrides, pg_service,
+    (port, health_path, start_command, companion_commands, env_overrides, pg_service, proxies,
+    nginx_locations (raw location blocks, __APP_PORT__ substituted, placed before `location /`),
     db, db_host, infra, branch, max_body, notes)."""
     p = os.path.join(SITES_D, f"{s['site']}.json")
     if os.path.exists(p):
@@ -398,6 +399,12 @@ def site(name):
     # allow a service name or a repo tail
     for s in reg["sites"].values():
         if s["service"] == name or (s["repo"] or "").split("/")[-1] == name: return with_overrides(s)
+    # A site that never lived on Railway (bittorrented.com: only its Supabase is
+    # here) has no registry row; its sites.d file is then the whole entry.
+    p = os.path.join(SITES_D, f"{name}.json")
+    if os.path.exists(p):
+        s = json.load(open(p))
+        if s.get("site") == name: return s
     die(f"unknown site {name!r}; `dev2-site list`")
 
 def cmd_list(args):
@@ -1036,15 +1043,30 @@ def cmd_cert(args):
     note(ssh("root", f"openssl x509 -in {cert_dir}/fullchain.pem -noout -subject -enddate | tr '\\n' ' '").strip())
     mark(s["site"], "cert", cert_domains=domains)
 
+def proxy_tuned(text, p):
+    """A proxied host (a Supabase gateway) takes big uploads and long-lived connections."""
+    mb = p.get("max_body", "512m")
+    return text.replace("__MAX_BODY__", mb).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;").replace("client_max_body_size " + mb + ";", "client_max_body_size " + mb + ";\n    large_client_header_buffers 8 64k;")
+
 def cmd_vhost(args):
     s = site(args.site)
     proxies = s.get("proxies") or []
     domains = [d for d in site_domains(s) if d not in {p["host"] for p in proxies}]
     ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
-    conf = tmpl("nginx-vhost.conf").replace("__SITE__", s["site"]).replace("__APP_PORT__", str(s["port"])).replace("__SERVER_NAMES__", " ".join(domains)).replace("__MAX_BODY__", s.get("max_body", "64m"))
+    if s.get("nginx_app") is False:  # the app runs elsewhere (bittorrented.com); only its proxies live here
+        if not proxies: die(f"{s['site']}: nginx_app is false and there are no proxies to serve")
+        p0, proxies = proxies[0], proxies[1:]
+        conf = proxy_tuned(tmpl("nginx-vhost.conf"), p0).replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p0["port"])).replace("__SERVER_NAMES__", p0["host"])
+        domains = [p0["host"]]
+    else:
+        conf = tmpl("nginx-vhost.conf").replace("__SITE__", s["site"]).replace("__APP_PORT__", str(s["port"])).replace("__SERVER_NAMES__", " ".join(domains)).replace("__MAX_BODY__", s.get("max_body", "64m"))
+    if s.get("nginx_locations"):  # site-specific locations (r4ck's paywall limits), ahead of the catch-all
+        anchor = "    location / {\n        proxy_pass"
+        if conf.count(anchor) != 1: die("nginx-vhost.conf: cannot find the proxied `location /` to insert nginx_locations before")
+        conf = conf.replace(anchor, s["nginx_locations"].replace("__APP_PORT__", str(s["port"])).rstrip("\n") + "\n\n" + anchor)
     for p in proxies:  # one more server block per proxied host, same certificate
         blk = tmpl("nginx-vhost.conf").split("server {", 2)[2]  # the 443 block only
-        blk = "server {" + blk.replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"]).replace("__MAX_BODY__", p.get("max_body", "512m")).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;").replace("client_max_body_size " + p.get("max_body", "512m") + ";", "client_max_body_size " + p.get("max_body", "512m") + ";\n    large_client_header_buffers 8 64k;")
+        blk = "server {" + proxy_tuned(blk, p).replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"])
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
