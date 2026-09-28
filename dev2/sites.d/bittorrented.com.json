@@ -29,5 +29,6 @@
    "port": 8290,
    "max_body": "512m"
   }
- ]
+ ],
+ "nginx_app": false
 }
