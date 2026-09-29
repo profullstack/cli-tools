@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { existsSync, mkdtempSync, readdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,6 +7,7 @@ import {
   DEFAULT_RESERVE,
   GitHub,
   acquireRunLock,
+  lockHolder,
   cacheDir,
   clientOptions,
   collectEvents,
@@ -261,5 +262,33 @@ describe('run lock', () => {
     expect(existsSync(join(dir, 'run.lock'))).toBe(true);
     release2();
     expect(existsSync(join(dir, 'run.lock'))).toBe(false);
+  });
+
+  it('treats a lock naming no real pid as stale (the empty file that read as pid 0)', () => {
+    for (const text of ['', '\n', '0\n', '-5', 'abc', '12.5']) {
+      const dir = mkdtempSync(join(tmpdir(), 'gh-pulse-lock-'));
+      writeFileSync(join(dir, 'run.lock'), text);
+      // alive() says yes to everything, as kill(0, 0) did: it must not be asked.
+      const release = acquireRunLock(dir, 300, () => true);
+      expect(readFileSync(join(dir, 'run.lock'), 'utf8')).toBe('300\n');
+      release();
+      expect(existsSync(join(dir, 'run.lock'))).toBe(false);
+    }
+  });
+
+  it('reads the holder pid strictly', () => {
+    expect(lockHolder('4242\n')).toBe(4242);
+    expect(lockHolder('')).toBeUndefined();
+    expect(lockHolder('0')).toBeUndefined();
+    expect(lockHolder('-1')).toBeUndefined();
+    expect(lockHolder('1e3')).toBeUndefined();
+  });
+
+  it('actually runs against a stale empty lock with the real liveness check', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'gh-pulse-lock-'));
+    writeFileSync(join(dir, 'run.lock'), '');
+    const release = acquireRunLock(dir);
+    expect(readFileSync(join(dir, 'run.lock'), 'utf8')).toBe(`${process.pid}\n`);
+    release();
   });
 });
