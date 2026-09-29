@@ -868,19 +868,26 @@ export function clientOptions(dataDir: string, onWait: (line: string) => void, e
 
 /**
  * One daily run at a time. The lock names the pid; a lock left by a process
- * that no longer exists is stale and taken over. Two runs at once would spend
- * the hour twice and then fight over the baseline.
+ * that no longer exists is stale and taken over, and so is one that names no
+ * real pid (empty, 0, garbage). An empty lock used to read as pid 0, and
+ * `kill(0, 0)` signals our own process group, so it always looked alive and
+ * blocked every run after it. Two runs at once would spend the hour twice and
+ * then fight over the baseline.
  */
 export function acquireRunLock(dataDir: string, pid = process.pid, alive: (pid: number) => boolean = isAlive): () => void {
   mkdirSync(dataDir, { recursive: true });
   const file = join(dataDir, 'run.lock');
   if (existsSync(file)) {
-    const holder = Number(readFileSync(file, 'utf8').trim());
-    if (Number.isFinite(holder) && holder !== pid && alive(holder)) {
+    const holder = lockHolder(readFileSync(file, 'utf8'));
+    if (holder !== undefined && holder !== pid && alive(holder)) {
       throw new Error(`another gh-pulse run is in progress (pid ${holder}); wait for it, or remove ${file} if it is not`);
     }
   }
-  writeFileSync(file, `${pid}\n`);
+  // Written whole and renamed into place, so a run killed mid-write never
+  // leaves the empty lock that no later run could read.
+  const tmp = `${file}.${pid}.tmp`;
+  writeFileSync(tmp, `${pid}\n`);
+  renameSync(tmp, file);
   return () => {
     try {
       if (readFileSync(file, 'utf8').trim() === String(pid)) unlinkSync(file);
@@ -890,7 +897,16 @@ export function acquireRunLock(dataDir: string, pid = process.pid, alive: (pid: 
   };
 }
 
+/** The pid a lock file names, or undefined when it names no process (0, negative, empty, not a number). */
+export function lockHolder(text: string): number | undefined {
+  const t = text.trim();
+  if (!/^\d+$/.test(t)) return undefined;
+  const n = Number(t);
+  return Number.isSafeInteger(n) && n > 0 ? n : undefined;
+}
+
 function isAlive(pid: number): boolean {
+  if (!(Number.isSafeInteger(pid) && pid > 0)) return false;
   try {
     process.kill(pid, 0);
     return true;
