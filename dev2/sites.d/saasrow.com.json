@@ -18,5 +18,8 @@
   "RESEND_API_KEY": "secret:RESEND_API_KEY",
   "RESEND_DOMAIN": "secret:RESEND_DOMAIN",
   "GEMINI_API_KEY": "secret:GEMINI_API_KEY"
- }
+ },
+ "keep_services": [
+  "functions"
+ ]
 }
