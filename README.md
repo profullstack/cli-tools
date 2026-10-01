@@ -28,6 +28,7 @@ TypeScript, installed as executables on `PATH`.
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
+| [`alchemy`](#alchemy) | Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402 |
 | [`jobhunt`](#jobhunt) | Find remote roles worth applying to, and apply through a browser, never twice |
 | [`openinstall`](#openinstall) | Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
@@ -1813,6 +1814,41 @@ rsync delivery, release directories with instant rollback, and secrets from the
 vault. `templates/openinstall/install.sh` is a vendored copy: the canonical one
 is sh1pt's `packages/targets/deploy-ssh/bin/install.sh`, so change it there
 first.
+
+### `alchemy`
+
+[Alchemy](https://www.alchemy.com/)'s CLI,
+[@alchemy/cli](https://www.npmjs.com/package/@alchemy/cli): onchain data
+(balances, tokens, NFTs, transactions, gas, raw RPC), your Alchemy apps, agent
+wallets and x402 payments, across EVM chains and Solana.
+
+```sh
+alchemy auth                              # link your account in a browser, pick an app
+alchemy auth login --device-code          # the same on a headless box
+alchemy evm data balance vitalik.eth      # a balance; ENS names work
+alchemy evm gas                           # current gas
+alchemy evm tx <hash>                     # one transaction
+alchemy app list                          # your Alchemy apps
+alchemy --json --no-interactive evm gas   # for scripts and agents
+alchemy --help                            # it is upstream's CLI: upstream's flags
+```
+
+Everything is handed through untouched, so
+[upstream's docs](https://www.alchemy.com/docs/alchemy-cli) are the docs. Two
+flags are ours, spelled `--self-*` because every plain word belongs to them:
+
+```sh
+alchemy --self-update                     # reinstall the latest release
+alchemy --self-where                      # which copy runs, and from where
+```
+
+**The first run installs it**, into `~/.local/share/cli-tools/vendor/alchemy`
+rather than globally, for the reason [`openmcp`](#openmcp) spells out:
+upstream's executable is also called `alchemy`. A global install that is not
+this wrapper (`moshcode install alchemy` makes one) is used as it is.
+`ALCHEMY_BIN` points at a copy you would rather run, and `ALCHEMY_SPEC` pins a
+version. Credentials are upstream's: `alchemy auth`, or `ALCHEMY_API_KEY` in
+the environment.
 
 ### `openmcp`
 

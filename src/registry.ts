@@ -29,6 +29,7 @@ export interface Command {
 const SUMMARIES: Record<string, string> = {
   affiliate: 'Work through a list of programs you mean to sign up for',
   agenticjobs: 'Search, apply, post and hire on an agent-friendly job board',
+  alchemy: 'Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402',
   argontv: 'The shared IPTV line: is it healthy, and is there room to sell another pass',
   'ask-web': 'Answer a question from the live web, with its sources',
   'blog-post': 'Publish to a plain-HTML blog without breaking the feed',
@@ -108,7 +109,7 @@ export function whichOnPath(name: string, env: NodeJS.ProcessEnv = process.env):
 }
 
 /** The first executable of this name on PATH, or null. */
-function firstOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
+export function firstOnPath(name: string, env: NodeJS.ProcessEnv): string | null {
   for (const dir of (env.PATH ?? '').split(':').filter(Boolean)) {
     const candidate = join(dir, name);
     try {
