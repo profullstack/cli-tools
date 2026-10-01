@@ -1355,11 +1355,13 @@ def render_vhost(s):
 def vhost_sites():
     """Registry sites (and sites.d-only entries) whose vhost is enabled on dev2."""
     have = set(ssh("root", "ls -1 /etc/nginx/sites-enabled", check=False).split())
-    names = set(registry()["sites"]) | {f[:-5] for f in os.listdir(SITES_D) if f.endswith(".json")}
+    # A sites.d file without "site" only carries settings for a site the kit did not
+    # build (nichedb.dev's memory limits); its vhost is not ours to re-render.
+    full = {f[:-5] for f in os.listdir(SITES_D) if f.endswith(".json") and json.load(open(os.path.join(SITES_D, f))).get("site") == f[:-5]}
+    names = set(registry()["sites"]) | full
     out = []
     for n in sorted(names & have):
-        try: s = site(n)
-        except SystemExit: continue
+        s = site(n)
         if s.get("skip") or not (s.get("port") or s.get("proxies")): continue
         out.append(n)
     return out
