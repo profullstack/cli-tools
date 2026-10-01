@@ -1,0 +1,4 @@
+{
+ "node_heap_mb": 512,
+ "mem_note": "next + tsx worker in one container"
+}

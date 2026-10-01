@@ -1,3 +1,9 @@
 {
- "companion_commands": {"genrewatch-worker": "bun apps/web/src/main.js"}
+ "companion_commands": {
+  "genrewatch-worker": "bun apps/web/src/main.js"
+ },
+ "mem_limits": {
+  "app": "4g"
+ },
+ "mem_note": "2026-10-01: Bun, 115 MB steady, 2.5 GB peak"
 }

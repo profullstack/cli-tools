@@ -1,0 +1,7 @@
+{
+ "mem_limits": {
+  "app": "3g"
+ },
+ "node_heap_mb": 1024,
+ "mem_note": "predates the kit; next-server + tsx audit worker in one container, 730 MB steady"
+}

@@ -26,5 +26,7 @@
   "SUPABASE_SECRETMAT_KEY": "secret:SUPABASE_SECRETMAT_KEY",
   "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY"
- }
+ },
+ "mem_limit": "2g",
+ "mem_note": "2026-10-01: next + tor, 420 MB steady, 570 MB peak"
 }

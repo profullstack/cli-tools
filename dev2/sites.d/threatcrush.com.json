@@ -11,5 +11,8 @@
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.threatcrush.com",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
   "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY"
- }
+ },
+ "mem_limit": "1536m",
+ "node_heap_mb": 0,
+ "mem_note": "image sets NODE_OPTIONS=--max-old-space-size=1024"
 }

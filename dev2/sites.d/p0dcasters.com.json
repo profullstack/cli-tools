@@ -1,1 +1,1 @@
-{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"], "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/p0dcasters#29); next build runs at container start against DATABASE_URL" }
+{"branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"], "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/p0dcasters#29); next build runs at container start against DATABASE_URL", "mem_limit": "4g", "mem_note": "2026-10-01: 360 MB steady, 2.4 GB peak (fetchEpisodes reads whole feeds)"}

@@ -1,0 +1,5 @@
+{
+ "mem_limit": "2g",
+ "node_heap_mb": 768,
+ "mem_note": "next + analysis worker in one container"
+}

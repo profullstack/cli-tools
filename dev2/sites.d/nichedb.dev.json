@@ -1,0 +1,6 @@
+{
+ "mem_limits": {
+  "app": "6g"
+ },
+ "mem_note": "predates the kit (hand-made compose); Bun, 570 MB steady, 4.7 GB peak; redis maxmemory 2gb -> 3g"
+}
