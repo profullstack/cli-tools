@@ -29,6 +29,7 @@ TypeScript, installed as executables on `PATH`.
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
 | [`jobhunt`](#jobhunt) | Find remote roles worth applying to, and apply through a browser, never twice |
+| [`openinstall`](#openinstall) | Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
@@ -1778,6 +1779,40 @@ Browser: `TRON_AUTOMATE_BIN` (default
 It needs a tron with `browser_upload`. tron does not take its Chromium down when
 it is killed, so each job's browser runs in its own process group and the
 group is what gets closed, including by the crash recovery.
+
+### `openinstall`
+
+Give a repo an idempotent `bin/install.sh`, an [OpenInstall](https://logicsrc.com/openinstall)
+script that puts the app into service on whatever box it runs on: bun or node,
+postgres and redis, the build, a systemd unit, an nginx site with a Let's
+Encrypt certificate, and a health check. Running it twice changes nothing the
+second time, and it never touches a unit or nginx site it did not write.
+
+```bash
+openinstall init                                   # bin/install.sh + bin/install.conf in this repo
+openinstall init --port 3100 --domains "myapp.com www.myapp.com" --postgres
+openinstall check                                  # present, executable, valid bash, current?
+openinstall print > install.sh                     # just the script
+```
+
+On the server:
+
+```bash
+git clone https://codeberg.org/me/myapp && cd myapp
+./bin/install.sh            # setup + build + activate
+./bin/install.sh status
+```
+
+Settings live in `bin/install.conf` (committed, never secrets), and the
+environment overrides them. Secrets go in `~/.local/share/<app>/app.env`.
+`init` never overwrites a `bin/install.sh` or `install.conf` that differs from
+what it would write; `--force` does.
+
+It is the same script `sh1pt ship --target deploy-ssh` runs, which adds git or
+rsync delivery, release directories with instant rollback, and secrets from the
+vault. `templates/openinstall/install.sh` is a vendored copy: the canonical one
+is sh1pt's `packages/targets/deploy-ssh/bin/install.sh`, so change it there
+first.
 
 ### `openmcp`
 
