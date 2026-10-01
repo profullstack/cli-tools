@@ -18,7 +18,8 @@
 #   SUBNET GATEWAY                          172.31.N.0/24 and .1
 #   SMTP_PASS SMTP_SENDER SMTP_ADMIN        optional (Resend)
 #   SUPABASE_REF    self-hosted/v0.8.2
-#   DROP_SERVICES   optional services left out of the stack (default: studio meta imgproxy supavisor)
+#   DROP_SERVICES   optional services left out of the stack (default: studio meta imgproxy supavisor
+#                   realtime functions; dev2-site passes the set minus sites.d keep_services)
 #   MODE            full (default: set up / repair the stack) | services (only re-render the overlay
 #                   and apply it: drop or restore optional services on a running stack)
 #   ALLOW_RECREATE  MODE=services: services (never db) that may be recreated by the apply
@@ -34,10 +35,16 @@
 # remaining containers are not recreated. storage's ENABLE_IMAGE_TRANSFORMATION/
 # IMGPROXY_URL are left alone on purpose (changing them recreates storage); without
 # imgproxy a /render/ request fails instead of transforming.
+#
+# realtime (~250 MiB, most of it in swap) and functions (the edge runtime) are optional
+# too: of 21 stacks only 5 apps open /realtime/v1 websockets and only saasrow calls
+# /functions/v1 (gateway logs 2026-09-25..10-01 + each repo's code). Nothing in the
+# base compose depends on either; the gateway answers 503 on their routes once they
+# are gone and keeps serving auth/rest/storage.
 set -euo pipefail
 
 : "${SITE:?}" "${SLUG:?}" "${ROOT:?}" "${STUDIO_DOMAIN:?}" "${SITE_URL:?}" "${API_PORT:?}" "${DB_PORT:?}" "${POOLER_PORT:?}" "${SUBNET:?}" "${GATEWAY:?}"
-OPTIONAL_SERVICES="studio meta imgproxy supavisor"
+OPTIONAL_SERVICES="studio meta imgproxy supavisor realtime functions"
 DROP_SERVICES=${DROP_SERVICES-$OPTIONAL_SERVICES}
 MODE=${MODE:-full}
 for d in $DROP_SERVICES; do case " $OPTIONAL_SERVICES " in *" $d "*) ;; *) printf 'ERROR: %s is not optional (only: %s)\n' "$d" "$OPTIONAL_SERVICES" >&2; exit 1;; esac; done
@@ -311,7 +318,7 @@ end $$;
 grant usage on schema public to anon, authenticated, service_role;
 grant usage on schema storage to anon, authenticated, service_role;
 SQL
-compose restart auth rest storage realtime $(dropped supavisor || echo supavisor) >/dev/null 2>&1 || true
+compose restart auth rest storage $(dropped realtime || echo realtime) $(dropped supavisor || echo supavisor) >/dev/null 2>&1 || true
 
 log "Extensions"
 sql_admin <<'SQL'

@@ -20,7 +20,8 @@ dev2-site: move a Railway-hosted site onto dev2 and keep it deploying on merge.
     dev2-site retire <site> --yes      delete the Railway services (only after migrate)
     dev2-site supabase-services <site> [--dry-run]
                                        drop (or restore) a Supabase stack's optional services
-                                       (studio meta imgproxy supavisor; sites.d keep_services)
+                                       (studio meta imgproxy supavisor realtime functions;
+                                       sites.d keep_services)
 
 Run from dev1. dev2 is production: this tool is the only thing that writes to it,
 and everything it writes is derived from Railway + these templates, so a re-run
@@ -1252,10 +1253,12 @@ def sb_ports(s):
 
 def sb_slug(s): return re.sub(r"[^a-z0-9]+", "-", s["site"].lower()).strip("-")
 
-# Services of a per-site Supabase stack that the apps do not use: dashboard, its
-# postgres-meta backend, the storage image-transform proxy and the pooler. Left out
-# of every stack unless sites.d/<site>.json says {"keep_services": ["imgproxy", ...]}.
-SB_OPTIONAL = ("studio", "meta", "imgproxy", "supavisor")
+# Services of a per-site Supabase stack that most apps do not use: dashboard, its
+# postgres-meta backend, the storage image-transform proxy, the pooler, Realtime
+# (websockets, ~250 MiB per stack) and the edge runtime. Left out of every stack unless
+# sites.d/<site>.json says {"keep_services": ["realtime", ...]}; a site whose app
+# subscribes to channels must keep realtime, one with deployed edge functions keeps functions.
+SB_OPTIONAL = ("studio", "meta", "imgproxy", "supavisor", "realtime", "functions")
 
 def sb_drop_services(s):
     keep = s.get("keep_services") or []
@@ -1451,6 +1454,8 @@ def cmd_supabase_functions(args):
     from volumes/functions/<name>/index.ts (its `main` router); workers inherit the container env."""
     import base64, io, tarfile
     s = site(args.site); st = load_state(s["site"])
+    if "functions" in sb_drop_services(s):
+        die(f"{s['site']}: the stack runs without the edge runtime; add \"functions\" to keep_services in sites.d/{s['site']}.json, run `dev2-site supabase-services {s['site']}`, then retry")
     for k in ("sb_slug", "sb_ports"):
         if not st.get(k): die(f"state has no {k}; run supabase-stack first")
     src = os.path.join(st.get("checkout") or "", "supabase", "functions")

@@ -16,5 +16,8 @@
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.smshub.dev"
  },
- "notes": "api.smshub.dev was the Railway-hosted Supabase gateway name; kept as an alias of supabase.smshub.dev so old clients keep working."
+ "notes": "api.smshub.dev was the Railway-hosted Supabase gateway name; kept as an alias of supabase.smshub.dev so old clients keep working.",
+ "keep_services": [
+  "realtime"
+ ]
 }
