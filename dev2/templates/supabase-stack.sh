@@ -169,8 +169,11 @@ if [ "$MODE" = services ]; then
   printf '%s\n' "$out" | tail -n 20
   after=$(docker ps -q --filter "label=com.docker.compose.project=$SLUG-supabase" --filter "label=com.docker.compose.service=db")
   [ "$before" = "$after" ] || warn "db container changed ($before -> $after)"
-  for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $(get_env ANON_KEY)" "http://127.0.0.1:$API_PORT/rest/v1/" || true); [ "$code" = 200 ] && break; sleep 2; done
-  echo "gateway http://127.0.0.1:$API_PORT/rest/v1/ -> $code"
+  # the PostgREST root answers 403 to anon (no OpenAPI for it); the service role gets 200
+  sk=$(get_env SERVICE_ROLE_KEY)
+  for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $sk" -H "Authorization: Bearer $sk" "http://127.0.0.1:$API_PORT/rest/v1/" || true); [ "$code" = 200 ] && break; sleep 2; done
+  echo "gateway http://127.0.0.1:$API_PORT/rest/v1/ (service role) -> $code"
+  echo "gateway http://127.0.0.1:$API_PORT/auth/v1/health -> $(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $(get_env ANON_KEY)" "http://127.0.0.1:$API_PORT/auth/v1/health" || true)"
   docker ps -a --filter "label=com.docker.compose.project=$SLUG-supabase" --format '  {{.Names}} {{.Status}}' | sort
   [ "$code" = 200 ] || die "gateway does not answer 200 after the apply"
   log "Done: $SLUG-supabase services applied"
