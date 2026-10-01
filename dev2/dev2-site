@@ -12,6 +12,9 @@ dev2-site: move a Railway-hosted site onto dev2 and keep it deploying on merge.
     dev2-site deploy <site> [ref]      build + start on dev2 (as the deploy account)
     dev2-site cert <site>              Let's Encrypt via Porkbun DNS-01, before DNS moves
     dev2-site vhost <site>             nginx server block -> 127.0.0.1:<port>
+    dev2-site limits <site>... | --all [--dry-run] [--no-recreate]
+                                       mem_limit = memswap_limit on every container (sites.d
+                                       mem_limit / mem_limits / node_heap_mb), applied live
     dev2-site verify <site> [--public] curl the site through nginx (pinned to dev2, or via DNS)
     dev2-site dns <site>               flip every domain at Porkbun to dev2
     dev2-site railway-stop <site>      remove Railway deployments + disconnect the repo watch
@@ -28,8 +31,12 @@ and everything it writes is derived from Railway + these templates, so a re-run
 reproduces the box. State per site lives in ~/.local/state/dev2-fleet/<site>.json.
 """
 import argparse
+import base64
 import datetime as dt
+import difflib
 import glob
+import html
+import html.parser
 import json
 import os
 import re
@@ -619,7 +626,7 @@ def render_env(vars_, s, st, service_name=None):
     lines += [f"{k}={env_quote(v)}" for k, v in out.items()]
     return "\n".join(lines) + "\n", out
 
-def render_compose(s, st, app_port_inside, build_args=()):
+def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
     df = st.get("dockerfile") or "Dockerfile"
     img = s["site"].replace(".", "-")
     y = [f"# {s['site']} on dev2: rendered by cli-tools dev2/dev2-site provision. Re-run provision to change.",
@@ -628,14 +635,18 @@ def render_compose(s, st, app_port_inside, build_args=()):
     def service(name, envfile, command=None, ports=True, vols=(), port_inside=None):
         port_inside = port_inside or app_port_inside
         y.append(f"  {name}:")
+        lim, heap = mem_plan(s, name)
+        mem = mem_lines(lim)
         if image_only:  # Railway ran a stock image with a start command; no repo, nothing to build
-            y.append(f"    image: {s['image']}\n    restart: unless-stopped\n    env_file: {envfile}")
+            y.append(f"    image: {s['image']}\n    restart: unless-stopped\n{mem}\n    env_file: {envfile}")
         else:
             y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
             if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
                 y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
-            y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n    env_file: {envfile}")
-        y.append(f"    environment:\n      PORT: \"{port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
+            y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n{mem}\n    env_file: {envfile}")
+        y.append("    environment:")
+        if heap and name not in node_preset: y.append(heap_line(heap, list_style=False))
+        y.append(f"      PORT: \"{port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
         if command:
             # A nixpacks image's entrypoint is `/bin/bash -l -c`, and bash -c takes ONE script
             # argument: an argv list would run only the first word (Bun's help text, exit 0,
@@ -656,7 +667,7 @@ def render_compose(s, st, app_port_inside, build_args=()):
         service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []), port_inside=(cp or {}).get("inside"))
         if cp: y.insert(len(y) - (2 if s["redis"] else 1), f"    ports:\n      - \"127.0.0.1:{cp['host']}:{cp['inside']}\"")
     if s["redis"]:
-        y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
+        y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n" + mem_lines(mem_plan(s, "redis", is_redis=True, maxmemory="1gb")[0]) + "\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
         y.append("volumes:\n  redisdata:")
     # An explicit subnet per site: Docker's default address pools (15 x /16 + 16 x /20)
     # ran out at 34 networks on dev2, and widening them means restarting dockerd
@@ -665,6 +676,269 @@ def render_compose(s, st, app_port_inside, build_args=()):
     n = s["port"] - FIRST_PORT
     y.append(f"networks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
     return "\n".join(y) + "\n"
+
+# ------------------------------------------------------------- memory limits
+#
+# Every container gets a cgroup memory ceiling (mem_limit) with memswap_limit equal
+# to it, so a runaway process is killed and restarted (restart: unless-stopped) on
+# its own instead of pushing a 91 GB box into swap until earlyoom shoots Postgres.
+# Node processes also get --max-old-space-size at 75% of the ceiling, so V8 collects
+# garbage harder before the kernel kills the container. Measured 2026-10-01: almost
+# every app sits under 300 MB, so 1g is the default and sites.d raises the heavy ones.
+
+MEM_DEFAULT = "1g"        # every app and companion service unless sites.d says otherwise
+MEM_FLOOR_MB = 512
+HEAP_SHARE = 0.75         # V8 old space as a share of the container's limit
+LIMIT_MARK = "# dev2-site limits"
+
+def mem_mb(v):
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([kmgKMG])?[bB]?\s*", str(v))
+    if not m: die(f"cannot read memory size {v!r} (use e.g. 768m or 2g)")
+    n, u = float(m.group(1)), (m.group(2) or "m").lower()
+    return int(n / 1024 if u == "k" else n * 1024 if u == "g" else n)
+
+def mem_str(mb): return f"{mb // 1024}g" if mb % 1024 == 0 else f"{mb}m"
+
+def redis_limit_mb(maxmemory):
+    """maxmemory x 1.5 in 512m steps, at least 1g: an AOF rewrite forks, and the pages
+    written meanwhile are copied on top of the dataset. No maxmemory: 1g."""
+    if not maxmemory: return 1024
+    return max(1024, -(-mem_mb(maxmemory) * 3 // 2 // 512) * 512)
+
+def mem_plan(s, svc, is_redis=False, maxmemory=None):
+    """(limit_mb, heap_mb or None) for one compose service of site `s`. sites.d keys:
+    "mem_limit" (every app/companion service), "mem_limits" {service: size} (wins; also
+    for redis), "node_heap_mb" int | {service|"*": int}, where 0 leaves NODE_OPTIONS to
+    the image or the app (it budgets its own heap)."""
+    per = (s.get("mem_limits") or {}).get(svc)
+    if is_redis:
+        return (mem_mb(per) if per else redis_limit_mb(maxmemory)), None
+    lim = max(MEM_FLOOR_MB, mem_mb(per or s.get("mem_limit") or MEM_DEFAULT))
+    h = s.get("node_heap_mb")
+    if isinstance(h, dict): h = h.get(svc, h.get("*"))
+    if h is None: h = int(lim * HEAP_SHARE) // 64 * 64
+    if h and h >= lim: die(f"{s['site']} {svc}: node_heap_mb {h} is not below its {mem_str(lim)} limit")
+    return lim, (h or None)
+
+def mem_lines(lim):
+    return f"    mem_limit: {mem_str(lim)}\n    memswap_limit: {mem_str(lim)}"
+
+def heap_line(heap, list_style):
+    v = f"--max-old-space-size={heap}"
+    return (f"      - NODE_OPTIONS={v}  {LIMIT_MARK}" if list_style else f"      NODE_OPTIONS: \"{v}\"  {LIMIT_MARK}")
+
+def compose_services(lines):
+    """[(name, start, end)] for each service of the top-level `services:` block."""
+    out, inside, cur = [], False, None
+    for i, l in enumerate(lines):
+        if re.match(r"^\S", l):
+            if cur: out.append((cur[0], cur[1], i)); cur = None
+            inside = l.split("#")[0].rstrip() == "services:"
+            continue
+        m = re.match(r"^  ([A-Za-z0-9_.-]+):\s*(#.*)?$", l) if inside else None
+        if m:
+            if cur: out.append((cur[0], cur[1], i))
+            cur = (m.group(1), i)
+    if cur: out.append((cur[0], cur[1], len(lines)))
+    return out
+
+def limit_compose(text, s, node_preset=()):
+    """The live compose file with mem_limit/memswap_limit (and our NODE_OPTIONS line) set on
+    every service, everything else byte for byte. Idempotent. Returns (text, {svc: (lim, heap)})."""
+    lines = text.split("\n")
+    plan, out, pos = {}, [], 0
+    for name, a, b in compose_services(lines):
+        out += lines[pos:a]; pos = b
+        blk = [l for l in lines[a:b] if not re.match(r"^    (mem_limit|memswap_limit):", l) and LIMIT_MARK not in l]
+        body = "\n".join(blk)
+        is_redis = bool(re.search(r"^    image:\s*[\"']?redis[:@\s\"']", body + "\n", re.M))
+        mm = re.search(r"--maxmemory[\"']?\s*,?\s*[\"']?([0-9]+[kmgKMG]?[bB]?)", body)
+        lim, heap = mem_plan(s, name, is_redis=is_redis, maxmemory=mm.group(1) if mm else None)
+        if heap and (name in node_preset or re.search(r"^\s+-?\s*NODE_OPTIONS\s*[:=].*max-old-space-size", body, re.M)):
+            heap = None  # the app budgets its own heap; keep it
+        plan[name] = (lim, heap)
+        r = next((i for i, l in enumerate(blk) if re.match(r"^    restart:", l)), None)
+        if r is None:  # an OOM-killed container must come back
+            blk.insert(1, "    restart: unless-stopped"); r = 1
+        blk[r + 1:r + 1] = mem_lines(lim).split("\n")
+        if heap:
+            e = next((i for i, l in enumerate(blk) if re.match(r"^    environment:\s*$", l)), None)
+            if e is None:
+                k = r + 3
+                blk[k:k] = ["    environment:", heap_line(heap, False)]
+            else:
+                nxt = next((l for l in blk[e + 1:] if l.strip()), "")
+                blk.insert(e + 1, heap_line(heap, nxt.lstrip().startswith("- ")))
+        out += blk
+    out += lines[pos:]
+    return "\n".join(out), plan
+
+def box_sites():
+    out = ssh(DEPLOY_USER, f"ls -1 {WWW}/*/docker-compose.app.yml 2>/dev/null || true", check=False)
+    return sorted(p.split("/")[-2] for p in out.split())
+
+def limits_site(name):
+    """A registry site with its overrides; a site that predates the kit (nichedb.dev,
+    rssamplifier.com, crawlproof.com) is just its sites.d file."""
+    if name in registry()["sites"]: return site(name)
+    return with_overrides({"site": name})
+
+LIMITS_PROBE = r'''
+cd "$1" || exit 3
+echo "@@ENV"
+for f in *.env; do [ -f "$f" ] && grep -qs '^NODE_OPTIONS=.*max-old-space-size' "$f" && echo "$f"; done
+echo "@@CTR"
+docker ps -a --filter "label=com.docker.compose.project.working_dir=$PWD" --format '{{.ID}} {{.Label "com.docker.compose.service"}} {{.Image}}' |
+while read -r id svc img; do
+  n=$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$img" 2>/dev/null | grep -c '^NODE_OPTIONS=.*max-old-space-size')
+  echo "$id $svc $n"
+done
+echo "@@COMPOSE"
+cat docker-compose.app.yml
+'''
+
+def cmd_limits(args):
+    names = box_sites() if args.all else args.sites
+    if not names: die("name sites, or --all for every ~/www/<site>/docker-compose.app.yml on dev2")
+    failed = []
+    for name in names:
+        s = limits_site(name); root = f"{WWW}/{name}"
+        raw = ssh(DEPLOY_USER, f"bash -s -- {shlex.quote(root)}", input=LIMITS_PROBE, check=False)
+        if "@@COMPOSE" not in raw: warn(f"{name}: no {root}/docker-compose.app.yml"); failed.append(name); continue
+        head, text = raw.split("@@COMPOSE\n", 1)
+        envs = head.split("@@ENV\n", 1)[1].split("@@CTR\n")[0].split()
+        ctrs = [l.split() for l in head.split("@@CTR\n", 1)[1].splitlines() if l.strip()]
+        lines = text.split("\n")
+        # env_file per service, so an env file that sets NODE_OPTIONS keeps its own heap
+        preset = set()
+        for svc, a, b in compose_services(lines):
+            files = re.findall(r"^\s+(?:env_file:\s*|-\s*)\.?/?([\w.-]+\.env)\s*$", "\n".join(lines[a:b]), re.M)
+            if any(f in envs for f in files): preset.add(svc)
+        preset |= {c[1] for c in ctrs if len(c) == 3 and c[2] != "0"}  # the image sets NODE_OPTIONS
+        new, plan = limit_compose(text, s, preset)
+        kit = "rendered by cli-tools dev2/dev2-site" in text[:400]
+        log(f"{name}: " + ", ".join(f"{svc} {mem_str(l)}" + (f" heap {h}" if h else "") for svc, (l, h) in plan.items()))
+        if new != text:
+            for l in difflib.unified_diff(text.split("\n"), new.split("\n"), "live", "limited", n=0, lineterm=""):
+                if not l.startswith(("---", "+++")): note(l)
+        if args.dry_run: continue
+        try:
+            if new != text:
+                ssh(DEPLOY_USER, f"cd {shlex.quote(root)} && n=1; while [ -e docker-compose.app.bak-$(printf %03d $n).yml ]; do n=$((n+1)); done; cp -p docker-compose.app.yml docker-compose.app.bak-$(printf %03d $n).yml")
+                ssh_put(new, f"{root}/docker-compose.app.yml", "0640", user=DEPLOY_USER)
+            # Takes effect now, without a restart; the compose file carries it into every later recreate.
+            ups = [f"docker update --memory {plan[svc][0]}m --memory-swap {plan[svc][0]}m {cid} >/dev/null" for cid, svc, *_ in ctrs if svc in plan]
+            if ups: ssh(DEPLOY_USER, " && ".join(ups))
+            # NODE_OPTIONS only reaches a new container. A kit-rendered file interpolates nothing
+            # but deploy.env, so recreating from the built images is safe; the hand-made ones
+            # (crawlproof's interpolates secrets the deploy script exports) wait for their next deploy.
+            env_changed = [l for l in new.split("\n") if LIMIT_MARK in l] != [l for l in text.split("\n") if LIMIT_MARK in l]
+            if env_changed and kit and not args.no_recreate:
+                ssh(DEPLOY_USER, f"cd {shlex.quote(root)} && docker compose -f docker-compose.app.yml --env-file deploy.env up -d --no-build 2>&1 | tail -n 4", timeout=900)
+                note("recreated with NODE_OPTIONS")
+            elif env_changed:
+                note("limits live now; NODE_OPTIONS arrives with the next deploy")
+            got = ssh(DEPLOY_USER, f"docker ps --filter label=com.docker.compose.project.working_dir={shlex.quote(root)} --format '{{{{.Names}}}}' | xargs -r docker inspect --format '{{{{.Name}}}} {{{{.HostConfig.Memory}}}}'", check=False)
+            zero = [l.split()[0].lstrip("/") for l in got.splitlines() if l.split()[-1] == "0"]
+            if zero: warn(f"{name}: still unlimited: {', '.join(zero)}"); failed.append(name)
+        except RuntimeError as e:
+            warn(f"{name}: {str(e)[-600:]}"); failed.append(name)
+    if failed: die(f"limits not fully applied on: {', '.join(failed)}")
+
+# ------------------------------------------------------------ maintenance page
+#
+# While a deploy recreates the container nginx gets "connection refused" and would
+# answer with its bare 502. The vhost sends 502/503/504 to /__maintenance.html, a
+# self-contained page per site under /var/www/maintenance/<site>/, served as a 503
+# with Retry-After. Branding comes from the live site once, at vhost time.
+
+MAINT_ROOT = "/var/www/maintenance"
+MAINT_ACCENT = "#4f6bed"
+MAINT_ICON_MAX = 48 * 1024
+
+class _Head(html.parser.HTMLParser):
+    def __init__(self):
+        super().__init__(); self.meta, self.links, self.title, self._t = {}, [], "", False
+    def handle_starttag(self, tag, attrs):
+        a = {k.lower(): (v or "") for k, v in attrs}
+        if tag == "meta":
+            k = (a.get("name") or a.get("property") or "").lower()
+            if k and k not in self.meta: self.meta[k] = a.get("content", "").strip()
+        elif tag == "link": self.links.append(a)
+        elif tag == "title": self._t = True
+    def handle_endtag(self, tag):
+        if tag == "title": self._t = False
+    def handle_data(self, d):
+        if self._t: self.title += d
+
+def _fetch(url, limit):
+    req = urllib.request.Request(url, headers={"User-Agent": "dev2-site maintenance-page (cli-tools)", "Accept": "*/*"})
+    with urllib.request.urlopen(req, timeout=12) as r:
+        return r.read(limit + 1), (r.headers.get("Content-Type") or "").split(";")[0].strip().lower(), r.geturl()
+
+def _css_color(v):
+    v = (v or "").strip()
+    if not re.fullmatch(r"#[0-9a-fA-F]{3,8}|(rgb|hsl)a?\([0-9.,%\s/]+\)", v): return None
+    if v.startswith("#") and len(v) in (4, 7):  # too close to white or black reads as no accent
+        h = v[1:] if len(v) == 7 else "".join(c * 2 for c in v[1:])
+        r, g, b = (int(h[i:i + 2], 16) / 255 for i in (0, 2, 4))
+        lum = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        if lum > 0.85 or lum < 0.2: return None
+    return v
+
+def maintenance_branding(s):
+    """{name, accent, icon (data: URI or None)} from sites.d "maintenance" and the live site."""
+    domain = primary_domain(s.get("domains") or []) or s["site"]
+    o = s.get("maintenance") or {}
+    b = {"name": o.get("name"), "accent": o.get("color"), "icon": None, "fetched": False}
+    try:
+        body, ctype, final = _fetch(f"https://{domain}/", 600_000)
+        if "html" in ctype:
+            p = _Head(); p.feed(body.decode("utf-8", "replace")); b["fetched"] = True
+            nm = p.meta.get("og:site_name") or p.meta.get("application-name") or ""
+            if not b["name"] and 0 < len(nm) <= 40: b["name"] = nm.strip()
+            b["accent"] = b["accent"] or _css_color(p.meta.get("theme-color"))
+            if o.get("icon") is not False:
+                rank = lambda l: (0 if "svg" in (l.get("type", "") + l.get("href", "")) else 1 if "apple-touch-icon" in l.get("rel", "") else 2)
+                cands = sorted((l for l in p.links if "icon" in l.get("rel", "").lower() and l.get("href")), key=rank)
+                urls = [urllib.parse.urljoin(final, l["href"]) for l in cands] + [urllib.parse.urljoin(final, "/favicon.ico")]
+                if o.get("icon"): urls.insert(0, urllib.parse.urljoin(final, o["icon"]))
+                for u in urls[:4]:
+                    try:
+                        data, ct, _ = _fetch(u, MAINT_ICON_MAX)
+                    except Exception:
+                        continue
+                    if len(data) <= MAINT_ICON_MAX and ct.startswith("image/") and data:
+                        b["icon"] = f"data:{ct};base64,{base64.b64encode(data).decode()}"; break
+    except Exception as e:
+        note(f"maintenance page: {domain} did not answer ({str(e)[:80]}); text wordmark")
+    b["name"] = b["name"] or domain
+    b["accent"] = b["accent"] or MAINT_ACCENT
+    return b, domain
+
+def render_maintenance(s):
+    b, domain = maintenance_branding(s)
+    name = html.escape(b["name"])
+    icon = html.escape(b["icon"], quote=True) if b["icon"] else ""
+    page = (tmpl("maintenance.html")
+            .replace("__FAVICON__", f'<link rel="icon" href="{icon}">' if icon else "")
+            .replace("__LOGO__", f'<img class="logo" src="{icon}" alt="">' if icon else f'<span class="mark">{html.escape(domain)}</span>')
+            .replace("__ACCENT__", html.escape(b["accent"], quote=True))
+            .replace("__DOMAIN__", html.escape(domain)).replace("__NAME__", name))
+    return page, b
+
+def install_maintenance(s, dry_run=False):
+    """Write /var/www/maintenance/<site>/__maintenance.html. When the live site does not
+    answer (it is mid-deploy, or down) an existing page is kept rather than downgraded."""
+    path = f"{MAINT_ROOT}/{s['site']}/__maintenance.html"
+    page, b = render_maintenance(s)
+    note(f"maintenance page: {b['name']!r}, accent {b['accent']}, {'logo' if b['icon'] else 'wordmark'}")
+    if dry_run: return page
+    if not b["fetched"] and ssh("root", f"test -s {shlex.quote(path)} && echo keep", check=False).strip() == "keep":
+        note("kept the existing maintenance page"); return page
+    ssh("root", f"install -d -m 0755 {MAINT_ROOT} {MAINT_ROOT}/{shlex.quote(s['site'])}")
+    ssh_put(page, path, "0644")
+    return page
 
 # -------------------------------------------------------------- provision
 
@@ -712,7 +986,14 @@ def cmd_provision(args):
             st["dockerfile"] = find_dockerfile(st.get("checkout") or checkout_dir(s), cfg) or ".nixpacks/Dockerfile"
         branch = st.get("branch") or s.get("branch") or default_branch(s["repo"])
         hp = s.get("health_path") or st.get("health_path") or health_url(s, cfg)[1]  # sites.d wins over the state file (app.logicsrc.com)
-    compose = render_compose(s, st, inside, build_args=public_keys(merged))
+    cenvs = {}
+    for c in s["companions"]:
+        cv = site_variables(s, c["id"], f"{c['name']}.env")
+        cenvs[c["name"]] = render_env(cv, s, st, c["name"])
+    # An app that budgets its own heap (NODE_OPTIONS in its variables) keeps it; the
+    # compose environment would otherwise override the env file.
+    preset = {n for n, v in [("app", merged)] + [(n, m) for n, (_, m) in cenvs.items()] if "max-old-space-size" in str(v.get("NODE_OPTIONS", ""))}
+    compose = render_compose(s, st, inside, build_args=public_keys(merged), node_preset=preset)
     build_services = " ".join(["app"] + [c["name"] for c in s["companions"]])
     # Public repos clone over https. Private ones clone over ssh with a read-only GitHub
     # deploy key (the alias keeps one key per repo); some orgs (moshcoder) disable deploy
@@ -730,9 +1011,7 @@ def cmd_provision(args):
     own = f"{DEPLOY_USER}:{DEPLOY_USER}"
     ssh_put(app_env, f"{root}/app.env", "0600", own)
     for c in s["companions"]:
-        cv = site_variables(s, c["id"], f"{c['name']}.env")
-        cenv, _ = render_env(cv, s, st, c["name"])
-        ssh_put(cenv, f"{root}/{c['name']}.env", "0600", own)
+        ssh_put(cenvs[c["name"]][0], f"{root}/{c['name']}.env", "0600", own)
     ssh_put(deploy_env, f"{root}/deploy.env", "0640", own)
     ssh_put(compose, f"{root}/docker-compose.app.yml", "0640", own)
     ssh_put(tmpl("deploy-app.sh"), f"{root}/deploy-app.sh", "0755", own)
@@ -1052,11 +1331,9 @@ def proxy_tuned(text, p):
     mb = p.get("max_body", "512m")
     return text.replace("__MAX_BODY__", mb).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;").replace("client_max_body_size " + mb + ";", "client_max_body_size " + mb + ";\n    large_client_header_buffers 8 64k;")
 
-def cmd_vhost(args):
-    s = site(args.site)
+def render_vhost(s):
     proxies = s.get("proxies") or []
     domains = [d for d in site_domains(s) if d not in {p["host"] for p in proxies}]
-    ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
     if s.get("nginx_app") is False:  # the app runs elsewhere (bittorrented.com); only its proxies live here
         if not proxies: die(f"{s['site']}: nginx_app is false and there are no proxies to serve")
         p0, proxies = proxies[0], proxies[1:]
@@ -1073,10 +1350,41 @@ def cmd_vhost(args):
         blk = "server {" + proxy_tuned(blk, p).replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"])
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
-    log(f"nginx vhost {s['site']} -> 127.0.0.1:{s['port']} ({', '.join(domains)})")
-    ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
-    ssh("root", f"f=/etc/nginx/sites-available/{s['site']}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
-    mark(s["site"], "vhost")
+    return conf, domains
+
+def vhost_sites():
+    """Registry sites (and sites.d-only entries) whose vhost is enabled on dev2."""
+    have = set(ssh("root", "ls -1 /etc/nginx/sites-enabled", check=False).split())
+    names = set(registry()["sites"]) | {f[:-5] for f in os.listdir(SITES_D) if f.endswith(".json")}
+    out = []
+    for n in sorted(names & have):
+        try: s = site(n)
+        except SystemExit: continue
+        if s.get("skip") or not (s.get("port") or s.get("proxies")): continue
+        out.append(n)
+    return out
+
+def cmd_vhost(args):
+    # migrate passes a Namespace with `site`; the subcommand takes several sites or --all
+    names = vhost_sites() if getattr(args, "all", False) else (getattr(args, "sites", None) or ([args.site] if getattr(args, "site", None) else []))
+    if not names: die("name a site, or --all")
+    for name in names:
+        s = site(name)
+        conf, domains = render_vhost(s)
+        f = f"/etc/nginx/sites-available/{s['site']}"
+        if getattr(args, "dry_run", False):
+            live = ssh("root", f"cat {shlex.quote(f)} 2>/dev/null || true", check=False)
+            log(f"{s['site']}: vhost diff, live -> rendered")
+            for l in difflib.unified_diff(live.split("\n"), conf.split("\n"), "live", "rendered", n=0, lineterm=""):
+                if not l.startswith(("---", "+++")): note(l)
+            install_maintenance(s, dry_run=True)
+            continue
+        ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
+        log(f"nginx vhost {s['site']} -> 127.0.0.1:{s.get('port')} ({', '.join(domains)})")
+        install_maintenance(s)  # before the vhost points error_page at it
+        ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
+        ssh("root", f"f={f}; if [ -e $f ]; then n=1; while [ -e $f.bak-$(printf %03d $n) ]; do n=$((n+1)); done; cp -a $f $f.bak-$(printf %03d $n); fi; install -m 0644 /tmp/dev2-site-{s['site']}.conf $f && ln -sf $f /etc/nginx/sites-enabled/{s['site']} && {{ nginx -t 2>/tmp/nginx-t.log || {{ tail -n3 /tmp/nginx-t.log; exit 1; }}; }} && systemctl reload nginx")
+        mark(s["site"], "vhost")
 
 def cmd_verify(args):
     s = site(args.site); st = load_state(s["site"])
@@ -1519,7 +1827,13 @@ def main():
     p = sub.add_parser("db"); p.add_argument("site"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_db)
     p = sub.add_parser("db-create"); p.add_argument("site"); p.set_defaults(fn=cmd_db_create)
     p = sub.add_parser("deploy"); p.add_argument("site"); p.add_argument("ref", nargs="?"); p.set_defaults(fn=cmd_deploy)
-    p = sub.add_parser("vhost"); p.add_argument("site"); p.add_argument("--no-cert-check", action="store_true"); p.set_defaults(fn=cmd_vhost)
+    p = sub.add_parser("vhost"); p.add_argument("sites", nargs="*"); p.add_argument("--all", action="store_true", help="every registry/sites.d site with an enabled vhost")
+    p.add_argument("--dry-run", action="store_true", help="diff the rendered vhost against the live one, change nothing")
+    p.add_argument("--no-cert-check", action="store_true"); p.set_defaults(fn=cmd_vhost)
+    p = sub.add_parser("limits", help="memory limits (+ NODE_OPTIONS heap) on every container of a site, live")
+    p.add_argument("sites", nargs="*"); p.add_argument("--all", action="store_true", help="every ~/www/<site>/docker-compose.app.yml on dev2")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and the compose diff, change nothing")
+    p.add_argument("--no-recreate", action="store_true", help="docker update only; NODE_OPTIONS waits for the next deploy"); p.set_defaults(fn=cmd_limits)
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)

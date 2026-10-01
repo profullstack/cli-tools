@@ -11,5 +11,8 @@
   "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.b1dz.com",
   "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD"
- }
+ },
+ "mem_limit": "2g",
+ "node_heap_mb": 768,
+ "mem_note": "2026-10-01: four node processes + redis in one container, 540 MB steady"
 }

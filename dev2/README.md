@@ -25,7 +25,7 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 | `volumes` | Railway volume contents tar-streamed into `volumes/<name>`, bind-mounted at the same path |
 | `deploy` | `deploy-app.sh <ref>` as `anthony`: build on the box, `compose up`, health on `127.0.0.1:<port><health_path>` |
 | `cert` | acme.sh, Let's Encrypt, **Porkbun DNS-01**, every custom domain (+ www), into `/etc/nginx/ssl/<site>/`; issued before DNS moves so there is no TLS gap |
-| `vhost` | nginx server block -> `127.0.0.1:<port>` |
+| `vhost` | nginx server block -> `127.0.0.1:<port>`, plus the site's maintenance page (below). Takes several sites or `--all`; `--dry-run` diffs the rendered vhost against the live one |
 | `verify` | curl each domain `--resolve`d to dev2; `--public` after the flip |
 | `refresh-db` | (kind `pg`) re-copies the database seconds before the flip and restarts the app, so writes that landed on Railway during setup are not lost |
 | `dns` | Porkbun: ALIAS/CNAME to Railway removed, `A -> 23.95.228.174` for every domain, `_railway-verify` TXT removed; the zone is backed up as JSON first |
@@ -41,6 +41,7 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 
 | `firewall` | re-applies the data-port allowlist (5432 + every Supabase stack's db port) for dev1, loopback and all Docker pools |
 | `box-tune` | sshd MaxStartups/MaxSessions for parallel deploys |
+| `limits` | memory ceilings on every container of a site, live (below). `<site>...` or `--all`, `--dry-run`, `--no-recreate` |
 
 Image-only Railway services (a stock image plus a start command, no repo) are
 supported through `sites.d`: `{"image": "node:24-alpine", "start_command": "..."}`;
@@ -72,6 +73,48 @@ deploy account has no GitHub credential.
 
 Ports are allocated once in `sites.json` from 3200 upwards (3010 nichedb, 3020
 rssamplifier, 3100 crawlproof predate the kit). nginx is the only public face.
+
+## Memory limits
+
+Every container the kit renders carries `mem_limit` with `memswap_limit` equal to it
+(it cannot hide in swap) and keeps `restart: unless-stopped`, so a runaway is
+OOM-killed and restarted on its own instead of pushing the box into swap until
+earlyoom picks a victim (it used to pick Postgres). Node services also get
+`NODE_OPTIONS=--max-old-space-size=<75% of the limit>` so V8 collects harder before
+the kernel steps in; a service whose env file or image already sets
+`--max-old-space-size` keeps its own.
+
+- Default: `1g` for the app and every companion; Redis gets `maxmemory x 1.5`
+  (an AOF rewrite forks), at least `1g`.
+- `sites.d`: `"mem_limit": "2g"` (every app/companion service), `"mem_limits":
+  {"worker": "3g", "redis": "2g"}` (per service, wins), `"node_heap_mb": 768` or
+  `{"web": 0, "poller": 1024}` (0 = leave NODE_OPTIONS to the app). Set a smaller
+  heap where several Node processes share one container (nightcell7, bufferoverride).
+- `dev2-site limits <site>... | --all` applies it to what is running: edits only the
+  live `docker-compose.app.yml` (backed up as `docker-compose.app.bak-NNN.yml`, every
+  other line kept, idempotent), `docker update --memory --memory-swap` on the running
+  containers (no restart), then, for kit-rendered files only, `compose up -d
+  --no-build` so the NODE_OPTIONS line reaches the containers. The three sites that
+  predate the kit (nichedb.dev, rssamplifier.com, crawlproof.com; their sites.d files
+  carry only memory keys) get the file edit and `docker update`; their NODE_OPTIONS
+  arrives with their next deploy. Per-app Supabase stacks and the shared `supabase-db`
+  are deliberately not limited: an OOM kill of Postgres is crash recovery for every
+  app on it.
+
+## Maintenance page
+
+A deploy recreates the container, and for those seconds nginx gets "connection
+refused" and would answer with its own bare 502. The vhost sends nginx's 502/503/504
+to `/__maintenance.html`, an `internal` location over
+`/var/www/maintenance/<site>/`, answered as `503` with `Retry-After: 30` and
+`Cache-Control: no-store`. `proxy_intercept_errors` stays off, so a 5xx the app sends
+itself (an API's JSON error) passes through unchanged. The page is one self-contained
+HTML file (no external requests, light and dark, reloads every 15 s) rendered by
+`vhost` from `templates/maintenance.html`: name from the live site's `og:site_name` /
+`application-name`, accent from `theme-color` (near-white or near-black ignored), the
+icon inlined as a data: URI when it is under 48 KB, else a text wordmark of the
+domain. `sites.d` `"maintenance": {"name": ..., "color": ..., "icon": "/logo.svg" | false}`
+overrides. If the site does not answer at render time an existing page is kept.
 
 ## Per-site overrides
 

@@ -1,0 +1,4 @@
+{
+ "mem_limit": "3g",
+ "mem_note": "2026-10-01: rembg model loads peak at 1.25 GB"
+}

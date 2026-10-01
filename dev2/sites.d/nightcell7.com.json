@@ -1,4 +1,10 @@
 {
- "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"],
- "db_sslparams": "sslmode=no-verify"
+ "env_remove": [
+  "TURSO_DATABASE_URL",
+  "TURSO_AUTH_TOKEN"
+ ],
+ "db_sslparams": "sslmode=no-verify",
+ "mem_limit": "1536m",
+ "node_heap_mb": 512,
+ "mem_note": "six node services in one container (start-all.mjs)"
 }

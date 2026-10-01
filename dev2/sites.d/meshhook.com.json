@@ -5,5 +5,7 @@
  "env_remove": [
   "TURSO_DATABASE_URL",
   "TURSO_AUTH_TOKEN"
- ]
+ ],
+ "node_heap_mb": 384,
+ "mem_note": "three node processes in one container"
 }

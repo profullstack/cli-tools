@@ -10,5 +10,8 @@
   "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.brisk.news"
- }
+ },
+ "mem_limit": "3g",
+ "node_heap_mb": 1536,
+ "mem_note": "2026-10-01: ~1 GB steady (apps/notify ~900 MB) beside next-server"
 }

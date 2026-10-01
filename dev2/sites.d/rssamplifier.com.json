@@ -1,0 +1,11 @@
+{
+ "mem_limits": {
+  "web": "6g",
+  "poller": "3g"
+ },
+ "node_heap_mb": {
+  "web": 0,
+  "poller": 1024
+ },
+ "mem_note": "predates the kit; web budgets 4 GB itself (image NODE_OPTIONS 4096, 4 workers x 1024); poller runs node + rsshub"
+}

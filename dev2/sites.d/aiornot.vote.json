@@ -1,1 +1,1 @@
-{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+{"branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"], "mem_limit": "2g", "node_heap_mb": 1024, "mem_note": "2026-10-01: next + media daemon, 530 MB steady"}

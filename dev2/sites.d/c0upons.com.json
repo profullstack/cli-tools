@@ -1,1 +1,1 @@
-{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "SQLITECLOUD_URL"] }
+{"branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN", "SQLITECLOUD_URL"], "mem_limit": "2g", "mem_note": "2026-10-01: 530 MB steady, 910 MB peak"}

@@ -1,1 +1,1 @@
-{ "branch": "main", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+{"branch": "main", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"], "mem_limit": "1536m", "node_heap_mb": 384, "mem_note": "five node services in one container"}

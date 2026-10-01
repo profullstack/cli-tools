@@ -13,5 +13,7 @@
   "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
   "SUPABASE_URL": "https://supabase.qaaas.dev",
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.qaaas.dev"
- }
+ },
+ "node_heap_mb": 384,
+ "mem_note": "next + worker + redis in one 1g container"
 }
