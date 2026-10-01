@@ -18,9 +18,29 @@
 #   SUBNET GATEWAY                          172.31.N.0/24 and .1
 #   SMTP_PASS SMTP_SENDER SMTP_ADMIN        optional (Resend)
 #   SUPABASE_REF    self-hosted/v0.8.2
+#   DROP_SERVICES   optional services left out of the stack (default: studio meta imgproxy supavisor)
+#   MODE            full (default: set up / repair the stack) | services (only re-render the overlay
+#                   and apply it: drop or restore optional services on a running stack)
+#   ALLOW_RECREATE  MODE=services: services (never db) that may be recreated by the apply
+#   DRY_RUN=1       MODE=services: show what would change, touch nothing
+#
+# Lean stacks. The apps on dev2 talk to Supabase through the gateway (auth, rest,
+# realtime, storage, functions) or straight to db. Studio (dashboard), meta
+# (postgres-meta, studio's backend, /pg/), imgproxy (storage image transforms,
+# /storage/v1/render/) and supavisor (pooler, loopback only) cost ~300 MiB per stack
+# and nothing used them (measured 2026-10-01), so they are dropped unless the site's
+# sites.d lists them in "keep_services". Dropping a service is a `!reset null` in the
+# overlay; depends_on and profiles are not part of compose's config hash, so the
+# remaining containers are not recreated. storage's ENABLE_IMAGE_TRANSFORMATION/
+# IMGPROXY_URL are left alone on purpose (changing them recreates storage); without
+# imgproxy a /render/ request fails instead of transforming.
 set -euo pipefail
 
 : "${SITE:?}" "${SLUG:?}" "${ROOT:?}" "${STUDIO_DOMAIN:?}" "${SITE_URL:?}" "${API_PORT:?}" "${DB_PORT:?}" "${POOLER_PORT:?}" "${SUBNET:?}" "${GATEWAY:?}"
+OPTIONAL_SERVICES="studio meta imgproxy supavisor"
+DROP_SERVICES=${DROP_SERVICES-$OPTIONAL_SERVICES}
+MODE=${MODE:-full}
+for d in $DROP_SERVICES; do case " $OPTIONAL_SERVICES " in *" $d "*) ;; *) printf 'ERROR: %s is not optional (only: %s)\n' "$d" "$OPTIONAL_SERVICES" >&2; exit 1;; esac; done
 SUPABASE_REF=${SUPABASE_REF:-self-hosted/v0.8.2}
 PROJECT=supabase
 DIR="$ROOT/$PROJECT"
@@ -31,12 +51,131 @@ ALLOW_IPS=${ALLOW_IPS:-67.205.189.229}
 log() { printf '\n===> %s\n' "$*" >&2; }
 warn() { printf 'WARNING: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+dropped() { case " $DROP_SERVICES " in *" $1 "*) return 0;; esac; return 1; }
+# <name>.bak-NNN.<ext> beside the original (a dotfile without an extension: .env.bak-NNN)
+backup_ext() { local f=$1 d b stem ext n=1; [ -e "$f" ] || return 0; d=$(dirname "$f"); b=$(basename "$f")
+  case "$b" in .*.*|[!.]*.*) stem=${b%.*}; ext=.${b##*.};; *) stem=$b; ext=;; esac
+  while [ -e "$d/$stem.bak-$(printf %03d $n)$ext" ]; do n=$((n+1)); done; cp -a "$f" "$d/$stem.bak-$(printf %03d $n)$ext"; echo "$d/$stem.bak-$(printf %03d $n)$ext"; }
 backup() { local f=$1 n=1; [ -e "$f" ] || return 0; while [ -e "$f.bak-$(printf %03d $n)" ]; do n=$((n+1)); done; cp -a "$f" "$f.bak-$(printf %03d $n)"; }
 set_env() { local k=$1 v=$2; if grep -q "^$k=" "$DIR/.env"; then awk -v k="$k" -v v="$v" 'BEGIN{FS="="} $1==k {print k "=" v; next} {print}' "$DIR/.env" > "$DIR/.env.tmp" && mv "$DIR/.env.tmp" "$DIR/.env"; else printf '%s=%s\n' "$k" "$v" >> "$DIR/.env"; fi; }
 get_env() { grep "^$1=" "$DIR/.env" | head -n1 | cut -d= -f2-; }
 compose() { (cd "$DIR" && docker compose "$@"); }
 DBC="$SLUG-supabase-db"
 sql_admin() { docker exec -i "$DBC" psql -U supabase_admin -h localhost -d postgres -v ON_ERROR_STOP=1 -X -q -At "$@"; }
+
+# Lines the lean profile owns, one per line and tagged "# lean:" so a re-apply can strip them.
+reset_line() { echo "  $1: !reset null   # lean: not used here; list it in sites.d keep_services to restore"; }
+lean_lines() {
+  case $1 in
+    api-gw)  dropped studio && echo "    depends_on: !reset {}   # lean: the base waits for a healthy studio" ;;
+    storage) dropped imgproxy && echo "    depends_on: !override {db: {condition: service_healthy}, rest: {condition: service_started}}   # lean: no imgproxy" ;;
+  esac
+  return 0
+}
+
+# The overlay for a new stack: own project name, container names, ports, subnet; optional services dropped.
+render_overlay() {
+  echo "# $SITE: managed by cli-tools dev2/templates/supabase-stack.sh"
+  echo "name: $SLUG-supabase"
+  echo "services:"
+  for svc in studio api-gw auth rest realtime storage imgproxy meta functions db supavisor; do
+    if dropped "$svc"; then reset_line "$svc"; continue; fi
+    echo "  $svc:"
+    lean_lines "$svc"
+    echo "    container_name: $SLUG-supabase-$svc"
+    case $svc in
+      realtime) echo "    networks:"; echo "      default:"; echo "        aliases: [realtime-dev.supabase-realtime, realtime]" ;;
+      api-gw)   echo "    networks:"; echo "      default:"; echo "        aliases: [envoy, kong]"; echo "    ports: !override"; echo "      - \"127.0.0.1:${API_PORT}:8000/tcp\"" ;;
+      supavisor) echo "    ports: !override"; echo "      - \"127.0.0.1:${POOLER_PORT}:6543\"" ;;
+      storage)  echo "    environment:"; echo "      FILE_SIZE_LIMIT: 5368709120" ;;   # the base file pins 50 MiB; buckets declare up to GiBs
+      functions) echo "    env_file:"; echo "      - .env"; echo "      - ./volumes/functions/secrets.env" ;;   # cloud function secrets (supabase-functions)
+      db) echo "    shm_size: 512m"; echo "    ports: !override"; echo "      - \"${DB_PORT}:5432\""; echo "    volumes:"
+          echo "      - ./volumes/$SLUG/$SLUG.conf:/etc/postgresql-custom/conf.d/zz-$SLUG.conf:ro,z"
+          echo "      - ./volumes/$SLUG/pg_hba.conf:/etc/$SLUG/pg_hba.conf:ro,z"
+          echo "      - ./volumes/$SLUG/tls:/etc/$SLUG/tls:ro,z" ;;
+    esac
+  done
+  echo "networks:"
+  echo "  default:"
+  echo "    ipam:"
+  echo "      config:"
+  echo "        - subnet: $SUBNET"
+  echo "          gateway: $GATEWAY"
+}
+
+# The live overlay with the service set applied and NOTHING else changed: a dropped
+# service's block becomes `!reset null`, a restored one gets the template's block, every
+# other block is kept byte for byte (stacks predate later template additions, and
+# re-rendering them would recreate their containers), apart from the "# lean:" lines.
+lean_overlay() {
+  local live=$1 tmpd svc
+  tmpd=$(mktemp -d)
+  awk -v d="$tmpd" '
+    BEGIN { out = d "/00-head"; insvc = 0 }
+    /^services:/ { print > out; insvc = 1; next }
+    insvc && /^  [a-z][a-z0-9_-]*:/ { n = $1; sub(/:.*/, "", n); out = d "/svc-" n; print n >> (d "/order"); print > out; next }
+    insvc && /^[^ #]/ { insvc = 0; out = d "/zz-tail" }
+    { print > out }' "$live"
+  DROP_SERVICES='' render_overlay > "$tmpd/full"
+  cat "$tmpd/00-head"
+  while read -r svc; do
+    if dropped "$svc"; then reset_line "$svc"; continue; fi
+    if head -n1 "$tmpd/svc-$svc" | grep -q '!reset'; then   # restored: the template's block
+      awk -v s="  $svc:" '$0 == s { on = 1; print; next } on && /^(  [a-z]|[a-z])/ { exit } on' "$tmpd/full" > "$tmpd/blk"
+    else
+      grep -v '# lean:' "$tmpd/svc-$svc" > "$tmpd/blk" || true
+    fi
+    head -n1 "$tmpd/blk"; lean_lines "$svc"; tail -n +2 "$tmpd/blk"
+  done < "$tmpd/order"
+  [ -f "$tmpd/zz-tail" ] && cat "$tmpd/zz-tail"
+  rm -rf "$tmpd"
+}
+
+# ------------------------------------------- MODE=services: apply the overlay only
+# Apply the service set to a RUNNING stack's own overlay without touching anything
+# else (.env, postgres config, roles, firewall). Gate: every remaining service's
+# new config hash must equal its running container's, so `up` only removes the
+# dropped services (or creates restored ones). db is never recreated here.
+if [ "$MODE" = services ]; then
+  [ -f "$DIR/.env" ] && [ -f "$DIR/docker-compose.$SLUG.yml" ] || die "no stack at $DIR; run the full supabase-stack first"
+  cd "$DIR"
+  new="$DIR/.docker-compose.$SLUG.yml.new"; (umask 027; lean_overlay "$DIR/docker-compose.$SLUG.yml" > "$new")
+  # every file COMPOSE_FILE lists, with this overlay swapped for the new one
+  fargs=(); IFS=: read -ra cfs <<< "$(get_env COMPOSE_FILE)"; [ ${#cfs[@]} -gt 0 ] || die "no COMPOSE_FILE in $DIR/.env"
+  for f in "${cfs[@]}"; do [ "$f" = "docker-compose.$SLUG.yml" ] && f=$new; fargs+=(-f "$f"); done
+  hashes=$(docker compose "${fargs[@]}" config --hash '*') || { rm -f "$new"; die "the new overlay does not render"; }
+  services=$(docker compose "${fargs[@]}" config --services)
+  log "Plan for $SLUG-supabase (dropping: ${DROP_SERVICES:-none})"
+  bad=; recreate=
+  while read -r svc h; do
+    [ -n "$svc" ] || continue
+    cid=$(docker ps -aq --filter "label=com.docker.compose.project=$SLUG-supabase" --filter "label=com.docker.compose.service=$svc" | head -n1)
+    if [ -z "$cid" ]; then echo "  create   $svc"; continue; fi
+    cur=$(docker inspect -f '{{index .Config.Labels "com.docker.compose.config-hash"}}' "$cid")
+    if [ "$cur" = "$h" ]; then echo "  keep     $svc (config unchanged)"
+    elif [ "$svc" = db ]; then echo "  RECREATE db  <- refused"; bad=1
+    else case " ${ALLOW_RECREATE:-} " in *" $svc "*) echo "  recreate $svc (allowed)"; recreate="$recreate $svc";; *) echo "  RECREATE $svc  <- refused (ALLOW_RECREATE)"; bad=1;; esac; fi
+  done <<< "$hashes"
+  for c in $(docker ps -a --filter "label=com.docker.compose.project=$SLUG-supabase" --format '{{.Label "com.docker.compose.service"}}' | sort -u); do
+    grep -qx "$c" <<< "$services" || echo "  remove   $c"
+  done
+  if [ -n "$bad" ]; then rm -f "$new"; die "applying would recreate a service whose config changed; nothing was changed (fix the drift first, or ALLOW_RECREATE for non-db services)"; fi
+  if [ "${DRY_RUN:-0}" = 1 ]; then rm -f "$new"; log "Dry run: nothing changed"; exit 0; fi
+  before=$(docker ps -q --filter "label=com.docker.compose.project=$SLUG-supabase" --filter "label=com.docker.compose.service=db")
+  log "Backups"; backup_ext "$DIR/.env"; backup_ext "$DIR/docker-compose.$SLUG.yml"
+  mv -f "$new" "$DIR/docker-compose.$SLUG.yml"; chmod 640 "$DIR/docker-compose.$SLUG.yml"
+  log "docker compose up -d --remove-orphans"
+  out=$(compose up -d --remove-orphans --pull never --no-build 2>&1) || { printf '%s\n' "$out" | tail -n 20 >&2; die "docker compose up failed; previous overlay is the newest .bak beside it"; }
+  printf '%s\n' "$out" | tail -n 20
+  after=$(docker ps -q --filter "label=com.docker.compose.project=$SLUG-supabase" --filter "label=com.docker.compose.service=db")
+  [ "$before" = "$after" ] || warn "db container changed ($before -> $after)"
+  for i in $(seq 1 30); do code=$(curl -s -o /dev/null -w '%{http_code}' -H "apikey: $(get_env ANON_KEY)" "http://127.0.0.1:$API_PORT/rest/v1/" || true); [ "$code" = 200 ] && break; sleep 2; done
+  echo "gateway http://127.0.0.1:$API_PORT/rest/v1/ -> $code"
+  docker ps -a --filter "label=com.docker.compose.project=$SLUG-supabase" --format '  {{.Names}} {{.Status}}' | sort
+  [ "$code" = 200 ] || die "gateway does not answer 200 after the apply"
+  log "Done: $SLUG-supabase services applied"
+  exit 0
+fi
 
 # ------------------------------------------------------------ 1. the files
 [ -d "$ROOT" ] || install -d -m 2750 -o root -g root "$ROOT"  # never re-chown an existing site root (CI deploys as the deploy user)
@@ -126,39 +265,14 @@ CONF
 chmod 755 "$V" "$V/tls"; chmod 644 "$V/pg_hba.conf" "$V/$SLUG.conf" "$V/tls/server.crt"; chmod 600 "$V/tls/server.key"
 chown "$PG_UID:$PG_GID" "$V/tls/server.key" "$V/tls/server.crt"
 
-log "Overlay docker-compose.$SLUG.yml (own project name, container names, ports, subnet)"
-{
-  echo "# $SITE: managed by cli-tools dev2/templates/supabase-stack.sh"
-  echo "name: $SLUG-supabase"
-  echo "services:"
-  for svc in studio api-gw auth rest realtime storage imgproxy meta functions db supavisor; do
-    echo "  $svc:"
-    echo "    container_name: $SLUG-supabase-$svc"
-    case $svc in
-      realtime) echo "    networks:"; echo "      default:"; echo "        aliases: [realtime-dev.supabase-realtime, realtime]" ;;
-      api-gw)   echo "    networks:"; echo "      default:"; echo "        aliases: [envoy, kong]"; echo "    ports: !override"; echo "      - \"127.0.0.1:${API_PORT}:8000/tcp\"" ;;
-      supavisor) echo "    ports: !override"; echo "      - \"127.0.0.1:${POOLER_PORT}:6543\"" ;;
-      storage)  echo "    environment:"; echo "      FILE_SIZE_LIMIT: 5368709120" ;;   # the base file pins 50 MiB; buckets declare up to GiBs
-      functions) echo "    env_file:"; echo "      - .env"; echo "      - ./volumes/functions/secrets.env" ;;   # cloud function secrets (supabase-functions)
-      db) echo "    shm_size: 512m"; echo "    ports: !override"; echo "      - \"${DB_PORT}:5432\""; echo "    volumes:"
-          echo "      - ./volumes/$SLUG/$SLUG.conf:/etc/postgresql-custom/conf.d/zz-$SLUG.conf:ro,z"
-          echo "      - ./volumes/$SLUG/pg_hba.conf:/etc/$SLUG/pg_hba.conf:ro,z"
-          echo "      - ./volumes/$SLUG/tls:/etc/$SLUG/tls:ro,z" ;;
-    esac
-  done
-  echo "networks:"
-  echo "  default:"
-  echo "    ipam:"
-  echo "      config:"
-  echo "        - subnet: $SUBNET"
-  echo "          gateway: $GATEWAY"
-} > "$DIR/docker-compose.$SLUG.yml"
+log "Overlay docker-compose.$SLUG.yml (own project name, container names, ports, subnet; dropped: ${DROP_SERVICES:-none})"
+render_overlay > "$DIR/docker-compose.$SLUG.yml"
 
 [ -f "$DIR/volumes/functions/secrets.env" ] || { install -d "$DIR/volumes/functions"; (umask 077; : > "$DIR/volumes/functions/secrets.env"); }
 
 # ---------------------------------------------------------------- 3. start
 log "Starting $SLUG-supabase"
-compose up -d --wait 2>/dev/null || compose up -d
+compose up -d --remove-orphans --wait 2>/dev/null || compose up -d --remove-orphans
 compose restart db >/dev/null
 for i in $(seq 1 90); do docker exec "$DBC" pg_isready -U postgres -h localhost >/dev/null 2>&1 && break; sleep 2; done
 docker exec "$DBC" pg_isready -U postgres -h localhost >/dev/null || die "$DBC never became ready"
@@ -197,7 +311,7 @@ end $$;
 grant usage on schema public to anon, authenticated, service_role;
 grant usage on schema storage to anon, authenticated, service_role;
 SQL
-compose restart auth rest storage realtime supavisor >/dev/null 2>&1 || true
+compose restart auth rest storage realtime $(dropped supavisor || echo supavisor) >/dev/null 2>&1 || true
 
 log "Extensions"
 sql_admin <<'SQL'
@@ -237,7 +351,7 @@ SELFHOST_POSTGRES_PASSWORD=${pw}
 SELFHOST_DATABASE_URL=postgres://postgres:${pw}@${DB_DOMAIN}:${DB_PORT}/postgres?sslmode=require
 SELFHOST_DB_PORT=${DB_PORT}
 SELFHOST_API_PORT=${API_PORT}
-SELFHOST_POOLER_PORT=${POOLER_PORT}
+SELFHOST_POOLER_PORT=$(dropped supavisor && echo none || echo "${POOLER_PORT}")
 SELFHOST_DASHBOARD_USERNAME=$(get_env DASHBOARD_USERNAME)
 SELFHOST_DASHBOARD_PASSWORD=$(get_env DASHBOARD_PASSWORD)
 ENV

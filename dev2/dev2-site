@@ -18,6 +18,9 @@ dev2-site: move a Railway-hosted site onto dev2 and keep it deploying on merge.
     dev2-site merge <site>             merge the scaffold PR (CI then deploys the default branch)
     dev2-site migrate <site>           all of the above, in order, resumable
     dev2-site retire <site> --yes      delete the Railway services (only after migrate)
+    dev2-site supabase-services <site> [--dry-run]
+                                       drop (or restore) a Supabase stack's optional services
+                                       (studio meta imgproxy supavisor; sites.d keep_services)
 
 Run from dev1. dev2 is production: this tool is the only thing that writes to it,
 and everything it writes is derived from Railway + these templates, so a re-run
@@ -387,7 +390,7 @@ def with_overrides(s):
     so parallel migrations never edit a shared file. Keys are the entry's keys
     (port, health_path, start_command, companion_commands, env_overrides, pg_service, proxies,
     nginx_locations (raw location blocks, __APP_PORT__ substituted, placed before `location /`),
-    db, db_host, infra, branch, max_body, notes)."""
+    db, db_host, infra, branch, max_body, notes, keep_services (Supabase optional services to run))."""
     p = os.path.join(SITES_D, f"{s['site']}.json")
     if os.path.exists(p):
         s = dict(s); s.update(json.load(open(p)))
@@ -1249,6 +1252,23 @@ def sb_ports(s):
 
 def sb_slug(s): return re.sub(r"[^a-z0-9]+", "-", s["site"].lower()).strip("-")
 
+# Services of a per-site Supabase stack that the apps do not use: dashboard, its
+# postgres-meta backend, the storage image-transform proxy and the pooler. Left out
+# of every stack unless sites.d/<site>.json says {"keep_services": ["imgproxy", ...]}.
+SB_OPTIONAL = ("studio", "meta", "imgproxy", "supavisor")
+
+def sb_drop_services(s):
+    keep = s.get("keep_services") or []
+    unknown = [k for k in keep if k not in SB_OPTIONAL]
+    if unknown: die(f"sites.d/{s['site']}.json keep_services: {unknown} are not optional services ({', '.join(SB_OPTIONAL)}); the rest always run")
+    return [x for x in SB_OPTIONAL if x not in keep]
+
+def sb_stack_env(s):
+    slug, ports = sb_slug(s), sb_ports(s)
+    return (f"SITE={s['site']} SLUG={slug} ROOT={WWW}/{s['site']} STUDIO_DOMAIN=supabase.{s['site']} SITE_URL=https://{s['site']} "
+            f"API_PORT={ports['api']} DB_PORT={ports['db']} POOLER_PORT={ports['pooler']} SUBNET={ports['subnet']} GATEWAY={ports['gateway']} "
+            f"DROP_SERVICES={shlex.quote(' '.join(sb_drop_services(s)))}")
+
 def sb_cloud(s, st):
     """Cloud project ref + db password + pooler host, from the app's Railway variables and the management API."""
     vars_ = site_variables(s)
@@ -1292,7 +1312,7 @@ def cmd_supabase_stack(args):
     smtp = vars_.get("RESEND_API_KEY") or smtp or ""
     ssh("root", "install -d -m 700 /root/dev2-kit")
     ssh_put(tmpl("supabase-stack.sh"), "/root/dev2-kit/supabase-stack.sh", "0700")
-    env = f"SITE={s['site']} SLUG={slug} ROOT={WWW}/{s['site']} STUDIO_DOMAIN={host} SITE_URL=https://{s['site']} API_PORT={ports['api']} DB_PORT={ports['db']} POOLER_PORT={ports['pooler']} SUBNET={ports['subnet']} GATEWAY={ports['gateway']} SMTP_PASS={shlex.quote(smtp)} EXTENSIONS={shlex.quote(' '.join(s.get('extensions') or []))}"
+    env = f"{sb_stack_env(s)} SMTP_PASS={shlex.quote(smtp)} EXTENSIONS={shlex.quote(' '.join(s.get('extensions') or []))}"
     out = ssh("root", f"env {env} bash /root/dev2-kit/supabase-stack.sh 2>&1", timeout=3600)
     print("\n".join(l for l in out.splitlines() if l.startswith("===>") or "gateway" in l or "WARNING" in l or "ERROR" in l))
     conn = ssh("root", f"cat {WWW}/{s['site']}/supabase/{slug}-connection.env")
@@ -1308,6 +1328,23 @@ def cmd_supabase_stack(args):
     with open(sd_path, "w") as f: json.dump(sd, f, indent=1); f.write("\n")
     mark(s["site"], "supabase-stack")
     log(f"Stack up. Next: `dev2-site cert {s['site']}` + `vhost` + `dns` (adds {host}), then supabase-pull / supabase-load / supabase-storage / supabase-cutover")
+
+def cmd_supabase_services(args):
+    """Apply the stack's service set (SB_OPTIONAL minus sites.d keep_services) to a RUNNING stack:
+    re-render only the compose overlay, refuse if any remaining container (db above all) would be
+    recreated, back up .env + overlay as <name>.bak-NNN.<ext>, then `up -d --remove-orphans`.
+    The gateway port, keys, container names and networks the apps use do not change."""
+    s = site(args.site)
+    if s["db"] != "supabase": die(f"{s['site']} db kind is {s['db']}")
+    drop = sb_drop_services(s)
+    log(f"{sb_slug(s)}-supabase: dropping {' '.join(drop) or 'nothing'}{' (dry run)' if args.dry_run else ''}")
+    ssh("root", "install -d -m 700 /root/dev2-kit")
+    ssh_put(tmpl("supabase-stack.sh"), "/root/dev2-kit/supabase-stack.sh", "0700")
+    env = f"{sb_stack_env(s)} MODE=services DRY_RUN={'1' if args.dry_run else '0'} ALLOW_RECREATE={shlex.quote(' '.join(args.allow_recreate or []))}"
+    p = subprocess.run(SSH_BASE + [f"root@{DEV2_HOST}", f"env {env} bash /root/dev2-kit/supabase-stack.sh 2>&1"], text=True, capture_output=True, timeout=900)
+    print(p.stdout.rstrip())
+    if p.returncode != 0: die(f"supabase-services {s['site']} failed (exit {p.returncode}); see above")
+    if not args.dry_run: mark(s["site"], "supabase-services", sb_dropped=drop)
 
 def cmd_supabase_pull(args):
     global args_yes_global; args_yes_global = getattr(args, "reset_password", False)
@@ -1483,6 +1520,9 @@ def main():
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
     for name, fn in (("supabase-stack", cmd_supabase_stack), ("supabase-cutover", cmd_supabase_cutover), ("supabase-functions", cmd_supabase_functions)):
         p = sub.add_parser(name); p.add_argument("site"); p.set_defaults(fn=fn)
+    p = sub.add_parser("supabase-services", help="drop/restore a stack's optional services (sites.d keep_services)"); p.add_argument("site")
+    p.add_argument("--dry-run", action="store_true", help="print the plan, change nothing")
+    p.add_argument("--allow-recreate", nargs="*", metavar="SVC", help="non-db services that may be recreated if their config drifted"); p.set_defaults(fn=cmd_supabase_services)
     p = sub.add_parser("supabase-pull"); p.add_argument("site"); p.add_argument("--reset-password", action="store_true"); p.set_defaults(fn=cmd_supabase_pull)
     p = sub.add_parser("supabase-load"); p.add_argument("site"); p.add_argument("--post-only", action="store_true"); p.add_argument("--reset", action="store_true", help="drop the earlier load first (fresh dump before cutover)"); p.set_defaults(fn=cmd_supabase_load)
     p = sub.add_parser("supabase-storage"); p.add_argument("site"); p.add_argument("--concurrency", type=int, default=8); p.set_defaults(fn=cmd_supabase_storage)
