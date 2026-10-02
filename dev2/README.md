@@ -23,7 +23,7 @@ dev2-site migrate <site> --yes   the whole move, resumable; each step below is a
 | `db` | (kind `pg`) database in the shared Supabase cluster on dev2 (one database per app, role `postgres`, like nichedb and rssamplifier); `pg_dump -Fc` inside the Railway Postgres container over `ssh.railway.com`, streamed to dev2, `pg_restore`, extensions pre-created, row counts compared |
 | `provision` | `/home/anthony/www/<site>/`: `app.env` rendered from Railway's variables (RAILWAY_* dropped, DATABASE_URL / PG* / REDIS_URL re-pointed), one `<worker>.env` per companion service, `deploy.env`, `docker-compose.app.yml`, `deploy-app.sh`; one deploy key per repo authorised for `anthony`; `DEV2_*` secrets set on the repo |
 | `volumes` | Railway volume contents tar-streamed into `volumes/<name>`, bind-mounted at the same path |
-| `deploy` | `deploy-app.sh <ref>` as `anthony`: build on the box, `compose up`, health on `127.0.0.1:<port><health_path>` |
+| `deploy` | `deploy-app.sh <ref>` as `anthony`: build on the box, `compose up`, health on `127.0.0.1:<port><health_path>`. A failed build leaves the running stack alone; any failure after that (compose up/down, health) re-tags and restarts the images that were running |
 | `cert` | acme.sh, Let's Encrypt, **Porkbun DNS-01**, every custom domain (+ www), into `/etc/nginx/ssl/<site>/`; issued before DNS moves so there is no TLS gap |
 | `vhost` | nginx server block -> `127.0.0.1:<port>`, plus the site's maintenance page (below). Takes several sites or `--all`; `--dry-run` diffs the rendered vhost against the live one |
 | `verify` | curl each domain `--resolve`d to dev2; `--public` after the flip |
