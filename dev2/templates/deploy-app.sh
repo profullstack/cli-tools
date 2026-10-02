@@ -30,6 +30,51 @@ die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 compose() { (cd "$ROOT" && docker compose -f docker-compose.app.yml --env-file "$ROOT/deploy.env" "$@"); }
 
+# Rollback state. snapshot() records the image each running service container was
+# started from (and pins it as <name>:rollback so a prune cannot take it); once the
+# running stack is touched, any failure (the ERR trap, or a failed health check)
+# re-tags those images and brings the old stack back up without building.
+SNAP=()
+CURRENT=""
+snapshot() {
+  local svc cid id ref
+  for svc in $BUILD_SERVICES; do
+    cid=$(compose ps -q "$svc" 2>/dev/null | head -n1) || true
+    [ -n "$cid" ] || continue
+    id=$(docker inspect --format '{{.Image}}' "$cid" 2>/dev/null) || continue
+    ref=$(docker inspect --format '{{.Config.Image}}' "$cid" 2>/dev/null) || continue
+    case $ref in *@*) continue ;; *:*) ;; *) ref="$ref:latest" ;; esac
+    docker tag "$id" "${ref%:*}:rollback" >/dev/null 2>&1 || true
+    SNAP+=("$id $ref")
+  done
+}
+
+restore() {
+  trap - ERR
+  set +e
+  if [ "${#SNAP[@]}" -eq 0 ]; then log "Nothing to roll back to (no running containers before this deploy)"; return 1; fi
+  log "Rolling back to the previous image(s)"
+  local p
+  for p in "${SNAP[@]}"; do docker tag "${p%% *}" "${p#* }"; done
+  [ -z "$CURRENT" ] || git -C "$APP_DIR" checkout -q --detach "$CURRENT"
+  compose up -d --no-build --remove-orphans
+  if health; then log "Restored the previous deploy"; return 0; fi
+  log "ROLLBACK ALSO UNHEALTHY - site is down"
+  return 1
+}
+
+on_err() {
+  local rc=$? line=$1
+  # errtrace runs this inside compose()'s subshell and $(...) too; leave the
+  # rollback to the top-level shell, which sees the same failure next.
+  [ "$BASH_SUBSHELL" = 0 ] || exit "$rc"
+  trap - ERR
+  log "Failed (exit $rc, line $line) after the running stack was touched"
+  compose logs --tail 60 || true
+  restore || true
+  exit 1
+}
+
 health() {
   local i
   for i in $(seq 1 "$((HEALTH_TIMEOUT / 5))"); do
@@ -64,18 +109,21 @@ TARGET=${1:?usage: deploy-app.sh <git-sha|ref> | --rollback | --status}
 if [ "${IMAGE_ONLY:-0}" = 1 ]; then
   # A stock image with Railway's start command: nothing to clone or build.
   log "Pulling image and starting"
+  snapshot
   compose pull -q || true
+  set -E; trap 'on_err $LINENO' ERR
   compose up -d --remove-orphans
   if health; then
     log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
     { echo "DEPLOYED_SHA=image"; echo "PREVIOUS_SHA="; echo "DEPLOYED_AT=$(date -u +%FT%TZ)"; } > "$STATE"
     compose ps; exit 0
   fi
+  trap - ERR
   compose logs --tail 60 || true
+  restore || true
   die "image-only deploy failed health check"
 fi
 
-CURRENT=""
 [ -d "$APP_DIR/.git" ] && CURRENT=$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
 if [ ! -d "$APP_DIR/.git" ]; then
@@ -112,23 +160,32 @@ while IFS= read -r line || [ -n "$line" ]; do
       export "$key=$val" ;;
   esac
 done < "$ROOT/app.env"
+# A failed build exits here (set -e) before anything running is touched: `compose
+# build` only moves the :latest tags when it succeeds.
 # shellcheck disable=SC2086
-compose build $BUILD_SERVICES
+compose build $BUILD_SERVICES || die "build of $SHA failed; the running stack was not touched"
 
 # If the compose network's subnet changed (the kit moved sites to explicit
 # 10.200.x.0/24 subnets), `up -d` recreates the network in place and Docker's
 # embedded DNS then answers SERVFAIL for service aliases like `redis` while
 # container names still resolve. A clean down/up avoids that.
-WANT_SUBNET=$(grep -oE 'subnet: [0-9./]+' "$ROOT/docker-compose.app.yml" | awk '{print $2}' | head -n1)
-APP_CID=$(compose ps -q app 2>/dev/null | head -n1)
+WANT_SUBNET=$(grep -oE 'subnet: [0-9./]+' "$ROOT/docker-compose.app.yml" | awk '{print $2}' | head -n1 || true)
+APP_CID=$(compose ps -q app 2>/dev/null | head -n1 || true)
+RECREATE=0
 if [ -n "$WANT_SUBNET" ] && [ -n "$APP_CID" ]; then
-  NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$APP_CID" 2>/dev/null | head -n1)
+  NET=$(docker inspect --format '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}' "$APP_CID" 2>/dev/null | head -n1 || true)
   HAVE_SUBNET=$(docker network inspect "$NET" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}' 2>/dev/null || true)
   if [ -n "$HAVE_SUBNET" ] && [ "$HAVE_SUBNET" != "$WANT_SUBNET" ]; then
     log "Network subnet changes ($HAVE_SUBNET -> $WANT_SUBNET): recreating the stack"
-    compose down --remove-orphans
+    RECREATE=1
   fi
 fi
+
+# From here on the running stack is touched: any failure rolls back to the images
+# it was running.
+snapshot
+set -E; trap 'on_err $LINENO' ERR
+[ "$RECREATE" = 0 ] || compose down --remove-orphans
 
 log "Starting"
 compose up -d --remove-orphans
@@ -152,6 +209,7 @@ if [ -n "$APP_CID" ]; then
 fi
 
 if health; then
+  trap - ERR
   log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
   {
     echo "DEPLOYED_SHA=$SHA"
@@ -160,14 +218,9 @@ if health; then
   } > "$STATE"
   compose ps
 else
+  trap - ERR
   log "UNHEALTHY after ${HEALTH_TIMEOUT}s - last 60 lines:"
   compose logs --tail 60 || true
-  if [ -n "$CURRENT" ] && [ "$CURRENT" != "$SHA" ]; then
-    log "Restoring $CURRENT"
-    git -C "$APP_DIR" checkout -q --detach "$CURRENT"
-    # shellcheck disable=SC2086
-    compose build $BUILD_SERVICES && compose up -d
-    health && log "Restored to $CURRENT" || log "ROLLBACK ALSO UNHEALTHY - site is down"
-  fi
+  restore || true
   die "deploy of $SHA failed health check"
 fi
