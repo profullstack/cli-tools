@@ -24,6 +24,7 @@ TypeScript, installed as executables on `PATH`.
 | [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`keywords`](#keywords) | The keywords and phrases a page repeats, ranked by count, from headless Chrome |
+| [`ftb`](#ftb) | Create and activate MyFTB accounts, business and personal, from the CA returns on disk |
 | [`statements`](#statements) | The PDF statements behind every SimpleFIN account, downloaded from each bank and filed by account and month |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
@@ -71,7 +72,7 @@ One thing here is not a `PATH` command and does not need Node:
   [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
-- **A Chrome or Chromium** — `wcag`, `keywords` and `statements` only. `CHROME_PATH` names one; otherwise
+- **A Chrome or Chromium** — `wcag`, `keywords`, `statements` and `ftb` only. `CHROME_PATH` names one; otherwise
   the usual binaries on `PATH` are tried, then the builds Puppeteer and
   Playwright keep under `~/.cache`. axe-core itself ships with this repo
 - **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
@@ -1442,6 +1443,48 @@ Stop words and bare numbers are never keywords. A single word needs 3 blocks
 and a phrase 2 to rank; on a page too short for that, everything is ranked.
 `--wait MS` (default 1000) gives a slow single-page app longer to render after
 load. Chrome is found the same way as for [`wcag`](#wcag).
+
+### `ftb`
+
+MyFTB accounts at the California Franchise Tax Board, business and personal,
+registered and activated from the returns already on disk. FTB has no API and
+no OAuth: an account is a browser form checked against a "shared secret" from
+a filed return, then a PIN that comes by US Mail. `ftb` does the finding and the
+form filling; the two things it leaves to a person are the ones only a person can
+do.
+
+```sh
+ftb secrets                                          # what each return can prove, best first
+ftb register business --email you@example.com --dry-run
+ftb register business --email you@example.com --declare
+ftb register personal --email you@example.com --declare
+ftb activate business --pin 4821                     # when the letter comes
+ftb status
+```
+
+- **Which form, which line.** `src/ftb-extract.py` (PyMuPDF) reads every PDF
+  under `--dir` (default `~/dottemplates/docs/taxes/years`): Form 100S line 20
+  "net income for tax purposes" and line 15 for a corporation, Form 540 line 17
+  "California AGI" plus filing status, name, SSN and address for a person. Only
+  the last five closed years count; newest first, line 20 before 15.
+- **The forms.** Headless Chrome, page by page, each control matched by its
+  field id first and its label second. A required field nothing matches stops
+  the run (or is asked for, in a terminal), so a reworded page is never
+  answered with a guess. Every page's fields, never its values, are appended to
+  `~/.local/share/cli-tools/ftb-pages.jsonl` for tuning the rules.
+- **What stays yours.** The penalty-of-perjury box is ticked only with
+  `--declare`, which is you saying the values are true. One shared secret is
+  sent per run and never retried: a "does not match" stops, and `ftb secrets`
+  lists what to try with `--year`/`--line`.
+- **Where the login goes.** A generated user name, a 24-character password and
+  three security answers go to the `ftb` project of the `profullstack` logicsrc
+  vault (its own project, so the push cannot drop another key) and to a 0600
+  state file.
+- **The PIN letter.** A myna hand-off card (`mynaposter.com/handoff/<id>`) with
+  the deadline (21 days) and the `ftb activate` command. It carries steps only,
+  never a PIN, password or SSN; `ftb activate` marks it done.
+
+Needs `python3` with PyMuPDF (`pip install pymupdf`) and Chrome.
 
 ### `statements`
 
