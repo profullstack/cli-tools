@@ -881,35 +881,6 @@
    "shared_repo": false,
    "port": 3275
   },
-  "feedback.profullstack.com": {
-   "site": "feedback.profullstack.com",
-   "project": "Profullstack, Inc.",
-   "project_id": "e12258c5-050a-462d-a54c-b4c98939fe6f",
-   "environment_id": "1070bfbd-cea8-4c0b-ae98-338694fcb11e",
-   "service": "feedback.profullstack.com",
-   "service_id": "949f4453-745c-47e1-9294-65600f34aafa",
-   "repo": "profullstack/feedback.profullstack.com",
-   "image": null,
-   "domains": [
-    "feedback.profullstack.com"
-   ],
-   "railway_domains": [
-    "feedbackprofullstackcom-production.up.railway.app"
-   ],
-   "db": "turso",
-   "db_kinds": [
-    "turso"
-   ],
-   "redis": false,
-   "volumes": [],
-   "port_var": null,
-   "companions": [],
-   "db_host": null,
-   "redis_host": null,
-   "infra": [],
-   "shared_repo": false,
-   "port": 3252
-  },
   "fleetsysops.com": {
    "site": "fleetsysops.com",
    "project": "fleetsysops.com",
