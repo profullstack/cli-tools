@@ -239,3 +239,15 @@ describe('the individual page as FTB serves it', () => {
     expect(decide(rules, field({ id: 'Agi', label: 'California adjusted gross income from line 17' }))?.action).toMatchObject({ value: '98765' });
   });
 });
+
+describe('phone verification', () => {
+  const text = field({ id: 'r_Phone_Delivery0', type: 'radio', label: 'Send me a text message' });
+  const call = field({ id: 'r_Phone_Delivery1', type: 'radio', label: 'Call me' });
+
+  it('picks text by default and call with --call', () => {
+    expect(decide(rulesFor(plan()), text)?.action).toEqual({ kind: 'check' });
+    expect(decide(rulesFor(plan()), call)).toBeNull();
+    expect(decide(rulesFor(plan({ call: true })), call)?.action).toEqual({ kind: 'check' });
+    expect(decide(rulesFor(plan({ call: true })), text)).toBeNull();
+  });
+});

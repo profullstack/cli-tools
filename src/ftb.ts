@@ -282,6 +282,8 @@ export interface Plan {
   declare: boolean;
   /** Ten digits; FTB texts a verification code to it during registration. */
   phone?: string | undefined;
+  /** Have FTB phone the code in rather than text it (a text can be throttled or lost). */
+  call?: boolean | undefined;
   /** Activation only. */
   pin?: string;
 }
@@ -373,9 +375,9 @@ export function rulesFor(plan: Plan): Rule[] {
     // The penalty-of-perjury statement: only ever the person's own.
     { name: 'declaration', label: /perjury|i declare|under penalty/i, types: ['checkbox'], act: () => ({ kind: 'declare' }) },
 
-    // Phone verification: a text, never a call (a call cannot be relayed).
+    // Phone verification: a text by default, a call with --call.
     { name: 'phone', label: /phone number/i, types: SUBMIT_TYPES, act: () => (plan.phone ? { kind: 'text', value: plan.phone } : null) },
-    { name: 'send a text', label: /send me a text|text message/i, types: ['radio'], act: () => ({ kind: 'check' }) },
+    { name: plan.call ? 'call me' : 'send a text', label: /send me a text|text message|call me/i, types: ['radio'], act: (f) => ((plan.call ? /call me/i : /text/i).test(f.label) ? { kind: 'check' } : null) },
     { name: 'foreign number', id: /^Phone_Foreign$/, act: () => null },
     { name: 'foreign address', id: /^Address_Foreign$|^Address_No(MailAddress|PostalCode)$/, act: () => null },
 

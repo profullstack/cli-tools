@@ -69,6 +69,7 @@ register options:
   --line 15|20         business: which 100S line is the net income (default 20)
   --amount=N           override the amount (a loss is --amount=-12345)
   --phone N            10 digits FTB texts a verification code to (required)
+  --call               have FTB phone the code in instead of texting it
 
 activate options:
   --pin N              the PIN from the letter (21 days from registration)
@@ -152,6 +153,12 @@ function postHandoff(role: Role, at: Date): string | null {
   return result.stdout.match(/https:\/\/\S+\/handoff\/\S+/)?.[0] ?? null;
 }
 
+/** The message on an FTB result page: its body text between the header and the footer. */
+function pageMessage(text: string): string {
+  const body = text.replace(/^.*?Franchise Tax Board\s*(e-Services)?/s, '').replace(/Back to top.*$|Copyright ©.*$/s, '').trim();
+  return body.slice(0, 600) || 'the information does not match';
+}
+
 // ---------------------------------------------------------------------------
 
 function formatSecrets(rows: Extracted[]): string {
@@ -179,7 +186,7 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
-    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault'],
+    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault', '--call'],
     string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
   });
   const [command, roleArg] = args.positional;
@@ -280,6 +287,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     security: {},
     declare: args.flags.has('--declare'),
     phone,
+    call: args.flags.has('--call'),
   };
 
   say(`Registering a ${role} MyFTB account as ${plan.username} <${email}>`);
@@ -295,7 +303,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       return 0;
     }
     if (result.outcome === 'rejected') {
-      throw new FtbError(`FTB said: ${result.page.errors.join(' ') || 'the information does not match'} (${result.page.url})\nNothing was retried. \`ftb secrets\` lists the other returns; pick one with --year/--line.`);
+      throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})\nNothing was retried. \`ftb secrets\` lists the other returns; pick one with --year/--line.`);
     }
     const at = new Date();
     const account: Account = {

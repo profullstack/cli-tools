@@ -236,12 +236,15 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
     let page = await readPage(session);
     logPage(options.log, page);
 
-    const outcome = outcomeOf(`${page.errors.join(' ')} ${page.errors.length ? '' : page.text}`);
-    if (outcome === 'rejected' || (page.errors.length && step > 0)) return { outcome: 'rejected', page };
+    // A wrong or late code leaves the code page up with an error: wait for the next code, do not end the run.
+    const codeRetry = page.errors.length > 0 && page.errors.every((e) => /code you entered/i.test(e)) && page.fields.some((f) => CODE_LABEL.test(f.label));
+    if (codeRetry) say(`  FTB: ${page.errors[0]}`);
+    const outcome = codeRetry ? 'continue' : outcomeOf(`${page.errors.join(' ')} ${page.errors.length ? '' : page.text}`);
+    if (outcome === 'rejected' || (page.errors.length && step > 0 && !codeRetry)) return { outcome: 'rejected', page };
     if (outcome !== 'continue') return { outcome, page };
 
     sameUrl = page.url === lastUrl ? sameUrl + 1 : 0;
-    if (sameUrl >= 2) throw new FtbError(`stuck on ${page.url}: the page did not move after Continue (see ${options.log})`);
+    if (sameUrl >= 2 && !codeRetry) throw new FtbError(`stuck on ${page.url}: the page did not move after Continue (see ${options.log})`);
     lastUrl = page.url;
     say(`  ${page.title.split('|')[1]?.trim() || page.title}  ${page.url}`);
 
