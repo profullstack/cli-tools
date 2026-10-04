@@ -1456,8 +1456,8 @@ do.
 ```sh
 ftb secrets                                          # what each return can prove, best first
 ftb register business --email you@example.com --dry-run
-ftb register business --email you@example.com --declare
-ftb register personal --email you@example.com --declare
+ftb register business --email you@example.com --phone 5555550100 --declare
+ftb register personal --email you@example.com --phone 5555550100 --call --declare
 ftb activate business --pin 4821                     # when the letter comes
 ftb status
 ```
@@ -1476,6 +1476,17 @@ ftb status
   `--declare`, which is you saying the values are true. One shared secret is
   sent per run and never retried: a "does not match" stops, and `ftb secrets`
   lists what to try with `--year`/`--line`.
+- **Throttled, so a lockout cannot snowball.** FTB restarts its 30-minute
+  lock on every attempt made inside it. `ftb` keeps a ledger
+  (`~/.local/share/cli-tools/ftb-throttle.json`): nothing runs during a
+  recorded lockout (35 minutes, `--force` included), at most 2 attempts per
+  account per 30 minutes and 4 a day, 2 minutes between any two runs. One
+  Chrome profile is kept between runs so a browser FTB's bot check already
+  trusts is not challenged on login.
+- **Phone codes.** `--phone` takes the number FTB texts; `--call` has it read
+  out instead. The run waits 15 minutes for the code, typed or written to
+  `~/.local/share/cli-tools/ftb-code-<role>`, and a wrong code waits for the
+  next one.
 - **Where the login goes.** A generated user name, a 24-character password and
   three security answers go to the `ftb` project of the `profullstack` logicsrc
   vault (its own project, so the push cannot drop another key) and to a 0600

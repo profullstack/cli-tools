@@ -32,7 +32,13 @@ import {
   ROLES,
   type Role,
   type State,
+  type Throttle,
   VAULT,
+  checkThrottle,
+  emptyThrottle,
+  isLockout,
+  recordAttempt,
+  recordLockout,
   addressNumbers,
   businessSecrets,
   formatAmount,
@@ -70,6 +76,7 @@ register options:
   --amount=N           override the amount (a loss is --amount=-12345)
   --phone N            10 digits FTB texts a verification code to (required)
   --call               have FTB phone the code in instead of texting it
+  --force              skip the 2-per-30-minutes / 4-a-day / 2-minute spacing limits (never a lockout)
 
 activate options:
   --pin N              the PIN from the letter (21 days from registration)
@@ -122,6 +129,40 @@ function saveState(state: State, path = statePath()): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   chmodSync(path, 0o600);
+}
+
+function throttlePath(): string {
+  return join(dirname(statePath()), 'ftb-throttle.json');
+}
+
+function loadThrottle(): Throttle {
+  try {
+    return JSON.parse(readFileSync(throttlePath(), 'utf8')) as Throttle;
+  } catch {
+    return emptyThrottle();
+  }
+}
+
+function saveThrottle(throttle: Throttle): void {
+  mkdirSync(dirname(throttlePath()), { recursive: true, mode: 0o700 });
+  writeFileSync(throttlePath(), `${JSON.stringify(throttle, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Refuse to start when FTB would count this run against a lock or a limit; otherwise log it as an attempt. */
+function gate(role: Role, kind: string, force: boolean): void {
+  const now = new Date();
+  const throttle = loadThrottle();
+  const verdict = checkThrottle(throttle, role, now, force);
+  if (!verdict.ok) {
+    const at = verdict.until.toLocaleTimeString();
+    throw new FtbError(`not now: ${verdict.reason}. Next attempt at ${at}${verdict.reason.includes('locked') ? '' : ' (or --force)'}.`);
+  }
+  saveThrottle(recordAttempt(throttle, role, kind, now));
+}
+
+/** After a run: a lockout page starts the 35-minute block on that account. */
+function noteResult(role: Role, text: string): void {
+  if (isLockout(text)) saveThrottle(recordLockout(loadThrottle(), role, new Date()));
 }
 
 /** Pull the ftb vault, merge this account in, push it back. The plaintext lives for one call in a 0700 dir. */
@@ -186,7 +227,7 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
-    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault', '--call'],
+    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault', '--call', '--force'],
     string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
   });
   const [command, roleArg] = args.positional;
@@ -234,12 +275,14 @@ export async function main(argv: readonly string[]): Promise<number> {
       role, firstName: '', lastName: '', username: account.username, password: account.password, email: account.email,
       addressNumbers: '', zip: '', year: account.secret.year, amount: account.secret.amount, security: { ...account.security }, declare: false, pin,
     };
+    gate(role, 'activate', args.flags.has('--force'));
     const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
     try {
       await goto(session, LOGIN_URL);
       say(`Activating the ${role} account ${account.username}:`);
       const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, codeFile, interactive: process.stdin.isTTY === true, say });
-      if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || 'no'} (${result.page.url})`);
+      noteResult(role, `${result.page.title} ${result.page.text}`);
+      if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})`);
       account.activatedAt = new Date().toISOString();
       saveState(state);
       if (account.handoff) spawnSync('myna', ['handoff', 'done', account.handoff.split('/').pop()!], { encoding: 'utf8' });
@@ -295,10 +338,13 @@ export async function main(argv: readonly string[]): Promise<number> {
   say(`  shared secret: ${secret.year} Form ${secret.form}${'line' in secret ? ` line ${secret.line}` : ` (${plan.filingStatus})`} = ${formatAmount(amount)}   from ${secret.source}`);
   say(`  address on file: ${plan.addressNumbers} / ${plan.zip}${plan.corpId ? `   corp ${plan.corpId}` : `   SSN ${maskSsn(plan.ssn!)}`}`);
 
+  // A dry run stops before the page that creates anything, so it is not an attempt.
+  if (!args.flags.has('--dry-run')) gate(role, 'register', args.flags.has('--force'));
   const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
   try {
     await goto(session, REGISTER_URL);
     const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, codeFile, interactive: process.stdin.isTTY === true, say });
+    noteResult(role, `${result.page.title} ${result.page.text}`);
     if (result.outcome === 'dry-run') {
       out('Dry run: stopped before the first Continue that sends anything to FTB.');
       return 0;

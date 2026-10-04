@@ -506,3 +506,72 @@ export function handoffCard(role: Role, registeredAt: Date): { title: string; st
     text: `ftb activate ${role} --pin <PIN from the letter>\n`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Throttle: FTB restarts a 30-minute lock on every attempt made inside it, so
+// a careless retry loop turns one lockout into an open-ended one.
+// ---------------------------------------------------------------------------
+
+export interface Throttle {
+  /** Every run that sent something to FTB for an account: register, login, activate. */
+  attempts: { role: Role; at: string; kind: string }[];
+  /** Per account, the time before which nothing may be sent at all. */
+  lockedUntil: Partial<Record<Role, string>>;
+}
+
+export const LIMITS = {
+  /** FTB's lockout is 30 minutes; 5 more so a clock skew cannot restart it. */
+  lockoutMs: 35 * 60_000,
+  windowMs: 30 * 60_000,
+  perWindow: 2,
+  perDay: 4,
+  /** Between any two runs, whichever account: FTB sees one browser and one phone. */
+  spacingMs: 2 * 60_000,
+} as const;
+
+export function emptyThrottle(): Throttle {
+  return { attempts: [], lockedUntil: {} };
+}
+
+/**
+ * Whether a run for `role` may start now. A lockout is absolute; the window,
+ * daily and spacing limits give way to `force`.
+ */
+export function checkThrottle(throttle: Throttle, role: Role, now: Date, force = false): { ok: true } | { ok: false; until: Date; reason: string } {
+  const t = now.getTime();
+  const locked = throttle.lockedUntil[role];
+  if (locked && Date.parse(locked) > t) {
+    return { ok: false, until: new Date(locked), reason: `FTB locked the ${role} account; any attempt before then restarts the lock` };
+  }
+  if (force) return { ok: true };
+  const all = throttle.attempts.map((a) => ({ ...a, ms: Date.parse(a.at) })).filter((a) => t - a.ms < 86_400_000);
+  const last = Math.max(0, ...all.map((a) => a.ms));
+  if (last && t - last < LIMITS.spacingMs) {
+    return { ok: false, until: new Date(last + LIMITS.spacingMs), reason: 'runs are spaced 2 minutes apart' };
+  }
+  const mine = all.filter((a) => a.role === role).sort((a, b) => a.ms - b.ms);
+  const recent = mine.filter((a) => t - a.ms < LIMITS.windowMs);
+  if (recent.length >= LIMITS.perWindow) {
+    return { ok: false, until: new Date(recent[0]!.ms + LIMITS.windowMs), reason: `${LIMITS.perWindow} ${role} attempts in 30 minutes` };
+  }
+  if (mine.length >= LIMITS.perDay) {
+    return { ok: false, until: new Date(mine[0]!.ms + 86_400_000), reason: `${LIMITS.perDay} ${role} attempts today` };
+  }
+  return { ok: true };
+}
+
+export function recordAttempt(throttle: Throttle, role: Role, kind: string, now: Date): Throttle {
+  const dayAgo = now.getTime() - 86_400_000;
+  return {
+    ...throttle,
+    attempts: [...throttle.attempts.filter((a) => Date.parse(a.at) > dayAgo), { role, kind, at: now.toISOString() }],
+  };
+}
+
+export function recordLockout(throttle: Throttle, role: Role, now: Date): Throttle {
+  return { ...throttle, lockedUntil: { ...throttle.lockedUntil, [role]: new Date(now.getTime() + LIMITS.lockoutMs).toISOString() } };
+}
+
+export function isLockout(text: string): boolean {
+  return /account locked|exceeded the allowed number of attempts/i.test(text);
+}

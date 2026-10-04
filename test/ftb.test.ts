@@ -20,6 +20,11 @@ import {
   rulesFor,
   toEnvFile,
   vaultKeys,
+  checkThrottle,
+  emptyThrottle,
+  isLockout,
+  recordAttempt,
+  recordLockout,
 } from '../src/ftb.ts';
 
 const NOW = new Date('2026-10-04T12:00:00Z');
@@ -250,5 +255,42 @@ describe('phone verification', () => {
     expect(decide(rulesFor(plan()), call)).toBeNull();
     expect(decide(rulesFor(plan({ call: true })), call)?.action).toEqual({ kind: 'check' });
     expect(decide(rulesFor(plan({ call: true })), text)).toBeNull();
+  });
+});
+
+describe('throttle', () => {
+  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+  it('allows a first attempt and spaces the next by 2 minutes', () => {
+    let t = emptyThrottle();
+    expect(checkThrottle(t, 'personal', at(0)).ok).toBe(true);
+    t = recordAttempt(t, 'personal', 'register', at(0));
+    expect(checkThrottle(t, 'business', at(1)).ok).toBe(false);
+    expect(checkThrottle(t, 'business', at(3)).ok).toBe(true);
+  });
+
+  it('allows 2 attempts per account per 30 minutes and 4 a day', () => {
+    let t = emptyThrottle();
+    t = recordAttempt(t, 'personal', 'register', at(0));
+    t = recordAttempt(t, 'personal', 'register', at(5));
+    const third = checkThrottle(t, 'personal', at(10));
+    expect(third.ok).toBe(false);
+    expect(third.ok ? 0 : third.until.getTime()).toBe(at(30).getTime());
+    t = recordAttempt(t, 'personal', 'login', at(40));
+    t = recordAttempt(t, 'personal', 'login', at(45));
+    expect(checkThrottle(t, 'personal', at(100)).ok).toBe(false);
+    expect(checkThrottle(t, 'personal', at(100), true).ok).toBe(true);
+  });
+
+  it('never lets anything through a lockout, force included', () => {
+    const t = recordLockout(emptyThrottle(), 'personal', at(0));
+    expect(checkThrottle(t, 'personal', at(34), true).ok).toBe(false);
+    expect(checkThrottle(t, 'personal', at(36)).ok).toBe(true);
+    expect(checkThrottle(t, 'business', at(1)).ok).toBe(true);
+  });
+
+  it('recognises FTB\'s lockout page', () => {
+    expect(isLockout('Account Locked You exceeded the allowed number of attempts.')).toBe(true);
+    expect(isLockout('Registration Confirmation')).toBe(false);
   });
 });
