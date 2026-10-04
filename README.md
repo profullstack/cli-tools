@@ -23,6 +23,7 @@ TypeScript, installed as executables on `PATH`.
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
+| [`keywords`](#keywords) | The keywords and phrases a page repeats, ranked by count, from headless Chrome |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
@@ -69,7 +70,7 @@ One thing here is not a `PATH` command and does not need Node:
   [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
-- **A Chrome or Chromium** — `wcag` only. `CHROME_PATH` names one; otherwise
+- **A Chrome or Chromium** — `wcag` and `keywords` only. `CHROME_PATH` names one; otherwise
   the usual binaries on `PATH` are tried, then the builds Puppeteer and
   Playwright keep under `~/.cache`. axe-core itself ships with this repo
 - **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
@@ -1412,6 +1413,34 @@ JSON-LD context, one `Webpage` subject per sampled page whose id is its URL,
 and `Assertion`s whose `test` is the tool's own criterion id
 (`WCAG22:contrast-minimum`). `--wcag 2.1` uses the 2.1 ids and leaves the nine
 2.2-only criteria out.
+
+### `keywords`
+
+The keywords and phrases a page repeats, ranked by how many of its text
+blocks use them:
+
+```sh
+keywords https://example.org                  # the plaintext report
+keywords example.org --limit 50 --copy        # top 50, also on the clipboard
+keywords https://example.org --json           # {title, url, blocks, keywords: [{keyword, words, count}]}
+```
+
+A port of the keyword-extractor bookmarklet, with the same output: the bare
+list, the list with counts, then subtotals for 1-, 2- and 3-word phrases. The
+page loads in headless Chrome because the bookmarklet only reads text a person
+can see (computed style and a box with area) and skips nav, header, footer,
+forms, dialogs and anything `aria-hidden`; an HTML fetch cannot tell what is
+visible, and a client-rendered page has no text in its HTML at all. The
+collection script that runs in the page is the bookmarklet's own; the
+counting runs in Node.
+
+Each heading, main or article paragraph, list item, link, table cell, caption
+and image alt between 8 and 400 characters is a block, deduplicated, with
+stock labels ("read more", "sign in") dropped. A phrase counts once per block.
+Stop words and bare numbers are never keywords. A single word needs 3 blocks
+and a phrase 2 to rank; on a page too short for that, everything is ranked.
+`--wait MS` (default 1000) gives a slow single-page app longer to render after
+load. Chrome is found the same way as for [`wcag`](#wcag).
 
 ### `vid`
 

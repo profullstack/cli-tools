@@ -49,6 +49,7 @@ const SUMMARIES: Record<string, string> = {
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',
+  keywords: 'The keywords and phrases a page repeats, ranked by count, from headless Chrome',
   jobhunt: 'Find remote roles worth applying to, and apply through a browser, never twice',
   mail: 'The inbox from the terminal: read, search, reply, send, file, delete',
   openinstall: 'Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis',
