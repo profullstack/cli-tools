@@ -11,7 +11,7 @@ import {
   formatAmount,
   generatePassword,
   generateUsername,
-  handoffCard,
+  activationDeadline,
   latestIdentity,
   maskSsn,
   outcomeOf,
@@ -188,19 +188,15 @@ describe('what a page says', () => {
   });
 });
 
-describe('storage and the hand-off card', () => {
+describe('storage and the PIN deadline', () => {
   const account = { role: 'business' as const, username: 'u', password: 'p#$ "x', email: 'e@x.y', security: { 'Q?': 'a' }, secret: { year: 2024, form: '100S', amount: 0 }, registeredAt: NOW.toISOString() };
 
   it('quotes every .env value so # and $ survive', () => {
     expect(toEnvFile(vaultKeys(account))).toContain('FTB_BUSINESS_PASSWORD="p#$ \\"x"');
   });
 
-  it('puts steps and a deadline on the card, and never a secret', () => {
-    const card = handoffCard('business', NOW);
-    const all = [card.title, ...card.steps, card.text].join('\n');
-    expect(all).toContain('2026-10-25');
-    expect(all).toContain('ftb activate business --pin');
-    expect(all).not.toMatch(/p#\$|password|\d{3}-\d{2}-\d{4}/i);
+  it('dates the PIN deadline 21 days after registration', () => {
+    expect(activationDeadline(NOW.toISOString())).toBe('2026-10-25');
   });
 });
 

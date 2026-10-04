@@ -44,7 +44,7 @@ import {
   formatAmount,
   generatePassword,
   generateUsername,
-  handoffCard,
+  activationDeadline,
   latestIdentity,
   maskSsn,
   parseExtracted,
@@ -85,13 +85,12 @@ Common:
   --dir D              where the returns are (default: ${DEFAULT_DIR})
   --headful            show the browser (needs a display)
   --chrome PATH        the browser to use (default: CHROME_PATH, then the usual places)
-  --no-handoff         do not post the PIN-letter card to myna
   --no-vault           keep the login only in ${statePath()}
 
 One shared secret is sent per run. When FTB says it does not match, the run
 stops and \`ftb secrets\` lists what else the returns support; nothing is retried
 on its own. Logins go to the ${VAULT.project} vault (${VAULT.team}) and a 0600
-state file; the myna card carries steps only, never a PIN, password or SSN.
+state file. Nothing about these accounts is posted to any other service.
 `;
 
 function out(text: string): void {
@@ -184,15 +183,6 @@ function pushVault(account: Account): void {
   }
 }
 
-/** Post the PIN-letter card to myna; returns its URL, or null when myna is not there. */
-function postHandoff(role: Role, at: Date): string | null {
-  const card = handoffCard(role, at);
-  const args = ['handoff', 'add', 'ftb', '--title', card.title, '--open', LOGIN_URL, ...card.steps.flatMap((step) => ['--step', step])];
-  const result = spawnSync('myna', args, { input: card.text, encoding: 'utf8' });
-  if (result.error || result.status !== 0) return null;
-  // Signed out of myna cloud the card is kept locally and there is no link to record.
-  return result.stdout.match(/https:\/\/\S+\/handoff\/\S+/)?.[0] ?? null;
-}
 
 /** The message on an FTB result page: its body text between the header and the footer. */
 function pageMessage(text: string): string {
@@ -227,7 +217,7 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
-    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault', '--call', '--force'],
+    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-vault', '--call', '--force'],
     string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
   });
   const [command, roleArg] = args.positional;
@@ -251,7 +241,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     for (const role of ROLES) {
       const a = state.accounts[role];
       if (!a) out(`${role.padEnd(9)} not registered`);
-      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter${a.handoff ? `  ${a.handoff}` : ''}`}`);
+      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter, activate by ${activationDeadline(a.registeredAt)}`}`);
     }
     return 0;
   }
@@ -285,7 +275,6 @@ export async function main(argv: readonly string[]): Promise<number> {
       if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})`);
       account.activatedAt = new Date().toISOString();
       saveState(state);
-      if (account.handoff) spawnSync('myna', ['handoff', 'done', account.handoff.split('/').pop()!], { encoding: 'utf8' });
       out(`${role} MyFTB account ${account.username} is active.`);
       return 0;
     } finally {
@@ -368,14 +357,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         err(`  vault push failed, the login is only in ${statePath()}: ${(error as Error).message}`);
       }
     }
-    if (!args.flags.has('--no-handoff')) {
-      const url = postHandoff(role, at);
-      if (url) {
-        account.handoff = url;
-        saveState(state);
-        out(`  PIN-letter card: ${url}`);
-      } else out('  PIN-letter card kept in myna locally (`myna cloud login` publishes it)');
-    }
+    out(`  PIN letter by mail; activate by ${activationDeadline(account.registeredAt)}.`);
     out(`  When the letter comes: ftb activate ${role} --pin <PIN>`);
     return 0;
   } finally {

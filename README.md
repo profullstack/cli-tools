@@ -1491,9 +1491,9 @@ ftb status
   three security answers go to the `ftb` project of the `profullstack` logicsrc
   vault (its own project, so the push cannot drop another key) and to a 0600
   state file.
-- **The PIN letter.** A myna hand-off card (`mynaposter.com/handoff/<id>`) with
-  the deadline (21 days) and the `ftb activate` command. It carries steps only,
-  never a PIN, password or SSN; `ftb activate` marks it done.
+- **The PIN letter.** FTB mails a PIN that expires in 21 days; `ftb status`
+  shows each account's deadline and `ftb activate <role> --pin N` finishes it.
+  Nothing about these accounts is posted to any other service.
 
 Needs `python3` with PyMuPDF (`pip install pymupdf`) and Chrome.
 

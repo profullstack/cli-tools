@@ -17,8 +17,7 @@
  * - **People only where the law or the post office needs one.** The penalty-of-
  *   perjury box is ticked only with `--declare` (the person's own statement),
  *   one shared secret is submitted per run and never retried, and the PIN step
- *   becomes a myna hand-off card (mynaposter.com/handoff/<id>) that carries
- *   steps and never a secret.
+ *   is tracked here (`ftb status`), never posted to any other service.
  *
  * Everything here is pure and tested; the browser lives in ftb-run.ts.
  */
@@ -460,7 +459,6 @@ export interface Account {
   secret: { year: number; form: string; amount: number };
   registeredAt: string;
   activatedAt?: string;
-  handoff?: string;
 }
 
 export interface State {
@@ -493,18 +491,9 @@ export function toEnvFile(values: Record<string, string>): string {
     .join('\n')}\n`;
 }
 
-/** The myna card for the PIN letter. Steps only: no PIN, password or SSN ever goes on it. */
-export function handoffCard(role: Role, registeredAt: Date): { title: string; steps: string[]; text: string } {
-  const deadline = new Date(registeredAt.getTime() + 21 * 86_400_000).toISOString().slice(0, 10);
-  return {
-    title: `FTB PIN letter: ${role} MyFTB account`,
-    steps: [
-      `Watch the mail at the address FTB has on file for the MyFTB PIN letter (5 to 10 business days).`,
-      `Activate before ${deadline}: the PIN expires 21 days after registration.`,
-      `Run the command below on the dev box with the PIN, or send the PIN to riotcoder to run it.`,
-    ],
-    text: `ftb activate ${role} --pin <PIN from the letter>\n`,
-  };
+/** FTB's PIN expires 21 days after registration. */
+export function activationDeadline(registeredAt: string): string {
+  return new Date(Date.parse(registeredAt) + 21 * 86_400_000).toISOString().slice(0, 10);
 }
 
 // ---------------------------------------------------------------------------
