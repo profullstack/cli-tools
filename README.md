@@ -24,6 +24,7 @@ TypeScript, installed as executables on `PATH`.
 | [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
 | [`keywords`](#keywords) | The keywords and phrases a page repeats, ranked by count, from headless Chrome |
+| [`statements`](#statements) | The PDF statements behind every SimpleFIN account, downloaded from each bank and filed by account and month |
 | [`vid`](#vid) | Inspect, thumbnail, clip and shrink video, through ffmpeg |
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
@@ -70,7 +71,7 @@ One thing here is not a `PATH` command and does not need Node:
   [torlnk](https://www.npmjs.com/package/torlnk) running
 - **ImageMagick** (`magick`) — `img` only, and only for what sharp cannot do
   (PDF, PSD, animated GIF); sharp ships with this repo as an optional dependency
-- **A Chrome or Chromium** — `wcag` and `keywords` only. `CHROME_PATH` names one; otherwise
+- **A Chrome or Chromium** — `wcag`, `keywords` and `statements` only. `CHROME_PATH` names one; otherwise
   the usual binaries on `PATH` are tried, then the builds Puppeteer and
   Playwright keep under `~/.cache`. axe-core itself ships with this repo
 - **`unzip` or `bsdtar`** — the `adb` companion only, and only while installing
@@ -1441,6 +1442,67 @@ Stop words and bare numbers are never keywords. A single word needs 3 blocks
 and a phrase 2 to rank; on a page too short for that, everything is ranked.
 `--wait MS` (default 1000) gives a slow single-page app longer to render after
 load. Chrome is found the same way as for [`wcag`](#wcag).
+
+### `statements`
+
+The PDF statements behind every account on a
+[SimpleFIN Bridge](https://beta-bridge.simplefin.org/), downloaded from each
+bank and filed by account and month:
+
+```sh
+statements accounts                    # institutions, accounts, who is signed in, last fetch
+statements login chase                 # sign in once, in a window
+statements fetch                       # every new statement from every signed-in bank
+statements fetch citi --since 2026-01  # one bank, this year only
+statements fetch --import coinpay      # ...and keep each in CoinPay's statement library
+statements assist dcu                  # a window; every PDF you download is filed
+statements list                        # what is on disk
+```
+
+SimpleFIN hands an app balances and transactions and nothing else: the
+protocol has no document endpoint and the Bridge keeps no PDFs. So this goes
+to the banks themselves. The SimpleFIN account list says which institutions
+exist and the last four digits of each account; each bank then gets its own
+Chrome profile, which a person signs in to once with `statements login`. No
+bank password is asked for or stored: the session is the bank's own cookie.
+While the login window is open, go on to the page that lists statements before
+closing it. That page is where `fetch` starts from then on, so a bank with no
+built-in entry works the same way, starting from the site SimpleFIN names.
+
+`fetch` opens that page headless (`--headed` to watch), follows its
+"Statements" link if the list is not there yet, and clicks every control that
+sits in a dated row and reads like a download (`Download`, `PDF`, `View
+statement`, a `.pdf` link), pressing a dialog's `Download` button when a click
+opens one. Preference, paperless and tax-form links are left alone. Each PDF
+is caught through the DevTools download events, checked to be a PDF, and
+written as `<out>/<bank>/<account>/<YYYY-MM>.pdf`: the month is the closing
+date found in the row or the file name, and the account is the one whose last
+four digits appear there (or the only one the bank has). Anything it cannot
+place goes to `<bank>/_unfiled/`. `<out>/manifest.json` records the hash,
+account, period and the row each file came from; a row already fetched is not
+clicked again, and the same bytes are never filed twice. `--out` or
+`STATEMENTS_DIR` moves the folder (default `~/Documents/statements`).
+
+When a bank has ended the session, the page asks for a password, and `fetch`
+says `statements login <bank>` and moves on. A page with no statement links
+says so too, and `statements assist <bank>` is the fallback: a window on the
+same profile in which every PDF you download is filed the same way. `fetch`
+exits `3` when any bank needed one of these, so a scheduled run can tell you:
+
+```sh
+cronjob set statements --schedule '30 7 * * 1' --command 'statements fetch --import coinpay'
+```
+
+The account list comes from SimpleFIN directly (`statements claim
+<setup-token>` with a token from the Bridge, or `SIMPLEFIN_ACCESS_URL`), or,
+without either, from `coinpay finances accounts`, which already holds a
+SimpleFIN connection. A SimpleFIN answer is reused for 12 hours (`--refresh`
+asks again) because the Bridge allows about 24 requests a day. `--import
+coinpay` and `statements import coinpay` hand each filed statement to
+`coinpay finances statements import` with its account and its period, the
+statement's own cycle when the row printed one. The access URL, the cached
+account list and the browser profiles live owner-only under
+`~/.local/share/cli-tools/statements`.
 
 ### `vid`
 
