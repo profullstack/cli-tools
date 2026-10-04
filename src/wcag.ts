@@ -694,6 +694,17 @@ export class Cdp {
     });
   }
 
+  /** Hear every event (browser-wide and per session) until the returned function is called. */
+  on(listener: (event: { method: string; params: Record<string, unknown>; sessionId?: string }) => void): () => void {
+    const wrapped = (message: CdpMessage): void => {
+      if (message.method) {
+        listener({ method: message.method, params: message.params ?? {}, ...(message.sessionId ? { sessionId: message.sessionId } : {}) });
+      }
+    };
+    this.listeners.add(wrapped);
+    return () => this.listeners.delete(wrapped);
+  }
+
   /** Resolve on the next event of `method` for a session, or reject after `timeoutMs`. */
   waitFor(method: string, sessionId: string, timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -720,6 +731,8 @@ export class Cdp {
 export interface Browser {
   cdp: Cdp;
   path: string;
+  /** Settles when the Chrome process ends, including a person closing its window. */
+  exited: Promise<void>;
   close(): Promise<void>;
 }
 
@@ -729,19 +742,28 @@ export interface LaunchOptions {
   /** Chrome's sandbox needs user namespaces; a container or root often lacks them. */
   sandbox?: boolean;
   timeoutMs?: number;
+  /**
+   * A profile directory to keep. Without one, Chrome gets a throwaway profile
+   * that is removed on close; with one, cookies and logins survive the run and
+   * the directory is never deleted here.
+   */
+  profile?: string;
+  /** false opens a window a person can use; the default is headless. */
+  headless?: boolean;
 }
 
-/** Start a headless Chrome and connect to it. */
+/** Start a Chrome (headless unless asked) and connect to it. */
 export async function launchBrowser(options: LaunchOptions = {}): Promise<Browser> {
   const env = options.env ?? process.env;
   const path = options.chrome ?? findChrome(env);
   if (!path) throw new WcagError(NO_CHROME);
   if (!isExecutable(path)) throw new WcagError(`${path} is not an executable`);
 
-  const profile = mkdtempSync(join(tmpdir(), 'wcag-chrome-'));
+  const keep = options.profile !== undefined;
+  const profile = options.profile ?? mkdtempSync(join(tmpdir(), 'wcag-chrome-'));
   const sandbox = options.sandbox ?? !(env.CHROME_NO_SANDBOX || process.getuid?.() === 0);
   const args = [
-    '--headless=new',
+    ...(options.headless === false ? [] : ['--headless=new']),
     '--remote-debugging-port=0',
     `--user-data-dir=${profile}`,
     '--no-first-run',
@@ -756,7 +778,9 @@ export async function launchBrowser(options: LaunchOptions = {}): Promise<Browse
   ];
 
   const child: ChildProcess = spawn(path, args, { env: browserEnv(env), stdio: ['ignore', 'ignore', 'pipe'] });
+  const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
   const cleanup = (): void => {
+    if (keep) return;
     try {
       rmSync(profile, { recursive: true, force: true });
     } catch {
@@ -793,12 +817,16 @@ export async function launchBrowser(options: LaunchOptions = {}): Promise<Browse
   return {
     cdp,
     path,
+    exited,
     async close() {
       try {
         await Promise.race([cdp.send('Browser.close'), new Promise((resolve) => setTimeout(resolve, 2000))]);
       } catch {
         // Already gone.
       }
+      // A kept profile is only as good as what Chrome flushed: cookies reach
+      // disk on a clean exit, so give it one before the kill.
+      if (keep) await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
       cdp.close();
       child.kill();
       cleanup();
