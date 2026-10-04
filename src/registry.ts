@@ -50,6 +50,7 @@ const SUMMARIES: Record<string, string> = {
   genrewatch: 'What is coming out, and whether it exists at all',
   img: 'Resize, convert and inspect images, with sharp or ImageMagick',
   keywords: 'The keywords and phrases a page repeats, ranked by count, from headless Chrome',
+  ftb: 'Create and activate MyFTB accounts, business and personal, from the CA returns on disk',
   statements: 'Download the PDF statements behind every SimpleFIN account, from each bank, into one folder',
   jobhunt: 'Find remote roles worth applying to, and apply through a browser, never twice',
   mail: 'The inbox from the terminal: read, search, reply, send, file, delete',
