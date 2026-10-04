@@ -32,13 +32,19 @@ import {
   ROLES,
   type Role,
   type State,
+  type Throttle,
   VAULT,
+  checkThrottle,
+  emptyThrottle,
+  isLockout,
+  recordAttempt,
+  recordLockout,
   addressNumbers,
   businessSecrets,
   formatAmount,
   generatePassword,
   generateUsername,
-  handoffCard,
+  activationDeadline,
   latestIdentity,
   maskSsn,
   parseExtracted,
@@ -68,6 +74,9 @@ register options:
   --year YYYY          use this tax year's return instead of the newest
   --line 15|20         business: which 100S line is the net income (default 20)
   --amount=N           override the amount (a loss is --amount=-12345)
+  --phone N            10 digits FTB texts a verification code to (required)
+  --call               have FTB phone the code in instead of texting it
+  --force              skip the 2-per-30-minutes / 4-a-day / 2-minute spacing limits (never a lockout)
 
 activate options:
   --pin N              the PIN from the letter (21 days from registration)
@@ -76,13 +85,12 @@ Common:
   --dir D              where the returns are (default: ${DEFAULT_DIR})
   --headful            show the browser (needs a display)
   --chrome PATH        the browser to use (default: CHROME_PATH, then the usual places)
-  --no-handoff         do not post the PIN-letter card to myna
   --no-vault           keep the login only in ${statePath()}
 
 One shared secret is sent per run. When FTB says it does not match, the run
 stops and \`ftb secrets\` lists what else the returns support; nothing is retried
 on its own. Logins go to the ${VAULT.project} vault (${VAULT.team}) and a 0600
-state file; the myna card carries steps only, never a PIN, password or SSN.
+state file. Nothing about these accounts is posted to any other service.
 `;
 
 function out(text: string): void {
@@ -122,6 +130,40 @@ function saveState(state: State, path = statePath()): void {
   chmodSync(path, 0o600);
 }
 
+function throttlePath(): string {
+  return join(dirname(statePath()), 'ftb-throttle.json');
+}
+
+function loadThrottle(): Throttle {
+  try {
+    return JSON.parse(readFileSync(throttlePath(), 'utf8')) as Throttle;
+  } catch {
+    return emptyThrottle();
+  }
+}
+
+function saveThrottle(throttle: Throttle): void {
+  mkdirSync(dirname(throttlePath()), { recursive: true, mode: 0o700 });
+  writeFileSync(throttlePath(), `${JSON.stringify(throttle, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** Refuse to start when FTB would count this run against a lock or a limit; otherwise log it as an attempt. */
+function gate(role: Role, kind: string, force: boolean): void {
+  const now = new Date();
+  const throttle = loadThrottle();
+  const verdict = checkThrottle(throttle, role, now, force);
+  if (!verdict.ok) {
+    const at = verdict.until.toLocaleTimeString();
+    throw new FtbError(`not now: ${verdict.reason}. Next attempt at ${at}${verdict.reason.includes('locked') ? '' : ' (or --force)'}.`);
+  }
+  saveThrottle(recordAttempt(throttle, role, kind, now));
+}
+
+/** After a run: a lockout page starts the 35-minute block on that account. */
+function noteResult(role: Role, text: string): void {
+  if (isLockout(text)) saveThrottle(recordLockout(loadThrottle(), role, new Date()));
+}
+
 /** Pull the ftb vault, merge this account in, push it back. The plaintext lives for one call in a 0700 dir. */
 function pushVault(account: Account): void {
   let current: Record<string, string> = {};
@@ -141,13 +183,11 @@ function pushVault(account: Account): void {
   }
 }
 
-/** Post the PIN-letter card to myna; returns its URL, or null when myna is not there. */
-function postHandoff(role: Role, at: Date): string | null {
-  const card = handoffCard(role, at);
-  const args = ['handoff', 'add', 'ftb', '--title', card.title, '--open', LOGIN_URL, ...card.steps.flatMap((step) => ['--step', step])];
-  const result = spawnSync('myna', args, { input: card.text, encoding: 'utf8' });
-  if (result.error || result.status !== 0) return null;
-  return result.stdout.match(/https:\/\/\S+\/handoff\/\S+/)?.[0] ?? result.stdout.trim().split('\n').pop() ?? null;
+
+/** The message on an FTB result page: its body text between the header and the footer. */
+function pageMessage(text: string): string {
+  const body = text.replace(/^.*?Franchise Tax Board\s*(e-Services)?/s, '').replace(/Back to top.*$|Copyright ©.*$/s, '').trim();
+  return body.slice(0, 600) || 'the information does not match';
 }
 
 // ---------------------------------------------------------------------------
@@ -177,8 +217,8 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
-    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault'],
-    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome'],
+    boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-vault', '--call', '--force'],
+    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
   });
   const [command, roleArg] = args.positional;
   if (args.flags.has('--help') || args.flags.has('-h') || !command) {
@@ -201,7 +241,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     for (const role of ROLES) {
       const a = state.accounts[role];
       if (!a) out(`${role.padEnd(9)} not registered`);
-      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter${a.handoff ? `  ${a.handoff}` : ''}`}`);
+      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter, activate by ${activationDeadline(a.registeredAt)}`}`);
     }
     return 0;
   }
@@ -212,6 +252,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const state = loadState();
   const say = (line: string) => err(line);
   const log = join(dirname(statePath()), 'ftb-pages.jsonl');
+  const codeFile = join(dirname(statePath()), `ftb-code-${role}`);
+  const profile = join(dirname(statePath()), 'ftb-chrome');
   const headless = !args.flags.has('--headful');
 
   if (command === 'activate') {
@@ -223,15 +265,16 @@ export async function main(argv: readonly string[]): Promise<number> {
       role, firstName: '', lastName: '', username: account.username, password: account.password, email: account.email,
       addressNumbers: '', zip: '', year: account.secret.year, amount: account.secret.amount, security: { ...account.security }, declare: false, pin,
     };
-    const session = await openSession({ chrome: args.values.get('--chrome'), headless });
+    gate(role, 'activate', args.flags.has('--force'));
+    const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
     try {
       await goto(session, LOGIN_URL);
       say(`Activating the ${role} account ${account.username}:`);
-      const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, interactive: process.stdin.isTTY === true, say });
-      if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || 'no'} (${result.page.url})`);
+      const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, codeFile, interactive: process.stdin.isTTY === true, say });
+      noteResult(role, `${result.page.title} ${result.page.text}`);
+      if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})`);
       account.activatedAt = new Date().toISOString();
       saveState(state);
-      if (account.handoff) spawnSync('myna', ['handoff', 'done', account.handoff.split('/').pop()!], { encoding: 'utf8' });
       out(`${role} MyFTB account ${account.username} is active.`);
       return 0;
     } finally {
@@ -249,6 +292,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const line = args.values.has('--line') ? Number(args.values.get('--line')) : undefined;
   if (line !== undefined && line !== 15 && line !== 20) throw new UsageError('--line is 15 or 20');
 
+  const phone = (args.values.get('--phone') ?? '').replace(/\D/g, '');
+  if (phone.length !== 10) throw new UsageError('--phone is the 10-digit number FTB texts a verification code to');
   const rows = extract(dir);
   const identity = latestIdentity(rows);
   if (!identity) throw new FtbError(`no Form 540 with a name, SSN and address under ${dir}`);
@@ -274,22 +319,27 @@ export async function main(argv: readonly string[]): Promise<number> {
     filingStatus: 'filingStatus' in secret ? secret.filingStatus : undefined,
     security: {},
     declare: args.flags.has('--declare'),
+    phone,
+    call: args.flags.has('--call'),
   };
 
   say(`Registering a ${role} MyFTB account as ${plan.username} <${email}>`);
   say(`  shared secret: ${secret.year} Form ${secret.form}${'line' in secret ? ` line ${secret.line}` : ` (${plan.filingStatus})`} = ${formatAmount(amount)}   from ${secret.source}`);
   say(`  address on file: ${plan.addressNumbers} / ${plan.zip}${plan.corpId ? `   corp ${plan.corpId}` : `   SSN ${maskSsn(plan.ssn!)}`}`);
 
-  const session = await openSession({ chrome: args.values.get('--chrome'), headless });
+  // A dry run stops before the page that creates anything, so it is not an attempt.
+  if (!args.flags.has('--dry-run')) gate(role, 'register', args.flags.has('--force'));
+  const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
   try {
     await goto(session, REGISTER_URL);
-    const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, interactive: process.stdin.isTTY === true, say });
+    const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, codeFile, interactive: process.stdin.isTTY === true, say });
+    noteResult(role, `${result.page.title} ${result.page.text}`);
     if (result.outcome === 'dry-run') {
       out('Dry run: stopped before the first Continue that sends anything to FTB.');
       return 0;
     }
     if (result.outcome === 'rejected') {
-      throw new FtbError(`FTB said: ${result.page.errors.join(' ') || 'the information does not match'} (${result.page.url})\nNothing was retried. \`ftb secrets\` lists the other returns; pick one with --year/--line.`);
+      throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})\nNothing was retried. \`ftb secrets\` lists the other returns; pick one with --year/--line.`);
     }
     const at = new Date();
     const account: Account = {
@@ -307,14 +357,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         err(`  vault push failed, the login is only in ${statePath()}: ${(error as Error).message}`);
       }
     }
-    if (!args.flags.has('--no-handoff')) {
-      const url = postHandoff(role, at);
-      if (url) {
-        account.handoff = url;
-        saveState(state);
-        out(`  PIN-letter card: ${url}`);
-      }
-    }
+    out(`  PIN letter by mail; activate by ${activationDeadline(account.registeredAt)}.`);
     out(`  When the letter comes: ftb activate ${role} --pin <PIN>`);
     return 0;
   } finally {

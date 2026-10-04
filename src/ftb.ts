@@ -17,8 +17,7 @@
  * - **People only where the law or the post office needs one.** The penalty-of-
  *   perjury box is ticked only with `--declare` (the person's own statement),
  *   one shared secret is submitted per run and never retried, and the PIN step
- *   becomes a myna hand-off card (mynaposter.com/handoff/<id>) that carries
- *   steps and never a secret.
+ *   is tracked here (`ftb status`), never posted to any other service.
  *
  * Everything here is pure and tested; the browser lives in ftb-run.ts.
  */
@@ -280,9 +279,16 @@ export interface Plan {
   security: Record<string, string>;
   /** The person's own penalty-of-perjury statement, from `--declare`. */
   declare: boolean;
+  /** Ten digits; FTB texts a verification code to it during registration. */
+  phone?: string | undefined;
+  /** Have FTB phone the code in rather than text it (a text can be throttled or lost). */
+  call?: boolean | undefined;
   /** Activation only. */
   pin?: string;
 }
+
+/** The box FTB's texted (or spoken) verification code goes in. */
+export const CODE_LABEL = /verification code|security code|one[- ]time|passcode|access code|enter (the )?code/i;
 
 function option(field: Field, pattern: RegExp): Action | null {
   const found = field.options?.find((o) => o.value !== '' && (pattern.test(o.text) || pattern.test(o.value)));
@@ -350,22 +356,33 @@ export function rulesFor(plan: Plan): Rule[] {
     // Role.
     {
       name: 'role',
-      label: plan.role === 'business' ? /business representative/i : /\bindividual\b/i,
+      label: /individual|business representative/i,
       types: ['radio'],
-      act: () => ({ kind: 'check' }),
+      // By how the option starts: "Tax Professional - ... your individual or business entity client" names both.
+      act: (f) => ((plan.role === 'business' ? /^\s*business representative/i : /^\s*individual\b/i).test(f.label) ? { kind: 'check' } : null),
     },
 
     // Address on file.
-    { name: 'address numbers', label: /numbers? in .*address|address.*numbers?/i, types: SUBMIT_TYPES, act: text(plan.addressNumbers) },
-    { name: 'zip', label: /zip/i, types: SUBMIT_TYPES, act: text(plan.zip) },
+    { name: 'zip', label: /zip|postal/i, types: SUBMIT_TYPES, act: text(plan.zip) },
+    { name: 'address numbers', label: /numbers in (the |your )?(business )?(mailing )?address/i, types: SUBMIT_TYPES, act: text(plan.addressNumbers) },
 
     // The shared secret.
-    { name: 'tax year', label: /year/i, types: ['select-one'], act: (f) => option(f, new RegExp(`^\\s*${plan.year}\\s*$`)) },
-    { name: 'tax year', label: /year/i, types: ['text', 'number', 'tel'], act: text(String(plan.year)) },
+    { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['select-one'], act: (f) => option(f, new RegExp(`^\\s*${plan.year}\\s*$`)) },
+    { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['text', 'number', 'tel'], act: text(String(plan.year)) },
     { name: 'net income', label: /net income|income \(loss\)|adjusted gross|\bagi\b/i, types: SUBMIT_TYPES, act: text(formatAmount(plan.amount)) },
 
     // The penalty-of-perjury statement: only ever the person's own.
     { name: 'declaration', label: /perjury|i declare|under penalty/i, types: ['checkbox'], act: () => ({ kind: 'declare' }) },
+
+    // Phone verification: a text by default, a call with --call.
+    { name: 'phone', label: /phone number/i, types: SUBMIT_TYPES, act: () => (plan.phone ? { kind: 'text', value: plan.phone } : null) },
+    { name: plan.call ? 'call me' : 'send a text', label: /send me a text|text message|call me/i, types: ['radio'], act: (f) => ((plan.call ? /call me/i : /text/i).test(f.label) ? { kind: 'check' } : null) },
+    { name: 'foreign number', id: /^Phone_Foreign$/, act: () => null },
+    { name: 'foreign address', id: /^Address_Foreign$|^Address_No(MailAddress|PostalCode)$/, act: () => null },
+
+    // Login.
+    { name: 'user name', label: /^user name/i, types: ['text'], act: text(plan.username) },
+    { name: 'password', label: /^password/i, types: ['password'], act: text(plan.password, true) },
 
     // Activation.
     { name: 'pin', label: /\bpin\b|personal identification number/i, types: SUBMIT_TYPES, act: () => (plan.pin ? { kind: 'text', value: plan.pin, secret: true } : null) },
@@ -393,7 +410,7 @@ export function rulesFor(plan: Plan): Rule[] {
           return { kind: 'text', value: part && slices[part] !== undefined ? slices[part]! : digits, secret: true };
         },
       },
-      { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /^\s*540\b(?!\s*NR)/i) },
+      { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /^\s*(form\s*)?540\s*$/i) },
     );
   }
   return rules;
@@ -409,7 +426,8 @@ export function decide(rules: readonly Rule[], field: Field): { rule: Rule; acti
       if (!pattern) continue;
       if (!(pass === 'id' ? pattern.test(field.id) : pattern.test(haystack))) continue;
       const action = rule.act(field);
-      return action ? { rule, action } : null;
+      // An id match is deliberate, even when it says "leave this alone"; a label match that cannot act lets the next rule try.
+      if (action || pass === 'id') return action ? { rule, action } : null;
     }
   }
   return null;
@@ -422,7 +440,7 @@ export function decide(rules: readonly Rule[], field: Field): { rule: Rule; acti
 export type Outcome = 'registered' | 'activated' | 'rejected' | 'continue';
 
 export function outcomeOf(text: string): Outcome {
-  if (/does not match our records|there is a problem|unable to (verify|process) your|account (is|has been) locked/i.test(text)) return 'rejected';
+  if (/does not match our records|there is a problem|unable to (verify|process) your|account (is|has been) locked|account locked|exceeded the allowed number of attempts/i.test(text)) return 'rejected';
   if (/account (has been )?activated|activation (is )?complete/i.test(text)) return 'activated';
   if (/registration confirmation|successfully (registered|created)|we will (mail|send) you a (letter|pin)|pin .*(mail|letter)/i.test(text)) return 'registered';
   return 'continue';
@@ -441,7 +459,6 @@ export interface Account {
   secret: { year: number; form: string; amount: number };
   registeredAt: string;
   activatedAt?: string;
-  handoff?: string;
 }
 
 export interface State {
@@ -474,16 +491,76 @@ export function toEnvFile(values: Record<string, string>): string {
     .join('\n')}\n`;
 }
 
-/** The myna card for the PIN letter. Steps only: no PIN, password or SSN ever goes on it. */
-export function handoffCard(role: Role, registeredAt: Date): { title: string; steps: string[]; text: string } {
-  const deadline = new Date(registeredAt.getTime() + 21 * 86_400_000).toISOString().slice(0, 10);
+/** FTB's PIN expires 21 days after registration. */
+export function activationDeadline(registeredAt: string): string {
+  return new Date(Date.parse(registeredAt) + 21 * 86_400_000).toISOString().slice(0, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Throttle: FTB restarts a 30-minute lock on every attempt made inside it, so
+// a careless retry loop turns one lockout into an open-ended one.
+// ---------------------------------------------------------------------------
+
+export interface Throttle {
+  /** Every run that sent something to FTB for an account: register, login, activate. */
+  attempts: { role: Role; at: string; kind: string }[];
+  /** Per account, the time before which nothing may be sent at all. */
+  lockedUntil: Partial<Record<Role, string>>;
+}
+
+export const LIMITS = {
+  /** FTB's lockout is 30 minutes; 5 more so a clock skew cannot restart it. */
+  lockoutMs: 35 * 60_000,
+  windowMs: 30 * 60_000,
+  perWindow: 2,
+  perDay: 4,
+  /** Between any two runs, whichever account: FTB sees one browser and one phone. */
+  spacingMs: 2 * 60_000,
+} as const;
+
+export function emptyThrottle(): Throttle {
+  return { attempts: [], lockedUntil: {} };
+}
+
+/**
+ * Whether a run for `role` may start now. A lockout is absolute; the window,
+ * daily and spacing limits give way to `force`.
+ */
+export function checkThrottle(throttle: Throttle, role: Role, now: Date, force = false): { ok: true } | { ok: false; until: Date; reason: string } {
+  const t = now.getTime();
+  const locked = throttle.lockedUntil[role];
+  if (locked && Date.parse(locked) > t) {
+    return { ok: false, until: new Date(locked), reason: `FTB locked the ${role} account; any attempt before then restarts the lock` };
+  }
+  if (force) return { ok: true };
+  const all = throttle.attempts.map((a) => ({ ...a, ms: Date.parse(a.at) })).filter((a) => t - a.ms < 86_400_000);
+  const last = Math.max(0, ...all.map((a) => a.ms));
+  if (last && t - last < LIMITS.spacingMs) {
+    return { ok: false, until: new Date(last + LIMITS.spacingMs), reason: 'runs are spaced 2 minutes apart' };
+  }
+  const mine = all.filter((a) => a.role === role).sort((a, b) => a.ms - b.ms);
+  const recent = mine.filter((a) => t - a.ms < LIMITS.windowMs);
+  if (recent.length >= LIMITS.perWindow) {
+    return { ok: false, until: new Date(recent[0]!.ms + LIMITS.windowMs), reason: `${LIMITS.perWindow} ${role} attempts in 30 minutes` };
+  }
+  if (mine.length >= LIMITS.perDay) {
+    return { ok: false, until: new Date(mine[0]!.ms + 86_400_000), reason: `${LIMITS.perDay} ${role} attempts today` };
+  }
+  return { ok: true };
+}
+
+export function recordAttempt(throttle: Throttle, role: Role, kind: string, now: Date): Throttle {
+  const dayAgo = now.getTime() - 86_400_000;
   return {
-    title: `FTB PIN letter: ${role} MyFTB account`,
-    steps: [
-      `Watch the mail at the address FTB has on file for the MyFTB PIN letter (5 to 10 business days).`,
-      `Activate before ${deadline}: the PIN expires 21 days after registration.`,
-      `Run the command below on the dev box with the PIN, or send the PIN to riotcoder to run it.`,
-    ],
-    text: `ftb activate ${role} --pin <PIN from the letter>\n`,
+    ...throttle,
+    attempts: [...throttle.attempts.filter((a) => Date.parse(a.at) > dayAgo), { role, kind, at: now.toISOString() }],
   };
+}
+
+export function recordLockout(throttle: Throttle, role: Role, now: Date): Throttle {
+  return { ...throttle, lockedUntil: { ...throttle.lockedUntil, [role]: new Date(now.getTime() + LIMITS.lockoutMs).toISOString() } };
+}
+
+export function isLockout(text: string): boolean {
+  return /account locked|exceeded the allowed number of attempts/i.test(text);
 }

@@ -11,7 +11,7 @@ import {
   formatAmount,
   generatePassword,
   generateUsername,
-  handoffCard,
+  activationDeadline,
   latestIdentity,
   maskSsn,
   outcomeOf,
@@ -20,6 +20,11 @@ import {
   rulesFor,
   toEnvFile,
   vaultKeys,
+  checkThrottle,
+  emptyThrottle,
+  isLockout,
+  recordAttempt,
+  recordLockout,
 } from '../src/ftb.ts';
 
 const NOW = new Date('2026-10-04T12:00:00Z');
@@ -178,22 +183,110 @@ describe('what a page says', () => {
     expect(outcomeOf('There is a problem. Check below. The information you entered does not match our records.')).toBe('rejected');
     expect(outcomeOf('Registration Confirmation. We will mail you a letter with your PIN.')).toBe('registered');
     expect(outcomeOf('Your account has been activated.')).toBe('activated');
+    expect(outcomeOf('Account Locked. You exceeded the allowed number of attempts.')).toBe('rejected');
     expect(outcomeOf('Business Representative Registration. Enter the numbers in your mailing address.')).toBe('continue');
   });
 });
 
-describe('storage and the hand-off card', () => {
+describe('storage and the PIN deadline', () => {
   const account = { role: 'business' as const, username: 'u', password: 'p#$ "x', email: 'e@x.y', security: { 'Q?': 'a' }, secret: { year: 2024, form: '100S', amount: 0 }, registeredAt: NOW.toISOString() };
 
   it('quotes every .env value so # and $ survive', () => {
     expect(toEnvFile(vaultKeys(account))).toContain('FTB_BUSINESS_PASSWORD="p#$ \\"x"');
   });
 
-  it('puts steps and a deadline on the card, and never a secret', () => {
-    const card = handoffCard('business', NOW);
-    const all = [card.title, ...card.steps, card.text].join('\n');
-    expect(all).toContain('2026-10-25');
-    expect(all).toContain('ftb activate business --pin');
-    expect(all).not.toMatch(/p#\$|password|\d{3}-\d{2}-\d{4}/i);
+  it('dates the PIN deadline 21 days after registration', () => {
+    expect(activationDeadline(NOW.toISOString())).toBe('2026-10-25');
+  });
+});
+
+describe('the business page as FTB serves it', () => {
+  it('fills ZIP and address numbers into their own boxes', () => {
+    const rules = rulesFor(plan());
+    expect(decide(rules, field({ id: 'Address_PostalCode', label: 'US ZIP Code 5 Numbers only; if none, leave blank.' }))?.action).toMatchObject({ value: '94000' });
+    expect(decide(rules, field({ id: 'Address_MailAddress', label: 'Numbers in Mailing Address Up to 6 numbers only; if none, leave blank.' }))?.action).toMatchObject({ value: '1234' });
+  });
+
+  it('does not let "the year you chose" in the form-type label take the form type', () => {
+    const rules = rulesFor(plan());
+    const form = field({ id: 'FormType', type: 'select-one', label: 'Tax form type filed for the year you chose', options: [{ value: '', text: '' }, { value: '100', text: 'Form 100' }, { value: '100S', text: 'Form 100S' }] });
+    expect(decide(rules, form)?.action).toEqual({ kind: 'select', value: '100S' });
+    expect(decide(rules, field({ id: 'EntityId', label: 'Entity ID 7, 9, 10, 11, or 12 numbers only' }))?.action).toMatchObject({ value: '1234567' });
+  });
+});
+
+describe('choose your role', () => {
+  const roles = [
+    field({ id: 'r_Role0', type: 'radio', label: 'Individual - Access your personal income tax information.' }),
+    field({ id: 'r_Role1', type: 'radio', label: 'Business Representative - Access income tax information of the business entity.' }),
+    field({ id: 'r_Role2', type: 'radio', label: 'Tax Professional - Access income tax information on behalf of your individual or business entity client.' }),
+  ];
+
+  it('checks exactly one role, never Tax Professional', () => {
+    for (const role of ['personal', 'business'] as const) {
+      const rules = rulesFor(plan({ role }));
+      const checked = roles.filter((f) => decide(rules, f)?.action.kind === 'check').map((f) => f.id);
+      expect(checked).toEqual([role === 'personal' ? 'r_Role0' : 'r_Role1']);
+    }
+  });
+});
+
+describe('the individual page as FTB serves it', () => {
+  it('takes the year, Form 540 (not 540NR or 2EZ) and the status', () => {
+    const rules = rulesFor(plan({ role: 'personal', corpId: undefined, ssn: '123-45-6789', filingStatus: 'single', amount: 98765, year: 2024 }));
+    const year = field({ id: 'ReturnYear', type: 'select-one', label: 'Year on the tax return filed', options: [{ value: '', text: '' }, { value: '2025', text: '2025' }, { value: '2024', text: '2024' }] });
+    expect(decide(rules, year)?.action).toEqual({ kind: 'select', value: '2024' });
+    const form = field({ id: 'TaxFormType', type: 'select-one', label: 'Tax form type filed for the year you chose', options: [{ value: '', text: '' }, { value: 'a', text: 'Form 540' }, { value: 'b', text: 'Form 540NR' }, { value: 'c', text: 'Form 540 2EZ' }] });
+    expect(decide(rules, form)?.action).toEqual({ kind: 'select', value: 'a' });
+    expect(decide(rules, field({ id: 'Agi', label: 'California adjusted gross income from line 17' }))?.action).toMatchObject({ value: '98765' });
+  });
+});
+
+describe('phone verification', () => {
+  const text = field({ id: 'r_Phone_Delivery0', type: 'radio', label: 'Send me a text message' });
+  const call = field({ id: 'r_Phone_Delivery1', type: 'radio', label: 'Call me' });
+
+  it('picks text by default and call with --call', () => {
+    expect(decide(rulesFor(plan()), text)?.action).toEqual({ kind: 'check' });
+    expect(decide(rulesFor(plan()), call)).toBeNull();
+    expect(decide(rulesFor(plan({ call: true })), call)?.action).toEqual({ kind: 'check' });
+    expect(decide(rulesFor(plan({ call: true })), text)).toBeNull();
+  });
+});
+
+describe('throttle', () => {
+  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+  it('allows a first attempt and spaces the next by 2 minutes', () => {
+    let t = emptyThrottle();
+    expect(checkThrottle(t, 'personal', at(0)).ok).toBe(true);
+    t = recordAttempt(t, 'personal', 'register', at(0));
+    expect(checkThrottle(t, 'business', at(1)).ok).toBe(false);
+    expect(checkThrottle(t, 'business', at(3)).ok).toBe(true);
+  });
+
+  it('allows 2 attempts per account per 30 minutes and 4 a day', () => {
+    let t = emptyThrottle();
+    t = recordAttempt(t, 'personal', 'register', at(0));
+    t = recordAttempt(t, 'personal', 'register', at(5));
+    const third = checkThrottle(t, 'personal', at(10));
+    expect(third.ok).toBe(false);
+    expect(third.ok ? 0 : third.until.getTime()).toBe(at(30).getTime());
+    t = recordAttempt(t, 'personal', 'login', at(40));
+    t = recordAttempt(t, 'personal', 'login', at(45));
+    expect(checkThrottle(t, 'personal', at(100)).ok).toBe(false);
+    expect(checkThrottle(t, 'personal', at(100), true).ok).toBe(true);
+  });
+
+  it('never lets anything through a lockout, force included', () => {
+    const t = recordLockout(emptyThrottle(), 'personal', at(0));
+    expect(checkThrottle(t, 'personal', at(34), true).ok).toBe(false);
+    expect(checkThrottle(t, 'personal', at(36)).ok).toBe(true);
+    expect(checkThrottle(t, 'business', at(1)).ok).toBe(true);
+  });
+
+  it('recognises FTB\'s lockout page', () => {
+    expect(isLockout('Account Locked You exceeded the allowed number of attempts.')).toBe(true);
+    expect(isLockout('Registration Confirmation')).toBe(false);
   });
 });
