@@ -178,6 +178,7 @@ describe('what a page says', () => {
     expect(outcomeOf('There is a problem. Check below. The information you entered does not match our records.')).toBe('rejected');
     expect(outcomeOf('Registration Confirmation. We will mail you a letter with your PIN.')).toBe('registered');
     expect(outcomeOf('Your account has been activated.')).toBe('activated');
+    expect(outcomeOf('Account Locked. You exceeded the allowed number of attempts.')).toBe('rejected');
     expect(outcomeOf('Business Representative Registration. Enter the numbers in your mailing address.')).toBe('continue');
   });
 });

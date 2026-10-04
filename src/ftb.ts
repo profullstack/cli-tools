@@ -381,6 +381,10 @@ export function rulesFor(plan: Plan): Rule[] {
     { name: 'foreign number', id: /^Phone_Foreign$/, act: () => null },
     { name: 'foreign address', id: /^Address_Foreign$|^Address_No(MailAddress|PostalCode)$/, act: () => null },
 
+    // Login.
+    { name: 'user name', label: /^user name/i, types: ['text'], act: text(plan.username) },
+    { name: 'password', label: /^password/i, types: ['password'], act: text(plan.password, true) },
+
     // Activation.
     { name: 'pin', label: /\bpin\b|personal identification number/i, types: SUBMIT_TYPES, act: () => (plan.pin ? { kind: 'text', value: plan.pin, secret: true } : null) },
   ];
@@ -437,7 +441,7 @@ export function decide(rules: readonly Rule[], field: Field): { rule: Rule; acti
 export type Outcome = 'registered' | 'activated' | 'rejected' | 'continue';
 
 export function outcomeOf(text: string): Outcome {
-  if (/does not match our records|there is a problem|unable to (verify|process) your|account (is|has been) locked/i.test(text)) return 'rejected';
+  if (/does not match our records|there is a problem|unable to (verify|process) your|account (is|has been) locked|account locked|exceeded the allowed number of attempts/i.test(text)) return 'rejected';
   if (/account (has been )?activated|activation (is )?complete/i.test(text)) return 'activated';
   if (/registration confirmation|successfully (registered|created)|we will (mail|send) you a (letter|pin)|pin .*(mail|letter)/i.test(text)) return 'registered';
   return 'continue';

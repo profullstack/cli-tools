@@ -222,6 +222,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const say = (line: string) => err(line);
   const log = join(dirname(statePath()), 'ftb-pages.jsonl');
   const codeFile = join(dirname(statePath()), `ftb-code-${role}`);
+  const profile = join(dirname(statePath()), 'ftb-chrome');
   const headless = !args.flags.has('--headful');
 
   if (command === 'activate') {
@@ -233,7 +234,7 @@ export async function main(argv: readonly string[]): Promise<number> {
       role, firstName: '', lastName: '', username: account.username, password: account.password, email: account.email,
       addressNumbers: '', zip: '', year: account.secret.year, amount: account.secret.amount, security: { ...account.security }, declare: false, pin,
     };
-    const session = await openSession({ chrome: args.values.get('--chrome'), headless });
+    const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
     try {
       await goto(session, LOGIN_URL);
       say(`Activating the ${role} account ${account.username}:`);
@@ -294,7 +295,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   say(`  shared secret: ${secret.year} Form ${secret.form}${'line' in secret ? ` line ${secret.line}` : ` (${plan.filingStatus})`} = ${formatAmount(amount)}   from ${secret.source}`);
   say(`  address on file: ${plan.addressNumbers} / ${plan.zip}${plan.corpId ? `   corp ${plan.corpId}` : `   SSN ${maskSsn(plan.ssn!)}`}`);
 
-  const session = await openSession({ chrome: args.values.get('--chrome'), headless });
+  const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
   try {
     await goto(session, REGISTER_URL);
     const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, codeFile, interactive: process.stdin.isTTY === true, say });

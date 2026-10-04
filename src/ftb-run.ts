@@ -104,8 +104,19 @@ export interface Session {
   sessionId: string;
 }
 
-export async function openSession(options: { chrome?: string | undefined; headless: boolean; timeoutMs?: number }): Promise<Session> {
-  const browser = await launchBrowser({ ...(options.chrome ? { chrome: options.chrome } : {}), headless: options.headless, timeoutMs: options.timeoutMs ?? 30_000 });
+/**
+ * One Chrome profile kept between runs: once the browser has passed FTB's bot
+ * check its cookie stays good, so a later login POST is not challenged and
+ * resubmitted without its password (which FTB counts as a failed attempt).
+ */
+export async function openSession(options: { chrome?: string | undefined; headless: boolean; timeoutMs?: number; profile?: string | undefined }): Promise<Session> {
+  if (options.profile) mkdirSync(options.profile, { recursive: true, mode: 0o700 });
+  const browser = await launchBrowser({
+    ...(options.chrome ? { chrome: options.chrome } : {}),
+    ...(options.profile ? { profile: options.profile } : {}),
+    headless: options.headless,
+    timeoutMs: options.timeoutMs ?? 30_000,
+  });
   const { cdp } = browser;
   const { targetInfos } = (await cdp.send('Target.getTargets')) as { targetInfos: { targetId: string; type: string }[] };
   let targetId = targetInfos.find((target) => target.type === 'page')?.targetId;
@@ -217,7 +228,9 @@ function describe(field: Field): string {
 function logPage(path: string, page: Page): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const fields = page.fields.map(({ selector, type, label, required, options }) => ({ selector, type, label, required, options: options?.slice(0, 12) }));
-  appendFileSync(path, `${JSON.stringify({ at: new Date().toISOString(), url: page.url, title: page.title, errors: page.errors, fields })}\n`, { mode: 0o600 });
+  // A page with nothing to fill is a result page; its words are the result. Form pages keep fields only.
+  const text = page.fields.length ? undefined : page.text.replace(/^.*?Franchise Tax Board\s*(e-Services)?/s, '').slice(0, 2000);
+  appendFileSync(path, `${JSON.stringify({ at: new Date().toISOString(), url: page.url, title: page.title, errors: page.errors, fields, text })}\n`, { mode: 0o600 });
 }
 
 /**
@@ -230,6 +243,7 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
   const timeoutMs = options.timeoutMs ?? 30_000;
   let lastUrl = '';
   let sameUrl = 0;
+  let replayed = false;
 
   for (let step = 0; step < 15; step += 1) {
     await waitOutChallenge(session, say);
@@ -237,6 +251,12 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
     logPage(options.log, page);
 
     // A wrong or late code leaves the code page up with an error: wait for the next code, do not end the run.
+    // The bot check fired on a POST and replayed it without its typed values: fill the page again, once.
+    if (page.url.includes('akamai-challenge-resubmit') && page.errors.length && !replayed) {
+      replayed = true;
+      say('  (the bot check replayed the form without its values; filling it again)');
+      page.errors = [];
+    }
     const codeRetry = page.errors.length > 0 && page.errors.every((e) => /code you entered/i.test(e)) && page.fields.some((f) => CODE_LABEL.test(f.label));
     if (codeRetry) say(`  FTB: ${page.errors[0]}`);
     const outcome = codeRetry ? 'continue' : outcomeOf(`${page.errors.join(' ')} ${page.errors.length ? '' : page.text}`);
