@@ -280,9 +280,14 @@ export interface Plan {
   security: Record<string, string>;
   /** The person's own penalty-of-perjury statement, from `--declare`. */
   declare: boolean;
+  /** Ten digits; FTB texts a verification code to it during registration. */
+  phone?: string | undefined;
   /** Activation only. */
   pin?: string;
 }
+
+/** The box FTB's texted (or spoken) verification code goes in. */
+export const CODE_LABEL = /verification code|security code|one[- ]time|passcode|access code|enter (the )?code/i;
 
 function option(field: Field, pattern: RegExp): Action | null {
   const found = field.options?.find((o) => o.value !== '' && (pattern.test(o.text) || pattern.test(o.value)));
@@ -350,22 +355,29 @@ export function rulesFor(plan: Plan): Rule[] {
     // Role.
     {
       name: 'role',
-      label: plan.role === 'business' ? /business representative/i : /\bindividual\b/i,
+      label: /individual|business representative/i,
       types: ['radio'],
-      act: () => ({ kind: 'check' }),
+      // By how the option starts: "Tax Professional - ... your individual or business entity client" names both.
+      act: (f) => ((plan.role === 'business' ? /^\s*business representative/i : /^\s*individual\b/i).test(f.label) ? { kind: 'check' } : null),
     },
 
     // Address on file.
-    { name: 'address numbers', label: /numbers? in .*address|address.*numbers?/i, types: SUBMIT_TYPES, act: text(plan.addressNumbers) },
-    { name: 'zip', label: /zip/i, types: SUBMIT_TYPES, act: text(plan.zip) },
+    { name: 'zip', label: /zip|postal/i, types: SUBMIT_TYPES, act: text(plan.zip) },
+    { name: 'address numbers', label: /numbers in (the |your )?(business )?(mailing )?address/i, types: SUBMIT_TYPES, act: text(plan.addressNumbers) },
 
     // The shared secret.
-    { name: 'tax year', label: /year/i, types: ['select-one'], act: (f) => option(f, new RegExp(`^\\s*${plan.year}\\s*$`)) },
-    { name: 'tax year', label: /year/i, types: ['text', 'number', 'tel'], act: text(String(plan.year)) },
+    { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['select-one'], act: (f) => option(f, new RegExp(`^\\s*${plan.year}\\s*$`)) },
+    { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['text', 'number', 'tel'], act: text(String(plan.year)) },
     { name: 'net income', label: /net income|income \(loss\)|adjusted gross|\bagi\b/i, types: SUBMIT_TYPES, act: text(formatAmount(plan.amount)) },
 
     // The penalty-of-perjury statement: only ever the person's own.
     { name: 'declaration', label: /perjury|i declare|under penalty/i, types: ['checkbox'], act: () => ({ kind: 'declare' }) },
+
+    // Phone verification: a text, never a call (a call cannot be relayed).
+    { name: 'phone', label: /phone number/i, types: SUBMIT_TYPES, act: () => (plan.phone ? { kind: 'text', value: plan.phone } : null) },
+    { name: 'send a text', label: /send me a text|text message/i, types: ['radio'], act: () => ({ kind: 'check' }) },
+    { name: 'foreign number', id: /^Phone_Foreign$/, act: () => null },
+    { name: 'foreign address', id: /^Address_Foreign$|^Address_No(MailAddress|PostalCode)$/, act: () => null },
 
     // Activation.
     { name: 'pin', label: /\bpin\b|personal identification number/i, types: SUBMIT_TYPES, act: () => (plan.pin ? { kind: 'text', value: plan.pin, secret: true } : null) },
@@ -393,7 +405,7 @@ export function rulesFor(plan: Plan): Rule[] {
           return { kind: 'text', value: part && slices[part] !== undefined ? slices[part]! : digits, secret: true };
         },
       },
-      { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /^\s*540\b(?!\s*NR)/i) },
+      { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /^\s*(form\s*)?540\s*$/i) },
     );
   }
   return rules;
@@ -409,7 +421,8 @@ export function decide(rules: readonly Rule[], field: Field): { rule: Rule; acti
       if (!pattern) continue;
       if (!(pass === 'id' ? pattern.test(field.id) : pattern.test(haystack))) continue;
       const action = rule.act(field);
-      return action ? { rule, action } : null;
+      // An id match is deliberate, even when it says "leave this alone"; a label match that cannot act lets the next rule try.
+      if (action || pass === 'id') return action ? { rule, action } : null;
     }
   }
   return null;

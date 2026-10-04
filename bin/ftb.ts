@@ -68,6 +68,7 @@ register options:
   --year YYYY          use this tax year's return instead of the newest
   --line 15|20         business: which 100S line is the net income (default 20)
   --amount=N           override the amount (a loss is --amount=-12345)
+  --phone N            10 digits FTB texts a verification code to (required)
 
 activate options:
   --pin N              the PIN from the letter (21 days from registration)
@@ -147,7 +148,8 @@ function postHandoff(role: Role, at: Date): string | null {
   const args = ['handoff', 'add', 'ftb', '--title', card.title, '--open', LOGIN_URL, ...card.steps.flatMap((step) => ['--step', step])];
   const result = spawnSync('myna', args, { input: card.text, encoding: 'utf8' });
   if (result.error || result.status !== 0) return null;
-  return result.stdout.match(/https:\/\/\S+\/handoff\/\S+/)?.[0] ?? result.stdout.trim().split('\n').pop() ?? null;
+  // Signed out of myna cloud the card is kept locally and there is no link to record.
+  return result.stdout.match(/https:\/\/\S+\/handoff\/\S+/)?.[0] ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +180,7 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
     boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-handoff', '--no-vault'],
-    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome'],
+    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
   });
   const [command, roleArg] = args.positional;
   if (args.flags.has('--help') || args.flags.has('-h') || !command) {
@@ -212,6 +214,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const state = loadState();
   const say = (line: string) => err(line);
   const log = join(dirname(statePath()), 'ftb-pages.jsonl');
+  const codeFile = join(dirname(statePath()), `ftb-code-${role}`);
   const headless = !args.flags.has('--headful');
 
   if (command === 'activate') {
@@ -227,7 +230,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     try {
       await goto(session, LOGIN_URL);
       say(`Activating the ${role} account ${account.username}:`);
-      const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, interactive: process.stdin.isTTY === true, say });
+      const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, codeFile, interactive: process.stdin.isTTY === true, say });
       if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || 'no'} (${result.page.url})`);
       account.activatedAt = new Date().toISOString();
       saveState(state);
@@ -249,6 +252,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   const line = args.values.has('--line') ? Number(args.values.get('--line')) : undefined;
   if (line !== undefined && line !== 15 && line !== 20) throw new UsageError('--line is 15 or 20');
 
+  const phone = (args.values.get('--phone') ?? '').replace(/\D/g, '');
+  if (phone.length !== 10) throw new UsageError('--phone is the 10-digit number FTB texts a verification code to');
   const rows = extract(dir);
   const identity = latestIdentity(rows);
   if (!identity) throw new FtbError(`no Form 540 with a name, SSN and address under ${dir}`);
@@ -274,6 +279,7 @@ export async function main(argv: readonly string[]): Promise<number> {
     filingStatus: 'filingStatus' in secret ? secret.filingStatus : undefined,
     security: {},
     declare: args.flags.has('--declare'),
+    phone,
   };
 
   say(`Registering a ${role} MyFTB account as ${plan.username} <${email}>`);
@@ -283,7 +289,7 @@ export async function main(argv: readonly string[]): Promise<number> {
   const session = await openSession({ chrome: args.values.get('--chrome'), headless });
   try {
     await goto(session, REGISTER_URL);
-    const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, interactive: process.stdin.isTTY === true, say });
+    const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: args.flags.has('--dry-run'), log, codeFile, interactive: process.stdin.isTTY === true, say });
     if (result.outcome === 'dry-run') {
       out('Dry run: stopped before the first Continue that sends anything to FTB.');
       return 0;
@@ -313,7 +319,7 @@ export async function main(argv: readonly string[]): Promise<number> {
         account.handoff = url;
         saveState(state);
         out(`  PIN-letter card: ${url}`);
-      }
+      } else out('  PIN-letter card kept in myna locally (`myna cloud login` publishes it)');
     }
     out(`  When the letter comes: ftb activate ${role} --pin <PIN>`);
     return 0;

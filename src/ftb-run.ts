@@ -7,10 +7,10 @@
  * HeadlessChrome (the same trick src/statements-run.ts uses on banks).
  */
 
-import { appendFileSync, mkdirSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import { type Action, type Field, FtbError, type Outcome, type Plan, type Rule, decide, outcomeOf } from './ftb.ts';
+import { type Action, CODE_LABEL, type Field, FtbError, type Outcome, type Plan, type Rule, decide, outcomeOf } from './ftb.ts';
 import { promptLine, promptSecret } from './prompt.ts';
 import { type Browser, type Cdp, launchBrowser } from './wcag.ts';
 
@@ -82,14 +82,18 @@ function fillScript(selector: string, action: Action): string {
   })()`;
 }
 
-/** The page's own Continue/Submit/Log in, never the session-timeout dialog's "Continue Session". */
+/**
+ * The page's own forward button, never the session-timeout dialog's "Continue
+ * Session" nor Back/Cancel. Known labels first, then the page's only other
+ * submit; when neither fits, the labels seen come back as `?a|b` for the error.
+ */
 const SUBMIT = `(() => {
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-  const buttons = [...document.querySelectorAll('form button, form input[type=submit]')]
-    .filter((b) => visible(b) && !b.closest('#timer, .modal') && b.id !== 'continue');
   const text = (b) => (b.innerText || b.value || '').trim();
-  const pick = buttons.find((b) => /^(submit|continue|next|log ?in|login|activate)$/i.test(text(b)));
-  if (!pick) return null;
+  const buttons = [...document.querySelectorAll('form button, form input[type=submit], form input[type=button]')]
+    .filter((b) => visible(b) && !b.closest('#timer, .modal') && b.id !== 'continue' && text(b) && !/^(back|cancel|end session|previous)$/i.test(text(b)));
+  const pick = buttons.find((b) => /^(submit|continue|next|log ?in|login|activate|send( code| me a code)?|verify|confirm)$/i.test(text(b))) || (buttons.length === 1 ? buttons[0] : null);
+  if (!pick) return '?' + buttons.map(text).join('|');
   pick.click();
   return text(pick);
 })()`;
@@ -141,6 +145,25 @@ export async function goto(session: Session, url: string, timeoutMs = 30_000): P
   await sleep(1_500);
 }
 
+/**
+ * Akamai's "Challenge Validation" interstitial is a proof-of-work the page's own
+ * script solves in ~20-30 s before resubmitting; a person waits it out too.
+ */
+async function waitOutChallenge(session: Session, say: (line: string) => void, timeoutMs = 90_000): Promise<void> {
+  const challenged = `document.title === 'Challenge Validation' || !!document.getElementById('sec-cpt-if')`;
+  if (!(await evaluate<boolean>(session, challenged))) return;
+  say('  (FTB bot check: waiting for the browser to finish it)');
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    await sleep(3_000);
+    if ((await evaluate<boolean>(session, challenged)) === false) {
+      await sleep(1_500);
+      return;
+    }
+  }
+  throw new FtbError(`FTB's bot check did not clear in ${timeoutMs / 1000}s`);
+}
+
 export async function readPage(session: Session): Promise<Page> {
   const page = await evaluate<Page>(session, READ_PAGE);
   if (!page) throw new FtbError('could not read the page');
@@ -150,14 +173,36 @@ export async function readPage(session: Session): Promise<Page> {
 export interface WalkOptions {
   plan: Plan;
   rules: Rule[];
-  /** Fill the first page that takes typed values, print what would go, and stop before its Continue. */
+  /** Walk every page up to the one with the declaration, fill it, print its labels, and stop before Submit. */
   dryRun: boolean;
   /** Where each page's fields (never values) are appended, for tuning the rules. */
   log: string;
   /** Ask at the terminal for a required field no rule fills. */
   interactive: boolean;
   say: (line: string) => void;
+  /** Where a verification code can be dropped when nobody is at a terminal. */
+  codeFile: string;
   timeoutMs?: number;
+}
+
+/**
+ * The code FTB just texted: typed at a terminal, or written to `codeFile` by
+ * whoever has the phone (riotcoder, relaying a message). The browser session
+ * stays open meanwhile; the code expires in minutes, so the wait is 15.
+ */
+async function waitForCode(options: WalkOptions): Promise<string> {
+  if (options.interactive) return promptLine('Verification code FTB sent: ');
+  rmSync(options.codeFile, { force: true });
+  options.say(`  WAITING for the code FTB texted: write it to ${options.codeFile} (15 minutes)`);
+  const until = Date.now() + 15 * 60_000;
+  while (Date.now() < until) {
+    await sleep(3_000);
+    if (!existsSync(options.codeFile)) continue;
+    const code = readFileSync(options.codeFile, 'utf8').trim();
+    rmSync(options.codeFile, { force: true });
+    if (/^\w{4,10}$/.test(code)) return code;
+  }
+  throw new FtbError('no verification code arrived in 15 minutes');
 }
 
 export interface WalkResult {
@@ -187,6 +232,7 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
   let sameUrl = 0;
 
   for (let step = 0; step < 15; step += 1) {
+    await waitOutChallenge(session, say);
     let page = await readPage(session);
     logPage(options.log, page);
 
@@ -201,8 +247,13 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
 
     const filled: string[] = [];
     const missing: Field[] = [];
+    let declared = false;
     for (const pass of ['choices', 'text'] as const) {
-      if (pass === 'text') page = await readPage(session);
+      if (pass === 'text') {
+        // A select can rewrite the page around it (FTB's form type does); let that land first.
+        await sleep(2_500);
+        page = await readPage(session);
+      }
       for (const field of page.fields) {
         const choice = ['select-one', 'radio', 'checkbox'].includes(field.type);
         if ((pass === 'choices') !== choice) continue;
@@ -212,7 +263,8 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
           continue;
         }
         const { rule, action } = decision;
-        if (action.kind === 'declare' && !plan.declare) {
+        if (action.kind === 'declare') declared = true;
+        if (action.kind === 'declare' && !plan.declare && !options.dryRun) {
           throw new FtbError(
             `this page asks you to declare, under penalty of perjury, that what is entered is true:\n  "${field.label}"\n` +
               'That statement is yours to make. Rerun with --declare once you have checked the values above.',
@@ -224,6 +276,12 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
     }
 
     for (const field of missing) {
+      if (CODE_LABEL.test(field.label)) {
+        const code = await waitForCode(options);
+        await evaluate(session, fillScript(field.selector, { kind: 'text', value: code }));
+        filled.push('verification code = ••••');
+        continue;
+      }
       if (!options.interactive) {
         throw new FtbError(`no rule fills ${describe(field)} on ${page.url}; run it in a terminal to answer by hand, or add a rule (fields logged to ${options.log})`);
       }
@@ -235,11 +293,17 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
 
     for (const line of filled) say(`    ${line}`);
 
-    // Past the terms page every Continue may create something at FTB, so a dry run stops here.
-    if (options.dryRun && filled.some((line) => line.includes(' = '))) return { outcome: 'dry-run', page };
+    // The page with the declaration is the one that creates the account; a dry run shows it and stops.
+    if (options.dryRun && declared) {
+      for (const field of page.fields) if (field.type !== 'checkbox') say(`    [${field.label}]`);
+      return { outcome: 'dry-run', page };
+    }
 
     const pressed = await evaluate<string>(session, SUBMIT);
-    if (!pressed) throw new FtbError(`no Continue or Submit on ${page.url} (fields logged to ${options.log})`);
+    if (!pressed || pressed.startsWith('?')) {
+      throw new FtbError(`no forward button on ${page.url}; buttons seen: ${pressed?.slice(1) || 'none'} (fields logged to ${options.log})`);
+    }
+    say(`    -> ${pressed}`);
     await settle(session, timeoutMs);
   }
   throw new FtbError(`gave up after 15 pages (see ${options.log})`);
