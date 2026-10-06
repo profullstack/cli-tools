@@ -156,6 +156,24 @@ export function pickPerson(results: readonly SerpResult[], contact: ContactRow):
   return profiles.size === 1 ? [...profiles][0]! : '';
 }
 
+/**
+ * The headline from a profile result's title. Google shows LinkedIn profiles
+ * as `Name - Title - Company | LinkedIn`; with two parts the second is as
+ * often the company as the title, so it only counts when it is not the
+ * company's name.
+ */
+export function titleFromResult(title: string, companyDomain = ''): string {
+  const parts = title
+    .replace(/\s*[|·]\s*LinkedIn.*$/i, '')
+    .split(/\s+[-–—]\s+/)
+    .map((p) => p.trim());
+  const candidate = parts.length >= 3 ? parts[1]! : parts.length === 2 ? parts[1]! : '';
+  if (candidate.length < 2 || candidate.length > 100 || candidate.endsWith('...')) return '';
+  const company = companyDomain ? fold(companyToken(companyDomain)) : '';
+  if (parts.length === 2 && company && fold(candidate).replace(/\s+/g, '').includes(company)) return '';
+  return candidate;
+}
+
 export function companyQuery(domain: string): string {
   return `site:linkedin.com/company "${registrable(domain)}"`;
 }
@@ -180,6 +198,8 @@ export function pickCompany(results: readonly SerpResult[], domain: string): str
 export interface LookupResult {
   contacts: ContactRow[];
   people: number;
+  /** Job titles read off the profiles found. */
+  titles: number;
   companies: number;
   searches: number;
   cached: number;
@@ -205,7 +225,7 @@ export async function lookupLinkedin(
   } = {},
 ): Promise<LookupResult> {
   const out = contacts.map((c) => ({ ...c }));
-  const result: LookupResult = { contacts: out, people: 0, companies: 0, searches: 0, cached: 0 };
+  const result: LookupResult = { contacts: out, people: 0, titles: 0, companies: 0, searches: 0, cached: 0 };
   const inflight = new Map<string, Promise<SerpResult[] | undefined>>();
   const work = out.filter((c) => !c.linkedin_url && ((c.first_name && c.last_name) || c.company_domain));
   let next = 0;
@@ -247,10 +267,18 @@ export async function lookupLinkedin(
     while (next < work.length && !result.stopped) {
       const contact = work[next++]!;
       if (contact.first_name && contact.last_name) {
-        const url = await answer(personQuery(contact), (r) => pickPerson(r, contact));
+        const query = personQuery(contact);
+        const url = await answer(query, (r) => pickPerson(r, contact));
         if (url) {
           contact.linkedin_url = url;
           result.people += 1;
+          // the profile's headline is the job title we otherwise lack
+          const hit = cache.get(query)?.find((r) => linkedinPath(r.link, 'in') === url);
+          const title = hit ? titleFromResult(hit.title ?? '', contact.company_domain) : '';
+          if (!contact.job_title && title) {
+            contact.job_title = title;
+            result.titles += 1;
+          }
           continue;
         }
       }
@@ -269,7 +297,7 @@ export async function lookupLinkedin(
 
 export function formatLookupSummary(r: LookupResult): string {
   return (
-    `linkedin: +${r.people} profiles, +${r.companies} company pages; ${r.searches} searches, ${r.cached} cached` +
+    `linkedin: +${r.people} profiles (+${r.titles} job titles), +${r.companies} company pages; ${r.searches} searches, ${r.cached} cached` +
     `${r.stopped ? `; stopped: ${r.stopped}` : ''}\n`
   );
 }

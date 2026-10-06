@@ -13,6 +13,7 @@ import {
   pickPerson,
   personQuery,
   saveCache,
+  titleFromResult,
   valueSerp,
   type SerpResult,
 } from '../src/linkedin-lookup.ts';
@@ -135,5 +136,20 @@ describe('lookupLinkedin', () => {
     saveCache(path, new Map([['q', [{ title: 't', link: 'l' }]], ['m', []]]));
     expect(loadCache(path)).toEqual(new Map([['q', [{ title: 't', link: 'l' }]], ['m', []]]));
     expect(loadCache(`${path}.missing`).size).toBe(0);
+  });
+});
+
+describe('titleFromResult', () => {
+  it('reads the headline out of a profile title', () => {
+    expect(titleFromResult('Ada Lovelace - CTO - Acme | LinkedIn', 'acme.com')).toBe('CTO');
+    expect(titleFromResult('Ada Lovelace – Head of Growth | LinkedIn', 'acme.com')).toBe('Head of Growth');
+    expect(titleFromResult('Ada Lovelace - Acme | LinkedIn', 'acme.com')).toBe('');
+    expect(titleFromResult('Ada Lovelace | LinkedIn')).toBe('');
+  });
+
+  it('fills job_title from the profile it found', async () => {
+    const r = await lookupLinkedin([ada], async () => [{ title: 'Ada Lovelace - CTO - Acme | LinkedIn', link: 'https://www.linkedin.com/in/ada' }]);
+    expect(r.contacts[0]).toMatchObject({ linkedin_url: 'https://www.linkedin.com/in/ada', job_title: 'CTO' });
+    expect(r.titles).toBe(1);
   });
 });
