@@ -124,6 +124,13 @@ export interface Config {
    * linkedin_url, company_domain.
    */
   enrich?: Source[];
+  /** `--full`'s LinkedIn search; see src/linkedin-lookup.ts. */
+  linkedin?: {
+    /** Secret reference for a ValueSERP key. Absent: no search. */
+    serpKey?: string;
+    /** New searches per run (cached answers are free). Default 3000. */
+    maxSearches?: number;
+  };
   /** Settings for `--clean`; see src/user-clean.ts. */
   clean?: import('./user-clean.ts').CleanConfig;
 }

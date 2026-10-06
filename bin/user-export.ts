@@ -18,6 +18,15 @@
 
 import { writeFileSync } from 'node:fs';
 
+import {
+  defaultCachePath,
+  formatLookupSummary,
+  loadCache,
+  lookupLinkedin,
+  saveCache,
+  valueSerp,
+} from '../src/linkedin-lookup.ts';
+
 import { UsageError, csv, parseArgs } from '../src/args.ts';
 import { isMain } from '../src/is-main.ts';
 import {
@@ -41,13 +50,14 @@ import {
   toCleanCsv,
   toContacts,
   type CleanedRow,
+  type ContactRow,
   toDroppedCsv,
 } from '../src/user-clean.ts';
 
 const USAGE = `Usage:
   user-export [--config FILE] [-o FILE] [--only site,site] [--source] [--json]
   user-export --clean [-o FILE] [--dropped FILE] [--only site,site]
-  user-export --full [--clean] [-o FILE] [--no-enrich]
+  user-export --full [--clean] [-o FILE] [--no-enrich] [--no-linkedin] [--linkedin-max N]
   user-export --example        print a sample config
 
 Reads every source in the config and writes one CSV of
@@ -87,6 +97,14 @@ linkedin_url, company_domain) is read and matched by email, filling only blank
 fields. company_domain falls back to the address's own domain unless that is
 webmail. Add --clean to drop the addresses not worth mailing first.
 
+With "linkedin": {"serpKey": <secret reference>} in the config, --full then
+searches Google (ValueSERP) for whoever still has no linkedin_url: a profile
+is taken only when its title carries the full name and, with a company, the
+company's name; with no company, only when a single profile matches. Failing
+that, the company's linkedin.com/company page. Answers are cached in
+~/.cache/cli-tools/linkedin-lookup.json, so a rerun only searches new contacts;
+"maxSearches" (default 3000) or --linkedin-max caps the new searches per run.
+
 Options:
       --config FILE  config path (default: $USER_EXPORT_CONFIG, then
                      ~/.config/cli-tools/user-export.json)
@@ -97,6 +115,8 @@ Options:
       --clean        only the addresses worth mailing (see above)
       --full         the six contact columns above, enriched
       --no-enrich    with --full: skip the "enrich" sources
+      --no-linkedin  with --full: skip the LinkedIn search
+      --linkedin-max N   with --full: at most N new searches this run
       --dropped FILE with --clean: every dropped address and why
       --keep-never-logged-in   with --clean: do not drop those
       --no-resend    with --clean: skip the Resend bounce lookup
@@ -110,8 +130,8 @@ The output is personal data. -o writes it owner-readable only.
 if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
-      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--full', '--no-enrich', '--keep-never-logged-in', '--no-resend', '--no-dns'],
-      string: ['--config', '-o', '--out', '--only', '--dropped'],
+      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--full', '--no-enrich', '--no-linkedin', '--keep-never-logged-in', '--no-resend', '--no-dns'],
+      string: ['--config', '-o', '--out', '--only', '--dropped', '--linkedin-max'],
     });
 
     if (flags.has('-h') || flags.has('--help')) {
@@ -164,6 +184,21 @@ if (isMain(import.meta.url)) {
         const enriched = enrichContacts(contacts, enrichResults.flatMap((r) => r.rows));
         contacts = enriched.contacts;
         cleanSummary += formatEnrichSummary(enriched, contacts.length);
+      }
+      const serpKey = config.linkedin?.serpKey;
+      if (full && serpKey && !flags.has('--no-linkedin')) {
+        const max = values.get('--linkedin-max');
+        const maxSearches = max === undefined ? (config.linkedin?.maxSearches ?? 3000) : Number(max);
+        if (!Number.isInteger(maxSearches) || maxSearches < 0) throw new UsageError('--linkedin-max takes a whole number');
+        const cachePath = defaultCachePath();
+        const cache = loadCache(cachePath);
+        try {
+          const found = await lookupLinkedin(contacts as ContactRow[], valueSerp(resolve(serpKey, 'linkedin.serpKey')), { cache, maxSearches });
+          contacts = found.contacts;
+          cleanSummary += formatLookupSummary(found);
+        } finally {
+          saveCache(cachePath, cache);
+        }
       }
       text = toCleanCsv(contacts, { full });
     } else {

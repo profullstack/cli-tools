@@ -2332,6 +2332,22 @@ dropped.
 ]
 ```
 
+With `"linkedin": {"serpKey": "<secret reference>"}` in the config, `--full`
+then searches Google through [ValueSERP](https://valueserp.com) for everyone
+still missing a `linkedin_url` (LinkedIn's own search needs a login):
+
+- `site:linkedin.com/in "First Last" <company>`: a profile counts only when its
+  title carries every part of the name and, with a company, the company's name
+  is in the title or snippet. With no company, the name must also be the
+  profile's slug and be the only such profile in the results.
+- Failing that, `site:linkedin.com/company "<domain>"`: the company page whose
+  title or slug names the company, or whose text carries the domain.
+
+Raw results are cached in `~/.cache/cli-tools/linkedin-lookup.json`, so a rerun
+only searches new contacts and a stricter rule costs nothing. `maxSearches`
+(default 3000) or `--linkedin-max N` caps new searches per run; a 402 (credits
+gone) stops the search and keeps what it found. `--no-linkedin` skips it.
+
 ### `email-cleaner`
 
 Clean a mailing list before you send to it, with the options of
