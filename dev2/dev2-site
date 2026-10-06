@@ -964,7 +964,9 @@ def plan_healthchecks(name, raw, st):
         body = "\n".join(lines[a:b])
         if re.search(r"^    healthcheck:", body, re.M) and HEALTH_MARK not in body:
             skipped[svc] = "has its own healthcheck"; continue
-        if img_hc != "0": skipped[svc] = "already has a healthcheck (image or container)"; continue
+        # Ours (marked in the compose file) is what the container is running, so a re-run must
+        # re-plan it, not read it as "already has one" and strip it (hqtui.com, 2026-10-06).
+        if img_hc != "0" and HEALTH_MARK not in body: skipped[svc] = "already has a healthcheck (image or container)"; continue
         if rt == "redis-cli":
             if pong != "PONG": skipped[svc] = f"redis-cli ping answered {pong} (auth?)"; continue
             tests[svc] = REDIS_HEALTH_TEST; continue
@@ -1539,7 +1541,28 @@ def render_vhost(s):
         blk = "server {" + proxy_tuned(blk, p).replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"])
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
-    return conf, domains
+    return keepalive_upstreams(conf, s["site"]), domains
+
+# nginx -> app keepalive. Without an upstream block nginx opens a new TCP connection to
+# the app for every request, and the box-wide $connection_upgrade map sends
+# `Connection: close` on every plain request. Each plain `proxy_pass` to a loopback
+# port becomes a pooled upstream; $connection_upgrade_keepalive still upgrades
+# websockets and otherwise sends an empty Connection header so the socket is reused.
+# keepalive_timeout 4s stays under Node's 5s server keepAliveTimeout (Bun's is 10s),
+# so nginx never reuses a socket the app has just closed (an intermittent 502).
+KEEPALIVE_MAP = "/etc/nginx/conf.d/profullstack-keepalive.conf"
+KEEPALIVE_MAP_BODY = (f"# managed by cli-tools/dev2/dev2-site vhost: see keepalive_upstreams\n"
+                      "map $http_upgrade $connection_upgrade_keepalive {\n    default upgrade;\n    ''      '';\n}\n")
+
+def keepalive_upstreams(conf, site_name):
+    key = re.sub(r"[^A-Za-z0-9]", "_", site_name)
+    ports = sorted(set(re.findall(r"proxy_pass http://127\.0\.0\.1:(\d+);", conf)), key=int)
+    if not ports: return conf
+    conf = re.sub(r"proxy_pass http://127\.0\.0\.1:(\d+);", lambda m: f"proxy_pass http://dev2_{key}_{m.group(1)};", conf)
+    conf = conf.replace("proxy_set_header Connection $connection_upgrade;", "proxy_set_header Connection $connection_upgrade_keepalive;")
+    ups = "".join(f"upstream dev2_{key}_{p} {{\n    server 127.0.0.1:{p};\n    keepalive 16;\n    keepalive_timeout 4s;\n}}\n\n" for p in ports)
+    head, sep, rest = conf.partition("\nserver {")
+    return head + "\n" + ups.rstrip("\n") + "\n" + sep + rest
 
 def vhost_sites():
     """Registry sites (and sites.d-only entries) whose vhost is enabled on dev2."""
@@ -1570,7 +1593,8 @@ def cmd_vhost(args):
                 if not l.startswith(("---", "+++")): note(l)
             install_maintenance(s, dry_run=True)
             continue
-        ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not args.no_cert_check else None
+        ssh("root", f"test -s /etc/nginx/ssl/{s['site']}/fullchain.pem") if not getattr(args, "no_cert_check", False) else None
+        ssh_put(KEEPALIVE_MAP_BODY, KEEPALIVE_MAP, "0644")  # the vhost references its variable
         log(f"nginx vhost {s['site']} -> 127.0.0.1:{s.get('port')} ({', '.join(domains)})")
         install_maintenance(s)  # before the vhost points error_page at it
         ssh_put(conf, f"/tmp/dev2-site-{s['site']}.conf", "0644")
