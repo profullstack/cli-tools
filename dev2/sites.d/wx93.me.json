@@ -1,0 +1,39 @@
+{
+ "site": "wx93.me",
+ "service": "wx93.me",
+ "repo": "profullstack/wx93.me",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "wx93.me",
+  "www.wx93.me",
+  "9xq.me",
+  "www.9xq.me"
+ ],
+ "db": "pg",
+ "db_kinds": [
+  "pg"
+ ],
+ "redis": false,
+ "volumes": [],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3298,
+ "health_path": "/healthz",
+ "max_body": "2m",
+ "mem_limit": "512m",
+ "mem_note": "Bun + Hono shortener, API and hosted MCP; clicks buffered in memory and flushed every second",
+ "env_overrides": {
+  "SITE_URL": "https://wx93.me",
+  "ALT_HOSTS": "9xq.me",
+  "NODE_ENV": "production"
+ },
+ "notes": "Not a Railway site: born on dev2 2026-10-06. URL shortener; 9xq.me is a second short domain on the same app (codes resolve on both, other paths 301 to wx93.me). Database via db-create (migrations run on app boot). Secrets in vault wx93-me--prod. Deploys on push to main.",
+ "vault": "wx93-me--prod"
+}
