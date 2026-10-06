@@ -3,9 +3,15 @@
  *
  * Cloudflare's Web Search API fronts three providers behind a single endpoint —
  * Ceramic (its own 40B-page index, cheapest), Exa (neural, query-relevant
- * highlights) and Linkup (raw results, no generated answer). Each one is good at
- * something different and none of them is right about everything, so this asks
- * all three at once and fuses the lists instead of trusting any one ordering.
+ * highlights) and Linkup (raw results, no generated answer). Two more are called
+ * directly with our own keys: Perplexity's Search API (its own index) and Serper
+ * (Google's results). Each one is good at something different and none of them
+ * is right about everything, so this asks every configured one at once and fuses
+ * the lists instead of trusting any one ordering.
+ *
+ * The direct two are not an afterthought: they are what makes this work on an
+ * account whose AI Gateway credits never landed, which is exactly what happened
+ * the day it shipped (2026-10-06).
  *
  * The ranking is deliberately explainable — every number `--explain` prints is
  * one of the four terms below, not a model's opinion:
@@ -26,7 +32,10 @@
  * since the providers disagree on all of those for the same document.
  */
 
-export const PROVIDERS = ['ceramic', 'exa', 'linkup'] as const;
+export const PROVIDERS = ['ceramic', 'exa', 'linkup', 'perplexity', 'serper'] as const;
+
+/** The ones that go through Cloudflare's endpoint; the rest are called directly. */
+export const CLOUDFLARE_PROVIDERS = ['ceramic', 'exa', 'linkup'] as const;
 
 export type Provider = (typeof PROVIDERS)[number];
 
@@ -42,6 +51,9 @@ export const PRICE_PER_1K: Record<Provider, number> = {
   ceramic: 0.25,
   exa: 7.0,
   linkup: 5.0,
+  // Perplexity Search API list price; Serper's pay-as-you-go top tier.
+  perplexity: 5.0,
+  serper: 1.0,
 };
 
 export interface Hit {
@@ -204,6 +216,79 @@ export function parseHits(text: string): { hits: Hit[]; latencyMs: number | null
   return { hits, latencyMs: Number.isFinite(latency) ? latency : null };
 }
 
+/** A provider called with our own key, outside Cloudflare. */
+export type DirectCaller = (query: string, limit: number) => Promise<{ hits: Hit[]; latencyMs: number | null }>;
+
+async function postJson(url: string, headers: Record<string, string>, body: unknown, timeoutMs: number): Promise<any> {
+  const started = Date.now();
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { ...headers, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  const text = await response.text();
+  if (!response.ok) {
+    let message = text.trim().slice(0, 200) || `HTTP ${response.status}`;
+    try {
+      const parsed = JSON.parse(text);
+      message = parsed?.error?.message ?? parsed?.message ?? parsed?.detail ?? message;
+    } catch {
+      // keep the raw text
+    }
+    throw new SearchError(`${message} (${response.status})`, response.status);
+  }
+  return { body: JSON.parse(text), latencyMs: Date.now() - started };
+}
+
+/** Perplexity Search API: `results[]` of { title, url, snippet, date }. */
+export function parsePerplexity(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.results) ? body.results : [];
+  return results
+    .filter((r) => typeof r?.url === 'string' && r.url)
+    .map((r) => ({
+      url: r.url.trim(),
+      title: typeof r.title === 'string' ? r.title.trim() : '',
+      description: typeof r.snippet === 'string' ? r.snippet.trim() : '',
+    }));
+}
+
+/** Serper (Google): `organic[]` of { title, link, snippet }, already in Google's order. */
+export function parseSerper(body: any): Hit[] {
+  const organic: any[] = Array.isArray(body?.organic) ? body.organic : [];
+  return organic
+    .filter((r) => typeof r?.link === 'string' && r.link)
+    .map((r) => ({
+      url: r.link.trim(),
+      title: typeof r.title === 'string' ? r.title.trim() : '',
+      description: typeof r.snippet === 'string' ? r.snippet.trim() : '',
+    }));
+}
+
+export function perplexitySearchCaller(apiKey: string, timeoutMs: number): DirectCaller {
+  return async (query, limit) => {
+    const { body, latencyMs } = await postJson(
+      'https://api.perplexity.ai/search',
+      { Authorization: `Bearer ${apiKey}` },
+      { query, max_results: limit },
+      timeoutMs,
+    );
+    return { hits: parsePerplexity(body), latencyMs };
+  };
+}
+
+export function serperCaller(apiKey: string, timeoutMs: number): DirectCaller {
+  return async (query, limit) => {
+    const { body, latencyMs } = await postJson(
+      'https://google.serper.dev/search',
+      { 'X-API-KEY': apiKey },
+      { q: query, num: limit },
+      timeoutMs,
+    );
+    return { hits: parseSerper(body).slice(0, limit), latencyMs };
+  };
+}
+
 /** One provider, one HTTP call. Injected so the fan-out is testable offline. */
 export type Caller = (request: SearchRequest, auth: Auth) => Promise<{ hits: Hit[]; latencyMs: number | null }>;
 
@@ -264,14 +349,28 @@ export async function searchAll(
   providers: readonly Provider[],
   caller: Caller,
   auths: readonly Auth[],
-  options: { limit?: number; gateway?: string } = {},
+  options: { limit?: number; gateway?: string; direct?: Partial<Record<Provider, DirectCaller>> } = {},
 ): Promise<ProviderResult[]> {
-  if (auths.length === 0) throw new Error('no Cloudflare credential');
   let authIndex = 0;
   const limit = options.limit ?? MAX_LIMIT;
   const gateway = options.gateway ?? DEFAULT_GATEWAY;
 
   const one = async (provider: Provider): Promise<ProviderResult> => {
+    const direct = options.direct?.[provider];
+    if (direct) {
+      try {
+        const { hits, latencyMs } = await direct(query, limit);
+        return { provider, hits, latencyMs, error: null };
+      } catch (error) {
+        return { provider, hits: [], latencyMs: null, error: error instanceof Error ? error.message : String(error) };
+      }
+    }
+    if (!(CLOUDFLARE_PROVIDERS as readonly string[]).includes(provider)) {
+      return { provider, hits: [], latencyMs: null, error: `no ${provider} key — run \`cli-tools config set ${provider}\`` };
+    }
+    if (auths.length === 0) {
+      return { provider, hits: [], latencyMs: null, error: 'no Cloudflare credential' };
+    }
     const request = { query, provider, limit, gateway };
     for (;;) {
       const tried = authIndex;
@@ -432,7 +531,7 @@ export function rank(query: string, results: readonly ProviderResult[], options:
 
 // --- output ----------------------------------------------------------------
 
-const LETTER: Record<Provider, string> = { ceramic: 'C', exa: 'E', linkup: 'L' };
+const LETTER: Record<Provider, string> = { ceramic: 'C', exa: 'E', linkup: 'L', perplexity: 'P', serper: 'S' };
 
 function badge(seenBy: Partial<Record<Provider, number>>): string {
   return PROVIDERS.map((provider) => (seenBy[provider] ? LETTER[provider] : '·')).join('');
