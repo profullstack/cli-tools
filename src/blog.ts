@@ -1,4 +1,4 @@
-import { readdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -318,6 +318,10 @@ export async function createPost(
   await writeFile(path, renderPost({ ...post, ...(canonical ? { canonical } : {}) }, config), {
     flag: 'wx',
   });
+  // A page the web server cannot read is a 403. writeFile's mode is masked by the
+  // umask, and agent sessions run with 007, so post 220 landed 0660 and was
+  // published "ok" while every reader got Forbidden. chmod is not masked.
+  await chmod(path, 0o644);
 
   const indexPath = join(dir, 'index.html');
   const index = await readFile(indexPath, 'utf8');

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -262,6 +262,17 @@ describe('createPost', () => {
     expect(index.indexOf('002-post')).toBeLessThan(index.indexOf('001-post'));
 
     expect(lint(posts, Date.parse('2026-08-17T00:00:00Z'))).toEqual([]);
+  });
+
+  it('leaves the post world-readable whatever the umask', async () => {
+    const dir = await fixture();
+    const old = process.umask(0o007);
+    try {
+      const { path } = await createPost(dir, { title: 'Readable', description: 'r', date: '2026-08-16T10:00:00Z' });
+      expect((await stat(path)).mode & 0o777).toBe(0o644);
+    } finally {
+      process.umask(old);
+    }
   });
 
   it('cannot lose a post to two concurrent runs', async () => {
