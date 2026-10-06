@@ -9,8 +9,13 @@
 #
 # Everything site-specific comes from deploy.env beside this script (written by
 # cli-tools/dev2/dev2-site provision): REPO, APP_PORT, BUILD_SERVICES,
-# HEALTH_PATH. Builds happen on the box because NEXT_PUBLIC_*-style values are
-# baked in at build time and live only in app.env here.
+# HEALTH_PATH, and VAULT. Builds happen on the box because NEXT_PUBLIC_*-style
+# values are baked in at build time.
+#
+# Secrets: when deploy.env names a logicsrc team vault (VAULT=<project>--<env>,
+# VAULT_TEAM defaults to profullstack), every deploy pulls it and writes it into
+# app.env before building, so a secret is set by `logicsrc teams push` and the
+# next deploy, never by editing this box. See sync_env_from_vault below.
 #
 set -euo pipefail
 
@@ -29,6 +34,77 @@ log() { printf '\n===> %s\n' "$*"; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
 compose() { (cd "$ROOT" && docker compose -f docker-compose.app.yml --env-file "$ROOT/deploy.env" "$@"); }
+
+# app.env from the logicsrc vault named by VAULT. The vault wins for every key it
+# holds with a non-empty value; keys only app.env has (a DATABASE_URL minted on
+# this box) stay; an empty vault value never blanks a live one (a vault cannot
+# delete a key, so old keys get blanked there instead), and a key named in
+# VAULT_SKIP (space-separated; dev2-site writes the site's env_remove) is never
+# taken from the vault. The file before the
+# merge is kept as app.env.prev, and only key NAMES are printed.
+#
+# Auth is whatever logicsrc on this box has: LOGICSRC_API_KEY when set (or the
+# file ~/.config/logicsrc/deploy-api-key), else the account logged in here.
+# A vault that cannot be read leaves app.env as it is and says so: the deploy
+# goes on with the last good secrets rather than failing.
+sync_env_from_vault() {
+  [ -n "${VAULT:-}" ] || return 0
+  local bin team project env tmp
+  bin=$(command -v logicsrc || echo "$HOME/.local/bin/logicsrc")
+  [ -x "$bin" ] || { log "VAULT=$VAULT but no logicsrc CLI on this box: app.env unchanged"; return 0; }
+  team=${VAULT_TEAM:-profullstack}
+  project=${VAULT%--*}; env=${VAULT##*--}
+  [ -n "$project" ] && [ "$project" != "$VAULT" ] || { log "VAULT must be <project>--<env>, got '$VAULT': app.env unchanged"; return 0; }
+  if [ -z "${LOGICSRC_API_KEY:-}" ] && [ -r "$HOME/.config/logicsrc/deploy-api-key" ]; then
+    LOGICSRC_API_KEY=$(cat "$HOME/.config/logicsrc/deploy-api-key"); export LOGICSRC_API_KEY
+  fi
+  tmp=$(umask 077; mktemp "$ROOT/.vault-env.XXXXXX")
+  if ! (cd "$ROOT" && "$bin" teams pull "$team" "$project" "$env" --env "$tmp" --format json >/dev/null 2>&1) || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    log "Could not pull vault $team/$VAULT: app.env unchanged"
+    return 0
+  fi
+  [ -f "$ROOT/app.env" ] || : > "$ROOT/app.env"
+  local merged
+  merged=$(umask 077; mktemp "$ROOT/.app-env.XXXXXX")
+  # awk: first file is the vault, second app.env. Rewrite app.env in place order,
+  # then append the vault keys it did not have.
+  awk -v changes="$merged.changes" -v skip=" ${VAULT_SKIP:-} " '
+    function key(l) { sub(/^[ \t]*export[ \t]+/, "", l); return substr(l, 1, index(l, "=") - 1) }
+    function val(l) { v = substr(l, index(l, "=") + 1); gsub(/^[ \t]+|[ \t]+$/, "", v); return v }
+    NR == FNR {
+      if ($0 ~ /^[ \t]*#/ || index($0, "=") == 0) next
+      k = key($0); v = val($0)
+      if (index(skip, " " k " ")) next
+      if (v == "" || v == "\"\"" || v == "\x27\x27") next
+      vault[k] = $0; order[++n] = k; next
+    }
+    {
+      if ($0 !~ /^[ \t]*#/ && index($0, "=") > 0) {
+        k = key($0); seen[k] = 1
+        if (k in vault) {
+          if (vault[k] != $0) print "changed " k > changes
+          print vault[k]; next
+        }
+      }
+      print
+    }
+    END {
+      for (i = 1; i <= n; i++) if (!(order[i] in seen)) { print vault[order[i]]; print "added " order[i] > changes }
+    }
+  ' "$tmp" "$ROOT/app.env" > "$merged"
+  rm -f "$tmp"
+  if [ -s "$merged.changes" ]; then
+    (umask 077; cp "$ROOT/app.env" "$ROOT/app.env.prev"); chmod 600 "$ROOT/app.env.prev"
+    chmod 600 "$merged"
+    mv "$merged" "$ROOT/app.env"
+    log "app.env from vault $VAULT: $(tr '\n' ' ' < "$merged.changes")"
+  else
+    rm -f "$merged"
+    log "app.env already matches vault $VAULT"
+  fi
+  rm -f "$merged.changes"
+}
 
 # Rollback state. snapshot() records the image each running service container was
 # started from (and pins it as <name>:rollback so a prune cannot take it); once the
@@ -104,6 +180,7 @@ esac
 
 TARGET=${1:?usage: deploy-app.sh <git-sha|ref> | --rollback | --status}
 
+sync_env_from_vault
 [ -f "$ROOT/app.env" ] || die "missing $ROOT/app.env (the app's secrets)"
 
 if [ "${IMAGE_ONLY:-0}" = 1 ]; then
