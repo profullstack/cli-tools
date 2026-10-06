@@ -38,7 +38,16 @@ export interface UserRow {
   name: string;
   email: string;
   last_login: string;
+  /** Optional contact fields, set only when a source returned them (for --full). */
+  first_name?: string;
+  last_name?: string;
+  job_title?: string;
+  linkedin_url?: string;
+  company_domain?: string;
 }
+
+/** The optional UserRow fields a source may return under exactly these names. */
+export const CONTACT_FIELDS = ['first_name', 'last_name', 'job_title', 'linkedin_url', 'company_domain'] as const;
 
 /** Every site's users, one project per Supabase account the token can see. */
 export interface SupabaseManagementSource {
@@ -108,6 +117,13 @@ export interface Config {
   /** Default team for `vault:` references. */
   vaultTeam?: string;
   sources: Source[];
+  /**
+   * Sources read by `--enrich`: any of the source types above, whose rows are
+   * matched to users by email and only fill fields the users are missing.
+   * Alias columns to email, name, first_name, last_name, job_title,
+   * linkedin_url, company_domain.
+   */
+  enrich?: Source[];
   /** Settings for `--clean`; see src/user-clean.ts. */
   clean?: import('./user-clean.ts').CleanConfig;
 }
@@ -121,7 +137,10 @@ export const AUTH_USERS_QUERY = `select
            raw_user_meta_data->>'display_name', raw_user_meta_data->>'username',
            raw_user_meta_data->>'user_name', '') as name,
   coalesce(email, '') as email,
-  coalesce(to_char(last_sign_in_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') as last_login
+  coalesce(to_char(last_sign_in_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') as last_login,
+  coalesce(raw_user_meta_data->>'job_title', raw_user_meta_data->>'title', raw_user_meta_data->>'headline', '') as job_title,
+  coalesce(raw_user_meta_data->>'linkedin_url', raw_user_meta_data->>'linkedin', '') as linkedin_url,
+  coalesce(raw_user_meta_data->>'company_domain', raw_user_meta_data->>'website', '') as company_domain
 from auth.users
 order by last_sign_in_at desc nulls last`;
 
@@ -145,6 +164,16 @@ export function parseConfig(text: string): Config {
     throw new ExportError('config needs a non-empty "sources" array');
   }
 
+  checkSources(sources, 'sources');
+  const enrich = (raw as Config).enrich;
+  if (enrich !== undefined) {
+    if (!Array.isArray(enrich)) throw new ExportError('"enrich" must be an array of sources');
+    checkSources(enrich, 'enrich');
+  }
+  return raw as Config;
+}
+
+function checkSources(sources: Source[], where: string): void {
   const required: Record<Source['type'], string[]> = {
     'supabase-management': ['token'],
     'supabase-auth': ['site', 'url', 'serviceKey'],
@@ -155,18 +184,17 @@ export function parseConfig(text: string): Config {
   };
   sources.forEach((source: Source, index) => {
     if (!TYPES.includes(source?.type)) {
-      throw new ExportError(`sources[${index}]: type must be one of ${TYPES.join(', ')}`);
+      throw new ExportError(`${where}[${index}]: type must be one of ${TYPES.join(', ')}`);
     }
     for (const key of required[source.type]) {
       if (typeof (source as unknown as Record<string, unknown>)[key] !== 'string') {
-        throw new ExportError(`sources[${index}] (${source.type}): "${key}" is required`);
+        throw new ExportError(`${where}[${index}] (${source.type}): "${key}" is required`);
       }
     }
     if (source.type === 'postgres' && !source.url && !source.via) {
-      throw new ExportError(`sources[${index}] (postgres): "url" is required unless "via" is set`);
+      throw new ExportError(`${where}[${index}] (postgres): "url" is required unless "via" is set`);
     }
   });
-  return raw as Config;
 }
 
 export function loadConfig(path: string): Config {
@@ -260,7 +288,12 @@ function cell(value: unknown): string {
 
 /** Map any row object onto the output columns by name. */
 export function toUserRow(site: string, row: Record<string, unknown>): UserRow {
-  return { site, name: cell(row.name), email: cell(row.email), last_login: isoTime(row.last_login) };
+  const out: UserRow = { site, name: cell(row.name), email: cell(row.email), last_login: isoTime(row.last_login) };
+  for (const key of CONTACT_FIELDS) {
+    const value = cell(row[key]).trim();
+    if (value) out[key] = value;
+  }
+  return out;
 }
 
 /**
@@ -349,6 +382,15 @@ interface AuthUser {
   user_metadata?: Record<string, unknown> | null;
 }
 
+/** The first non-empty string among `keys` in sign-up metadata. */
+function metadataField(meta: Record<string, unknown> | null | undefined, keys: string[]): string {
+  for (const key of keys) {
+    const value = meta?.[key];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
 export function metadataName(meta: Record<string, unknown> | null | undefined): string {
   for (const key of ['full_name', 'name', 'display_name', 'username', 'user_name']) {
     const value = meta?.[key];
@@ -375,12 +417,16 @@ export async function readSupabaseAuth(
     )) as { users?: AuthUser[] };
     const users = body.users ?? [];
     for (const user of users) {
-      rows.push({
-        site: source.site,
-        name: metadataName(user.user_metadata),
-        email: user.email ?? '',
-        last_login: isoTime(user.last_sign_in_at),
-      });
+      rows.push(
+        toUserRow(source.site, {
+          name: metadataName(user.user_metadata),
+          email: user.email ?? '',
+          last_login: user.last_sign_in_at,
+          job_title: metadataField(user.user_metadata, ['job_title', 'title', 'headline']),
+          linkedin_url: metadataField(user.user_metadata, ['linkedin_url', 'linkedin']),
+          company_domain: metadataField(user.user_metadata, ['company_domain', 'website']),
+        }),
+      );
     }
     if (users.length < perPage) return rows;
   }

@@ -47,6 +47,22 @@ describe('parseConfig', () => {
     expect(() => parseConfig('{"sources":[{"type":"mysql"}]}')).toThrow(/type must be one of/);
     expect(() => parseConfig('{"sources":[]}')).toThrow(ExportError);
   });
+
+  it('checks the enrich sources the same way', () => {
+    const base = '"sources":[{"type":"exec","site":"a","command":"x"}]';
+    expect(() => parseConfig(`{${base},"enrich":[{"type":"postgres","site":"og"}]}`)).toThrow(/enrich\[0\] \(postgres\): "query" is required/);
+    expect(() => parseConfig(`{${base},"enrich":{}}`)).toThrow(/"enrich" must be an array/);
+    expect(parseConfig(`{${base},"enrich":[{"type":"postgres","site":"og","query":"q","via":"ssh h"}]}`).enrich).toHaveLength(1);
+  });
+});
+
+describe('contact fields', () => {
+  it('rows keep job_title, linkedin_url, company_domain and split names when a source returns them', () => {
+    expect(parseRows('og', 'email,first_name,job_title,linkedin_url,company_domain\na@b.co,Ada,CTO,linkedin.com/in/a,b.co\nc@d.co,,,,\n')).toEqual([
+      { site: 'og', name: '', email: 'a@b.co', last_login: '', first_name: 'Ada', job_title: 'CTO', linkedin_url: 'linkedin.com/in/a', company_domain: 'b.co' },
+      { site: 'og', name: '', email: 'c@d.co', last_login: '' },
+    ]);
+  });
 });
 
 describe('secretResolver', () => {

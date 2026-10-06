@@ -6,6 +6,9 @@
  *   → site,name,email,last_login
  *   user-export --clean -o list.csv --dropped dropped.csv
  *   → email,first_name,last_name, only the addresses worth mailing
+ *   user-export --clean --full -o list.csv
+ *   → email,first_name,last_name,company_domain,job_title,linkedin_url,
+ *     enriched from the config's "enrich" sources
  *
  * Which databases, and with which credentials, is a config file whose secret
  * fields are references (`env:NAME`, `vault:<project>/<env>/<KEY>`), so the
@@ -30,16 +33,21 @@ import {
 import {
   cleanUsers,
   defaultMynaContacts,
+  enrichContacts,
   formatCleanSummary,
+  formatEnrichSummary,
   mynaOptOuts,
   resendSuppressions,
   toCleanCsv,
+  toContacts,
+  type CleanedRow,
   toDroppedCsv,
 } from '../src/user-clean.ts';
 
 const USAGE = `Usage:
   user-export [--config FILE] [-o FILE] [--only site,site] [--source] [--json]
   user-export --clean [-o FILE] [--dropped FILE] [--only site,site]
+  user-export --full [--clean] [-o FILE] [--no-enrich]
   user-export --example        print a sample config
 
 Reads every source in the config and writes one CSV of
@@ -71,6 +79,14 @@ that never logged in on any site, then whatever email-cleaner rejects (syntax,
 dead domain, disposable, role, duplicate). The config's "clean" block takes
 excludePatterns, resendKey (a secret reference), resendDays and mynaContacts.
 
+--full writes one row per address with
+email,first_name,last_name,company_domain,job_title,linkedin_url, and always
+enriches: every source in the config's "enrich" array (same types as
+"sources"; alias columns to email, name or first_name/last_name, job_title,
+linkedin_url, company_domain) is read and matched by email, filling only blank
+fields. company_domain falls back to the address's own domain unless that is
+webmail. Add --clean to drop the addresses not worth mailing first.
+
 Options:
       --config FILE  config path (default: $USER_EXPORT_CONFIG, then
                      ~/.config/cli-tools/user-export.json)
@@ -79,6 +95,8 @@ Options:
       --source       add a source column
       --json         rows and per-source results as JSON
       --clean        only the addresses worth mailing (see above)
+      --full         the six contact columns above, enriched
+      --no-enrich    with --full: skip the "enrich" sources
       --dropped FILE with --clean: every dropped address and why
       --keep-never-logged-in   with --clean: do not drop those
       --no-resend    with --clean: skip the Resend bounce lookup
@@ -92,7 +110,7 @@ The output is personal data. -o writes it owner-readable only.
 if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
-      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--keep-never-logged-in', '--no-resend', '--no-dns'],
+      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--full', '--no-enrich', '--keep-never-logged-in', '--no-resend', '--no-dns'],
       string: ['--config', '-o', '--out', '--only', '--dropped'],
     });
 
@@ -114,8 +132,11 @@ if (isMain(import.meta.url)) {
     const rows = results.flatMap((r) => r.rows);
     const quiet = flags.has('-q') || flags.has('--quiet');
     const out = values.get('-o') || values.get('--out');
+    const full = flags.has('--full');
     let text: string;
     let cleanSummary = '';
+    let contacts: CleanedRow[] | undefined;
+    let enrichResults: Awaited<ReturnType<typeof exportUsers>> = [];
 
     if (flags.has('--clean')) {
       const clean = config.clean ?? {};
@@ -129,10 +150,22 @@ if (isMain(import.meta.url)) {
         keepNeverLoggedIn: flags.has('--keep-never-logged-in'),
         cleaner: flags.has('--no-dns') ? { dns: false } : {},
       });
-      text = toCleanCsv(result.kept);
+      contacts = result.kept;
       const dropped = values.get('--dropped');
       if (dropped) writeFileSync(dropped, toDroppedCsv(result.dropped), { mode: 0o600 });
       cleanSummary = formatCleanSummary(result);
+    } else if (full) {
+      contacts = toContacts(rows);
+    }
+
+    if (contacts) {
+      if (full && config.enrich?.length && !flags.has('--no-enrich')) {
+        enrichResults = await exportUsers({ ...config, sources: config.enrich }, resolve);
+        const enriched = enrichContacts(contacts, enrichResults.flatMap((r) => r.rows));
+        contacts = enriched.contacts;
+        cleanSummary += formatEnrichSummary(enriched, contacts.length);
+      }
+      text = toCleanCsv(contacts, { full });
     } else {
       const sources = results.flatMap((r) => r.rows.map(() => r.source));
       text = flags.has('--json')
@@ -145,12 +178,13 @@ if (isMain(import.meta.url)) {
 
     if (!quiet) {
       process.stderr.write(formatSummary(results));
+      if (enrichResults.length) process.stderr.write(`enrich sources:\n${formatSummary(enrichResults)}`);
       process.stderr.write(cleanSummary);
       if (out) process.stderr.write(`wrote ${text.split('\n').length - 2} rows to ${out}\n`);
     }
     // Partial output is still output, but a script should know it was partial.
     // exitCode, not exit(): exit() cut piped stdout off at 64 KiB.
-    process.exitCode = results.some((r) => r.error) ? 3 : 0;
+    process.exitCode = [...results, ...enrichResults].some((r) => r.error) ? 3 : 0;
   } catch (error) {
     if (error instanceof UsageError || error instanceof ExportError) {
       process.stderr.write(`user-export: ${error.message}\n`);

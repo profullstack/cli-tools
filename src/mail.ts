@@ -384,6 +384,11 @@ const WEBMAIL_DOMAINS = new Set([
 ]);
 WEBMAIL_DOMAINS.delete('forwardemail.net');
 
+/** True for a public webmail host: the domain says nothing about where the person works. */
+export function isWebmailDomain(domain: string): boolean {
+  return WEBMAIL_DOMAINS.has(domain.toLowerCase());
+}
+
 export function domainOf(email: string): string {
   const at = email.lastIndexOf('@');
   return at === -1 ? '' : email.slice(at + 1).toLowerCase();
