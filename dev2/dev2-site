@@ -15,6 +15,10 @@ dev2-site: move a Railway-hosted site onto dev2 and keep it deploying on merge.
     dev2-site limits <site>... | --all [--dry-run] [--no-recreate]
                                        mem_limit = memswap_limit on every container (sites.d
                                        mem_limit / mem_limits / node_heap_mb), applied live
+    dev2-site healthchecks <site>... | --all [--dry-run] [--no-recreate]
+                                       a healthcheck on every app (bun/node GET, any status
+                                       under 500) and redis container, so watchdog-autoheal
+                                       can restart a wedged one; kept across re-renders
     dev2-site verify <site> [--public] curl the site through nginx (pinned to dev2, or via DNS)
     dev2-site dns <site>               flip every domain at Porkbun to dev2
     dev2-site railway-stop <site>      remove Railway deployments + disconnect the repo watch
@@ -683,7 +687,8 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
     # on the data ports.
     n = s["port"] - FIRST_PORT
     y.append(f"networks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
-    return "\n".join(y) + "\n"
+    # Healthchecks chosen by `dev2-site healthchecks` survive a re-render.
+    return health_compose("\n".join(y) + "\n", st.get("healthchecks") or {})
 
 # ------------------------------------------------------------- memory limits
 #
@@ -852,6 +857,175 @@ def cmd_limits(args):
         except RuntimeError as e:
             warn(f"{name}: {str(e)[-600:]}"); failed.append(name)
     if failed: die(f"limits not fully applied on: {', '.join(failed)}")
+
+# --------------------------------------------------------------- healthchecks
+#
+# Docker marks a container `unhealthy` and then does nothing; restart policies fire
+# only when the process exits, and a blocked event loop never exits. watchdog-autoheal
+# (@profullstack/watchdog, cron on dev2) restarts what Docker marked unhealthy, but it
+# can only see a container that HAS a healthcheck. On 2026-10-06, 47 of 230 had none.
+#
+# The probe runs inside the container with the runtime the image already has (bun or
+# node), against 127.0.0.1:<port inside>, and passes on any HTTP status below 500
+# without following redirects: the question is "is the server answering", and a 404
+# or a redirect to /login is an answer. A blocked event loop is not. Redis gets
+# `redis-cli ping`. The chosen test is kept in the site state, so a re-render by
+# `provision` writes it back (render_compose -> health_block).
+
+HEALTH_MARK = "# dev2-site healthcheck"
+HEALTH_PATHS = ("/healthz", "/api/health", "/api/healthz", "/health")
+HEALTH_TIMING = ("30s", "5s", 3, "60s")  # interval, timeout, retries, start_period
+
+def http_health_test(runtime, port, path):
+    js = (f"fetch('http://127.0.0.1:{port}{path}',{{redirect:'manual',signal:AbortSignal.timeout(4000)}})"
+          ".then(r=>process.exit(r.status<500?0:1),()=>process.exit(1))")
+    return ["CMD", runtime, "-e", js]
+
+REDIS_HEALTH_TEST = ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+
+def test_path(t):
+    """The path an http_health_test probes, or None for anything else."""
+    m = re.search(r"http://127\.0\.0\.1:\d+(/[^']*)'", t[3]) if t[0] == "CMD" and len(t) > 3 else None
+    return m.group(1) if m else None
+
+def describe_test(t):
+    return f"{t[1]} GET {test_path(t)}" if test_path(t) else "redis-cli ping"
+
+def health_block(test):
+    interval, timeout, retries, start = HEALTH_TIMING
+    return [f"    healthcheck:  {HEALTH_MARK}", f"      test: {json.dumps(test)}",
+            f"      interval: {interval}", f"      timeout: {timeout}",
+            f"      retries: {retries}", f"      start_period: {start}"]
+
+def strip_health_block(blk):
+    """Drop a healthcheck block this tool wrote (marked), leave a hand-written one alone."""
+    out, skip = [], False
+    for l in blk:
+        if HEALTH_MARK in l: skip = True; continue
+        if skip and (l.startswith("      ") or not l.strip()): continue
+        skip = False; out.append(l)
+    return out
+
+def health_compose(text, tests):
+    """The live compose file with our healthcheck on every service in `tests`
+    ({svc: test argv}), everything else byte for byte. Idempotent."""
+    lines = text.split("\n")
+    out, pos = [], 0
+    for name, a, b in compose_services(lines):
+        out += lines[pos:a]; pos = b
+        blk = strip_health_block(lines[a:b])
+        if name in tests:
+            end = len(blk)
+            while end > 1 and not blk[end - 1].strip(): end -= 1  # before trailing blank lines
+            blk[end:end] = health_block(tests[name])
+        out += blk
+    out += lines[pos:]
+    return "\n".join(out)
+
+HEALTH_PROBE = r'''
+cd "$1" || exit 3
+f=docker-compose.app.yml
+APP_PORT=$(sed -n 's/^APP_PORT=//p' deploy.env 2>/dev/null | tr -d '"' | head -1)
+echo "@@APP_PORT $APP_PORT"
+docker ps --filter "label=com.docker.compose.project.working_dir=$PWD" --format '{{.ID}} {{.Label "com.docker.compose.service"}} {{.Image}}' |
+while read -r id svc img; do
+  # the CONTAINER's config: it carries the image's HEALTHCHECK, and the tag may have moved since
+  hc=$(docker inspect --format '{{if .Config.Healthcheck}}{{len .Config.Healthcheck.Test}}{{else}}0{{end}}' "$id" 2>/dev/null)
+  rt=$(docker exec "$id" sh -c 'for b in bun node redis-cli; do command -v $b >/dev/null 2>&1 && { echo $b; exit; }; done; echo none' 2>/dev/null || echo noexec)
+  pong=-; [ "$rt" = redis-cli ] && pong=$(docker exec "$id" redis-cli ping 2>&1 | head -1 | tr ' ' _)
+  echo "@@CTR $id $svc ${hc:-0} $rt $pong"
+done
+echo "@@COMPOSE"
+cat "$f"
+'''
+
+def service_ports(lines, a, b):
+    """[(host, inside)] from `- "127.0.0.1:<host>:<inside>"` lines; host may be ${APP_PORT}."""
+    return re.findall(r"^\s+-\s*[\"']?(?:127\.0\.0\.1:)?(\$\{APP_PORT\}|\d+):(\d+)[\"']?\s*$", "\n".join(lines[a:b]), re.M)
+
+def pick_health_path(host_port):
+    """The first health route that answers 200, else "/" (any answer under 500 passes)."""
+    script = "for p in " + " ".join(HEALTH_PATHS) + "; do c=$(curl -s -o /dev/null -m 5 -w '%{http_code}' " \
+             f"http://127.0.0.1:{int(host_port)}$p); [ \"$c\" = 200 ] && {{ echo $p; exit; }}; done; echo /"
+    return (ssh(DEPLOY_USER, script, check=False).strip().splitlines() or ["/"])[-1]
+
+def plan_healthchecks(name, raw, st):
+    """({svc: test}, {svc: reason skipped}) for one site from HEALTH_PROBE output."""
+    head, text = raw.split("@@COMPOSE\n", 1)
+    app_port = (re.search(r"^@@APP_PORT (\d*)", head, re.M) or [None, ""])[1]
+    ctrs = [l.split()[1:] for l in head.splitlines() if l.startswith("@@CTR ")]
+    lines = text.split("\n")
+    blocks = {svc: (a, b) for svc, a, b in compose_services(lines)}
+    keep = (st.get("healthchecks") or {})
+    tests, skipped = {}, {}
+    for cid, svc, img_hc, rt, pong in ctrs:
+        if svc not in blocks: skipped[svc] = "not in docker-compose.app.yml"; continue
+        a, b = blocks[svc]
+        body = "\n".join(lines[a:b])
+        if re.search(r"^    healthcheck:", body, re.M) and HEALTH_MARK not in body:
+            skipped[svc] = "has its own healthcheck"; continue
+        if img_hc != "0": skipped[svc] = "already has a healthcheck (image or container)"; continue
+        if rt == "redis-cli":
+            if pong != "PONG": skipped[svc] = f"redis-cli ping answered {pong} (auth?)"; continue
+            tests[svc] = REDIS_HEALTH_TEST; continue
+        ports = service_ports(lines, a, b)
+        if not ports: skipped[svc] = "publishes no port to probe"; continue
+        if rt not in ("bun", "node"): skipped[svc] = f"no bun or node in the image ({rt})"; continue
+        host, inside = ports[0]
+        host = app_port if host == "${APP_PORT}" else host
+        if not host: skipped[svc] = "no APP_PORT in deploy.env"; continue
+        path = (test_path(keep[svc]) if svc in keep and keep[svc][0] == "CMD" else None) or pick_health_path(host)
+        tests[svc] = http_health_test(rt, inside, path)
+    return tests, skipped, text
+
+def cmd_healthchecks(args):
+    names = box_sites() if args.all else args.sites
+    if not names: die("name sites, or --all for every ~/www/<site>/docker-compose.app.yml on dev2")
+    failed, summary = [], []
+    for name in names:
+        root = f"{WWW}/{name}"; st = load_state(name)
+        raw = ssh(DEPLOY_USER, f"bash -s -- {shlex.quote(root)}", input=HEALTH_PROBE, check=False)
+        if "@@COMPOSE" not in raw: warn(f"{name}: no {root}/docker-compose.app.yml"); failed.append(name); continue
+        tests, skipped, text = plan_healthchecks(name, raw, st)
+        new = health_compose(text, tests)
+        kit = "rendered by cli-tools dev2/dev2-site" in text[:400]
+        log(f"{name}: " + (", ".join(f"{svc} {describe_test(t)}" for svc, t in tests.items()) or "nothing to add"))
+        for svc, why in skipped.items(): note(f"skip {svc}: {why}")
+        if new == text: summary.append((name, "unchanged")); continue
+        for l in difflib.unified_diff(text.split("\n"), new.split("\n"), "live", "healthchecked", n=0, lineterm=""):
+            if not l.startswith(("---", "+++")): note(l)
+        if args.dry_run: summary.append((name, "dry run")); continue
+        try:
+            ssh(DEPLOY_USER, f"cd {shlex.quote(root)} && n=1; while [ -e docker-compose.app.bak-$(printf %03d $n).yml ]; do n=$((n+1)); done; cp -p docker-compose.app.yml docker-compose.app.bak-$(printf %03d $n).yml")
+            ssh_put(new, f"{root}/docker-compose.app.yml", "0640", user=DEPLOY_USER)
+            mark(name, "healthchecks", healthchecks=tests)  # render_compose writes these back
+            # A healthcheck only reaches a new container. Kit files interpolate nothing but
+            # deploy.env, so recreating from the built image is safe; hand-made ones (they
+            # interpolate what deploy-app.sh exports) pick it up on their next deploy.
+            if not kit:
+                note("compose updated; the healthcheck arrives with the next deploy"); summary.append((name, "next deploy")); continue
+            if args.no_recreate:
+                note("compose updated; --no-recreate"); summary.append((name, "not recreated")); continue
+            ssh(DEPLOY_USER, f"cd {shlex.quote(root)} && docker compose -f docker-compose.app.yml --env-file deploy.env up -d --no-build 2>&1 | tail -n 4", timeout=900)
+            state = wait_healthy(root, list(tests))
+            bad = {k: v for k, v in state.items() if v != "healthy"}
+            if bad: warn(f"{name}: {bad}"); failed.append(name)
+            summary.append((name, ", ".join(f"{k} {v}" for k, v in state.items())))
+        except RuntimeError as e:
+            warn(f"{name}: {str(e)[-600:]}"); failed.append(name)
+    log("healthchecks:")
+    for name, what in summary: note(f"{name}: {what}")
+    if failed: die(f"healthchecks not healthy or not applied on: {', '.join(failed)}")
+
+def wait_healthy(root, services, limit_s=180):
+    """{svc: health} once nothing is `starting`, or after limit_s."""
+    fmt = "{{.Label \"com.docker.compose.service\"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
+    q = f"docker ps -q --filter label=com.docker.compose.project.working_dir={shlex.quote(root)} | xargs -r docker inspect --format {shlex.quote(fmt)}"
+    t0, state = time.time(), {}
+    while True:
+        state = {k: v for k, v in (l.split() for l in ssh(DEPLOY_USER, q, check=False).splitlines() if len(l.split()) == 2) if k in services}
+        if state and "starting" not in state.values() or time.time() - t0 > limit_s: return state
+        time.sleep(5)
 
 # ------------------------------------------------------------ maintenance page
 #
@@ -1501,7 +1675,7 @@ def cmd_migrate(args):
     s = site(args.site); st = load_state(s["site"])
     if s.get("skip"): die(f"{s['site']} is marked skip in sites.d: {s.get('notes', '')}")
     steps = [("scaffold", cmd_scaffold), ("db", cmd_db) if s["db"] == "pg" else None, ("provision", cmd_provision), ("volumes", cmd_volumes),
-             ("deploy", cmd_deploy), ("cert", cmd_cert), ("vhost", cmd_vhost), ("verify", cmd_verify),
+             ("deploy", cmd_deploy), ("healthchecks", cmd_healthchecks), ("cert", cmd_cert), ("vhost", cmd_vhost), ("verify", cmd_verify),
              ("refresh-db", cmd_refresh_db) if s["db"] == "pg" else None, ("dns", cmd_dns),
              ("railway-stop", cmd_railway_stop), ("merge", cmd_merge), ("verify-public", cmd_verify)]
     for step in filter(None, steps):
@@ -1511,7 +1685,7 @@ def cmd_migrate(args):
         if name == "dns" and not args.yes and not args.__dict__.get("no_confirm"):
             if not sys.stdin.isatty(): die("dns flip needs --yes when non-interactive")
             if input(f"Flip DNS for {', '.join(s['domains'])} to dev2 now? [y/N] ").strip().lower() != "y": die("stopped before DNS")
-        ns = argparse.Namespace(site=s["site"], ref=None, force=(name == "refresh-db"), public=(name == "verify-public"), no_cert_check=False, redo=False, yes=True, regen=False, ignore_logs=False)
+        ns = argparse.Namespace(site=s["site"], sites=[s["site"]], all=False, dry_run=False, no_recreate=False, ref=None, force=(name == "refresh-db"), public=(name == "verify-public"), no_cert_check=False, redo=False, yes=True, regen=False, ignore_logs=False)
         fn(ns)
         st = load_state(s["site"])
     mark(s["site"], "migrated")
@@ -1851,6 +2025,10 @@ def main():
     p.add_argument("sites", nargs="*"); p.add_argument("--all", action="store_true", help="every ~/www/<site>/docker-compose.app.yml on dev2")
     p.add_argument("--dry-run", action="store_true", help="print the plan and the compose diff, change nothing")
     p.add_argument("--no-recreate", action="store_true", help="docker update only; NODE_OPTIONS waits for the next deploy"); p.set_defaults(fn=cmd_limits)
+    p = sub.add_parser("healthchecks", help="a Docker healthcheck on every app and redis container, so watchdog-autoheal can see it")
+    p.add_argument("sites", nargs="*"); p.add_argument("--all", action="store_true", help="every ~/www/<site>/docker-compose.app.yml on dev2")
+    p.add_argument("--dry-run", action="store_true", help="print the plan and the compose diff, change nothing")
+    p.add_argument("--no-recreate", action="store_true", help="write the compose file, recreate later"); p.set_defaults(fn=cmd_healthchecks)
     p = sub.add_parser("verify"); p.add_argument("site"); p.add_argument("--public", action="store_true"); p.add_argument("--ignore-logs", action="store_true"); p.set_defaults(fn=cmd_verify)
     p = sub.add_parser("refresh-db"); p.add_argument("site"); p.set_defaults(fn=cmd_refresh_db)
     p = sub.add_parser("migrate"); p.add_argument("site"); p.add_argument("--yes", action="store_true"); p.add_argument("--redo", action="store_true"); p.set_defaults(fn=cmd_migrate)
