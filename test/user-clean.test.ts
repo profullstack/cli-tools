@@ -8,6 +8,7 @@ import {
   cleanUsers,
   enrichContacts,
   forExplee,
+  nameFromEmail,
   toMissingCsv,
   mynaOptOuts,
   normalizeDomain,
@@ -170,5 +171,25 @@ describe('--format explee', () => {
 
   it('fills a blank title from --default-title', () => {
     expect(forExplee([{ ...full, job_title: '' }], { defaultTitle: 'Founder' }).kept[0]!.job_title).toBe('Founder');
+  });
+});
+
+describe('nameFromEmail', () => {
+  it('reads first.last, first_last and first-last', () => {
+    expect(nameFromEmail('scott.perry@acme.com')).toEqual({ first_name: 'Scott', last_name: 'Perry' });
+    expect(nameFromEmail('gabriella_fiore@x.com')).toEqual({ first_name: 'Gabriella', last_name: 'Fiore' });
+    expect(nameFromEmail('ann-lee+news@x.com')).toEqual({ first_name: 'Ann', last_name: 'Lee' });
+  });
+
+  it('refuses what is not clearly a name', () => {
+    for (const e of ['jsmith@x.com', 'jordan.i@x.com', 'john.smith42@x.com', 'info.team@x.com', 'sales.us@x.com', 'a.b.c@x.com']) {
+      expect(nameFromEmail(e)).toEqual({ first_name: '', last_name: '' });
+    }
+  });
+
+  it('fills a contact only when no name was given, and relay hosts are no company', () => {
+    expect(toContacts([row('tina.murrin@purolator.com')])[0]).toMatchObject({ first_name: 'Tina', last_name: 'Murrin', company_domain: 'purolator.com' });
+    expect(toContacts([row('tina.murrin@purolator.com', '', 'T M')])[0]).toMatchObject({ first_name: 'T', last_name: 'M' });
+    expect(toContacts([row('bat.man@passmail.net')])[0]!.company_domain).toBe('');
   });
 });

@@ -91,6 +91,10 @@ export function splitName(name: string): { first_name: string; last_name: string
  */
 const NOT_A_COMPANY = new Set([
   'substack.com', 'duck.com', 'qq.com', '163.com', '126.com', 'mail.ru', 'web.de', 'naver.com',
+  // relay / alias services: the address hides the person, it names no employer
+  'passmail.net', 'passinbox.com', 'passfwd.com', 'aleeas.com', 'simplelogin.com', 'simplelogin.co',
+  'slmail.me', 'mozmail.com', 'anonaddy.com', 'anonaddy.me', 'addy.io', 'hidingmail.com', 'agentmail.to',
+  'foxmail.com', 'free.fr', 'orange.fr', 'laposte.net', 'rambler.ru', 'list.ru', 'bk.ru', 'wp.pl', 'seznam.cz',
   'hotmail.co.uk', 'hotmail.fr', 'outlook.de', 'live.co.uk', 'yahoo.co.in', 'yahoo.co.jp',
   'comcast.net', 'att.net', 'verizon.net', 'sbcglobal.net', 'btinternet.com', 'cox.net', 'charter.net',
 ]);
@@ -117,9 +121,26 @@ const first = (values: (string | undefined)[]) => values.map((v) => v?.trim() ??
  * win over a split full name; the company is whatever a source said, else the
  * address's own domain unless that is webmail.
  */
+const NOT_A_PERSON = /^(info|admin|support|sales|contact|hello|hi|team|office|mail|no|noreply|do|billing|accounts?|jobs|careers|hr|press|media|marketing|dev|test|user|bot|ai)$/;
+
+/**
+ * `scott.perry@acme.com` -> Scott / Perry. Only the unambiguous shape counts:
+ * two alphabetic parts of two or more letters joined by `.`, `_` or `-`.
+ * `jsmith`, `john.s` and `john.smith42` say too little to be a name.
+ */
+export function nameFromEmail(email: string): { first_name: string; last_name: string } {
+  const local = email.slice(0, email.lastIndexOf('@')).toLowerCase().replace(/\+.*$/, '');
+  const m = local.match(/^([a-z]{2,})[._-]([a-z]{2,})$/);
+  if (!m || NOT_A_PERSON.test(m[1]!) || NOT_A_PERSON.test(m[2]!)) return { first_name: '', last_name: '' };
+  const cap = (s: string) => s[0]!.toUpperCase() + s.slice(1);
+  return { first_name: cap(m[1]!), last_name: cap(m[2]!) };
+}
+
 export function buildContact(email: string, group: readonly UserRow[]): ContactRow {
-  const split = splitName(group.map((r) => r.name.trim()).find((n) => n && !n.includes('@')) ?? '');
+  let split = splitName(group.map((r) => r.name.trim()).find((n) => n && !n.includes('@')) ?? '');
   const firstName = first(group.map((r) => r.first_name));
+  // a name nobody gave us, but the address spells out
+  if (!firstName && !split.first_name && !split.last_name) split = nameFromEmail(email);
   return {
     email,
     first_name: firstName || split.first_name,
