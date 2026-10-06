@@ -185,6 +185,7 @@ implement, because they are distributed in their own right:
 | `devdb` | [terrablue/devdb](https://github.com/terrablue/devdb) — spin up a throwaway local database for development or testing |
 | `kali` | [`@profullstack/kali`](https://github.com/profullstack/kali) — install a Kali-style web pentesting toolbelt on Debian/Ubuntu |
 | `telnyx` | [`@telnyx/api-cli`](https://github.com/team-telnyx/telnyx-api-cli) — buy and wire phone numbers, send messages and drive calls |
+| `qc` | [`@profullstack/qryptchat`](https://qrypt.chat) — qrypt.chat in the terminal: end-to-end encrypted (ML-KEM-1024) chat client, CLI and MCP server |
 
 And one group that is installed only when you ask for it, with
 `cli-tools companions --install mobile`:
@@ -203,7 +204,7 @@ under any agentic CLI, from a Dockerfile, on a box that has never heard of this
 repository. Vendoring them to make one list tidier would cost them all of that.
 So `cli-tools` is their front door, not their implementation.
 
-Seven come from npm. `bw` was the first companion that is nobody's but its
+Eight come from npm. `bw` was the first companion that is nobody's but its
 vendor's — `adb`, `expo`, `eas` and `telnyx` are the others — and it earns the place on
 the same terms as the rest: published, self-installing, useful on a box with no
 checkout. It covers the secrets `cli-tools` deliberately does not — the `vault` helpers read a logicsrc
