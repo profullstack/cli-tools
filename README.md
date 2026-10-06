@@ -1158,9 +1158,9 @@ with a ranking of our own. In the pit it is `/search`. Five providers:
 
 | Letter | Provider | How it is called | Key |
 | --- | --- | --- | --- |
-| C | Ceramic | [Cloudflare Web Search](https://developers.cloudflare.com/web-search/providers/) | `cloudflare` (or email + global key) |
-| E | Exa | Cloudflare Web Search | same |
-| L | Linkup | Cloudflare Web Search | same |
+| C | Ceramic | its own key, else [Cloudflare Web Search](https://developers.cloudflare.com/web-search/providers/) | `ceramic` ([platform.ceramic.ai/keys](https://platform.ceramic.ai/keys)), else `cloudflare` |
+| E | Exa | its own key, else Cloudflare Web Search | `exa` ([dashboard.exa.ai](https://dashboard.exa.ai)), else `cloudflare` |
+| L | Linkup | its own key, else Cloudflare Web Search | `linkup` ([app.linkup.so](https://app.linkup.so)), else `cloudflare` |
 | P | Perplexity (its own index) | directly, Perplexity Search API | `perplexity` |
 | S | Serper (Google results) | directly, serper.dev | `serper` |
 

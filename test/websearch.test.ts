@@ -13,7 +13,10 @@ import {
   describeError,
   formatResults,
   matchScore,
+  parseCeramic,
+  parseExa,
   parseHits,
+  parseLinkup,
   parsePerplexity,
   parseSerper,
   rank,
@@ -225,5 +228,33 @@ describe('direct providers', () => {
     const [result] = await searchAll('q', ['serper'], caller, [{ kind: 'token', token: 't' }]);
     expect(called).toBe(false);
     expect(result!.error).toMatch(/no serper key/);
+  });
+});
+
+describe('direct keys for the Cloudflare providers', () => {
+  it('reads Ceramic, Exa and Linkup responses', () => {
+    expect(parseCeramic({ result: { results: [{ title: 'C', url: 'https://c.example', description: 'd' }] } })).toEqual([
+      hit('https://c.example', 'C', 'd'),
+    ]);
+    expect(parseExa({ results: [{ title: 'E', url: 'https://e.example', highlights: ['one', 'two'] }] })).toEqual([
+      hit('https://e.example', 'E', 'one … two'),
+    ]);
+    expect(parseLinkup({ results: [{ type: 'text', name: 'L', url: 'https://l.example', content: 'x' }] })).toEqual([
+      hit('https://l.example', 'L', 'x'),
+    ]);
+  });
+
+  // A direct key must win over Cloudflare, which is why the keys exist.
+  it('calls a provider directly when it has its own key, not through Cloudflare', async () => {
+    let cloudflareCalled = false;
+    const caller: Caller = async () => {
+      cloudflareCalled = true;
+      throw new SearchError('no credits', 402);
+    };
+    const [result] = await searchAll('q', ['exa'], caller, [{ kind: 'token', token: 't' }], {
+      direct: { exa: async () => ({ hits: [hit('https://e.example')], latencyMs: 1 }) },
+    });
+    expect(cloudflareCalled).toBe(false);
+    expect(result!.error).toBeNull();
   });
 });
