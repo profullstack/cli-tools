@@ -5167,6 +5167,14 @@ install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install
 # current install is left alone. Otherwise the installer swaps the binary in
 # atomically, so a running daemon is never half-overwritten.
 install_hqsh() {
+	# hqsh 0.3+ runs each session as a systemd user unit, which logind stops at
+	# the user's last logout unless lingering is on. Root can turn it on for
+	# anyone, so do it here rather than leave it to each user's `hqsh server
+	# setup`. Already-lingering logins are left alone.
+	if [[ -d "${SYSTEMD_RUN_DIR:-/run/systemd/system}" ]] && command -v loginctl >/dev/null 2>&1 \
+		&& [[ ! -e "${SYSTEMD_LINGER_DIR:-/var/lib/systemd/linger}/$1" ]]; then
+		loginctl enable-linger "$1" 2>/dev/null && note "lingering on for $1 (hqsh sessions survive logout)"
+	fi
 	as_user "$1" '
 		have="$("$HOME/.local/bin/hqsh" --version 2>/dev/null | awk "{print \$2}")"
 		want="$(curl -fsSI -o /dev/null -w "%{redirect_url}" https://github.com/profullstack/hqsh/releases/latest 2>/dev/null | sed "s|.*/tag/v||")"
