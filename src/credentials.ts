@@ -36,6 +36,9 @@ export const KNOWN_KEYS: Record<string, string> = {
   porkbun_secret: 'PORKBUN_SECRET_API_KEY',
   // Read by `mail`, as the fallback sender for a domain verified at Resend.
   resend: 'RESEND_API_KEY',
+  // Read by `fe` (Forward Email aliases): an account API token from
+  // forwardemail.net My Account > Security. The account password is refused.
+  forwardemail: 'FORWARDEMAIL_API_TOKEN',
   // Read by `shorten`. Usually not needed: on a machine where the pit works,
   // `moshcode login` has already written the same token to
   // ~/.moshcode/credentials.json and that is what gets picked up. This is for a

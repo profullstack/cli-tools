@@ -44,7 +44,9 @@ compose() { (cd "$ROOT" && docker compose -f docker-compose.app.yml --env-file "
 # merge is kept as app.env.prev, and only key NAMES are printed.
 #
 # Auth is whatever logicsrc on this box has: LOGICSRC_API_KEY when set (or the
-# file ~/.config/logicsrc/deploy-api-key), else the account logged in here.
+# file ~/.config/logicsrc/deploy-api-key), else the account logged in here. A
+# machine key is scoped to the vaults it was granted, so a pull it cannot make
+# is retried once as the logged-in account before giving up.
 # A vault that cannot be read leaves app.env as it is and says so: the deploy
 # goes on with the last good secrets rather than failing.
 sync_env_from_vault() {
@@ -55,11 +57,13 @@ sync_env_from_vault() {
   team=${VAULT_TEAM:-profullstack}
   project=${VAULT%--*}; env=${VAULT##*--}
   [ -n "$project" ] && [ "$project" != "$VAULT" ] || { log "VAULT must be <project>--<env>, got '$VAULT': app.env unchanged"; return 0; }
-  if [ -z "${LOGICSRC_API_KEY:-}" ] && [ -r "$HOME/.config/logicsrc/deploy-api-key" ]; then
-    LOGICSRC_API_KEY=$(cat "$HOME/.config/logicsrc/deploy-api-key"); export LOGICSRC_API_KEY
-  fi
+  local key="${LOGICSRC_API_KEY:-}"
+  if [ -z "$key" ] && [ -r "$HOME/.config/logicsrc/deploy-api-key" ]; then key=$(cat "$HOME/.config/logicsrc/deploy-api-key"); fi
   tmp=$(umask 077; mktemp "$ROOT/.vault-env.XXXXXX")
-  if ! (cd "$ROOT" && "$bin" teams pull "$team" "$project" "$env" --env "$tmp" --format json >/dev/null 2>&1) || [ ! -s "$tmp" ]; then
+  pull() { (cd "$ROOT" && "$@" "$bin" teams pull "$team" "$project" "$env" --env "$tmp" --format json >/dev/null 2>&1) && [ -s "$tmp" ]; }
+  if { [ -n "$key" ] && pull env LOGICSRC_API_KEY="$key"; } || pull env -u LOGICSRC_API_KEY; then
+    :
+  else
     rm -f "$tmp"
     log "Could not pull vault $team/$VAULT: app.env unchanged"
     return 0
