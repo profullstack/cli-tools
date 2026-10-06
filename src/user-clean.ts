@@ -84,10 +84,21 @@ export function splitName(name: string): { first_name: string; last_name: string
   return { first_name: first, last_name: rest.join(' ') };
 }
 
+/**
+ * Mail hosts mail.ts does not know, because nobody sends from them through
+ * us, but whose addresses say nothing about an employer. substack.com is a
+ * third of our list: publication handles, not people at Substack.
+ */
+const NOT_A_COMPANY = new Set([
+  'substack.com', 'duck.com', 'qq.com', '163.com', '126.com', 'mail.ru', 'web.de', 'naver.com',
+  'hotmail.co.uk', 'hotmail.fr', 'outlook.de', 'live.co.uk', 'yahoo.co.in', 'yahoo.co.jp',
+  'comcast.net', 'att.net', 'verizon.net', 'sbcglobal.net', 'btinternet.com', 'cox.net', 'charter.net',
+]);
+
 /** `https://www.Acme.com/about` -> `acme.com`. Webmail hosts are not companies. */
 export function normalizeDomain(value: string): string {
   const host = value.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#:]/)[0] ?? '';
-  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) && !isWebmailDomain(host) ? host : '';
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) && !isWebmailDomain(host) && !NOT_A_COMPANY.has(host) ? host : '';
 }
 
 /** A LinkedIn profile URL from a URL, a bare `linkedin.com/in/x`, or a handle. Anything else is ''. */

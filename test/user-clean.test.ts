@@ -74,6 +74,7 @@ describe('--full', () => {
   it('normalizes domains, dropping webmail', () => {
     expect(normalizeDomain('https://www.Acme.com/about')).toBe('acme.com');
     expect(normalizeDomain('gmail.com')).toBe('');
+    expect(normalizeDomain('substack.com')).toBe('');
     expect(normalizeDomain('not a domain')).toBe('');
   });
 
