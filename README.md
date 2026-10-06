@@ -21,6 +21,7 @@ TypeScript, installed as executables on `PATH`.
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
 | [`img`](#img) | Resize, convert and inspect images, with sharp or ImageMagick |
 | [`emoji`](#emoji) | Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest |
+| [`entity`](#entity) | Keep a company in good standing: registered agent, renewals, state filing window, federal checklist |
 | [`favicon`](#favicon) | Every icon a site links, rendered from one SVG |
 | [`icon`](#icon) | UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set |
 | [`wcag`](#wcag) | Audit a site against WCAG with axe in headless Chrome, for the W3C report tool |
@@ -1528,6 +1529,39 @@ Stop words and bare numbers are never keywords. A single word needs 3 blocks
 and a phrase 2 to rank; on a page too short for that, everything is ranked.
 `--wait MS` (default 1000) gives a slow single-page app longer to render after
 load. Chrome is found the same way as for [`wcag`](#wcag).
+
+### `entity`
+
+The paperwork that keeps a company in good standing, state and federal: who its
+registered agent is, what each compliance vendor charges and when it renews,
+when the state's annual filing is due, and the steps for moving off an
+expensive agent without ever being left without one.
+
+```sh
+entity init                  # profile template at ~/.config/cli-tools/entity.json
+entity                       # agent, active spend, deadlines, switch progress
+entity deadlines --json      # cancel-before dates and the state window, for agents
+entity vendors               # California registered agents, cheapest renewal first
+entity federal               # no federal agent; BOI exempt; when 8822-B applies
+entity plan                  # cancel add-on, sign up, file, save PDF, cancel old agent
+entity done file-si          # tick a step (entity undo <step> reverses it)
+entity si-draft              # Statement of Information values to paste into bizfile
+```
+
+- **California rules.** A corporation files form SI-550 ($25) every year, an LLC
+  files LLC-12 ($20) every other year, each in the six months ending with the
+  month it was formed. An agent-only change outside that window is free; inside
+  it, the same filing is the annual one. Other states refuse rather than guess.
+- **The order.** Compliance add-ons are cancelled first (no prerequisite), then
+  the new agent is signed up and put on the state's record, and only then is
+  the old agent cancelled, with the filed statement as the proof vendors ask for.
+- **What stays yours.** `entity` never logs in, signs up, pays, cancels or
+  files. The Statement of Information ends in an officer's declaration, so
+  `si-draft` only lays out the values; a missing one is flagged, never guessed.
+- **The profile is private.** Company facts and subscriptions live in your
+  profile file, not in this repo; step progress is in
+  `~/.local/share/cli-tools/entity-state.json`. Vendor prices carry the date
+  they were checked and the page they came from.
 
 ### `ftb`
 
