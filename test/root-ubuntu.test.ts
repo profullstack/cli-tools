@@ -1554,11 +1554,41 @@ describe('install_hqsh', () => {
     }
     return dir;
   };
-  const run = (dir: string) =>
+  // No systemd unless a test says so; loginctl and note are recorded, never real.
+  const run = (dir: string, systemd = false) =>
     shell(
       ['install_hqsh'],
-      `as_user() { HOME=${JSON.stringify(join(dir, 'home'))} PATH=${JSON.stringify(join(dir, 'fakebin'))}:$PATH bash -c "$2"; }\ninstall_hqsh alice`,
+      [
+        `export SYSTEMD_RUN_DIR=${JSON.stringify(systemd ? dir : join(dir, 'no-systemd'))} SYSTEMD_LINGER_DIR=${JSON.stringify(join(dir, 'linger'))}`,
+        `loginctl() { echo "loginctl $*" >> ${JSON.stringify(join(dir, 'calls'))}; }`,
+        `note() { echo "note: $*"; }`,
+        `as_user() { HOME=${JSON.stringify(join(dir, 'home'))} PATH=${JSON.stringify(join(dir, 'fakebin'))}:$PATH bash -c "$2"; }`,
+        'install_hqsh alice',
+      ].join('\n'),
     );
+  const calls = (dir: string) => {
+    try {
+      return readFileSync(join(dir, 'calls'), 'utf8');
+    } catch {
+      return '';
+    }
+  };
+
+  it('turns lingering on (as root) under systemd, once, so hqsh sessions survive logout', () => {
+    const dir = setup('0.2.0');
+    expect(run(dir, true)).toContain('note: lingering on for alice');
+    expect(calls(dir)).toBe('loginctl enable-linger alice\n');
+    mkdirSync(join(dir, 'linger'), { recursive: true });
+    writeFileSync(join(dir, 'linger', 'alice'), '');
+    expect(run(dir, true)).toBe('hqsh 0.2.0 is current');
+    expect(calls(dir)).toBe('loginctl enable-linger alice\n'); // not again
+  });
+
+  it('leaves lingering alone without systemd', () => {
+    const dir = setup('0.2.0');
+    run(dir);
+    expect(calls(dir)).toBe('');
+  });
 
   it('leaves a current install alone, so a re-run downloads nothing', () => {
     expect(run(setup('0.2.0'))).toBe('hqsh 0.2.0 is current');
