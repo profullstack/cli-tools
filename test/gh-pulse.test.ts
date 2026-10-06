@@ -11,6 +11,7 @@ import {
   newestDay,
   nextLink,
   renderHtml,
+  renderText,
   resendBody,
   score,
   subjectLine,
@@ -181,6 +182,8 @@ describe('renderHtml', () => {
     expect(html).toContain('news.ycombinator.com');
     expect(html).toContain('/blob/main/README.md');
     expect(html).toContain('of 349 scanned');
+    expect(html).toContain('<b style="color:#0b0b0b">Clone</b>: one full download of a repo with git');
+    expect(renderText(ctx)).toContain('Clone: one full download of a repo with git');
     expect(html).not.toContain('undefined');
   });
 });
