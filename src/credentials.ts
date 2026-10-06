@@ -61,6 +61,8 @@ export const KNOWN_KEYS: Record<string, string> = {
   cloudflare_account: 'CLOUDFLARE_ACCOUNT_ID',
   cloudflare_email: 'CLOUDFLARE_EMAIL',
   cloudflare_global: 'CLOUDFLARE_GLOBAL_API_KEY',
+  // Read by `websearch`: Google results from serper.dev, called directly.
+  serper: 'SERPER_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';

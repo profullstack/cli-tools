@@ -15,7 +15,7 @@ TypeScript, installed as executables on `PATH`.
 | [`free-names`](#free-names) | Name ideas nobody has registered yet, in one command |
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
-| [`websearch`](#websearch) | One query across Ceramic, Exa and Linkup (Cloudflare Web Search), ranked by our own fusion; `/search` in the pit |
+| [`websearch`](#websearch) | One query across Perplexity, Serper (Google) and Cloudflare's Ceramic, Exa and Linkup, ranked by our own fusion; `/search` in the pit |
 | [`tts`](#tts) | Read text aloud and keep the audio |
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
@@ -1153,9 +1153,21 @@ Answers go to stdout and status to stderr, so `ask-web … | pbcopy` gets prose.
 
 ### `websearch`
 
-One query, all three [Cloudflare Web Search](https://developers.cloudflare.com/web-search/providers/)
-providers at once (Ceramic, Exa, Linkup), merged into one list with a ranking
-of our own. In the pit it is `/search`:
+One query to every configured search provider at once, merged into one list
+with a ranking of our own. In the pit it is `/search`. Five providers:
+
+| Letter | Provider | How it is called | Key |
+| --- | --- | --- | --- |
+| C | Ceramic | [Cloudflare Web Search](https://developers.cloudflare.com/web-search/providers/) | `cloudflare` (or email + global key) |
+| E | Exa | Cloudflare Web Search | same |
+| L | Linkup | Cloudflare Web Search | same |
+| P | Perplexity (its own index) | directly, Perplexity Search API | `perplexity` |
+| S | Serper (Google results) | directly, serper.dev | `serper` |
+
+By default every provider with a key is asked; one without a key is skipped.
+The direct two exist because the Cloudflare account's AI Gateway credits never
+applied on launch day, and a search command that only works when one vendor's
+billing does is not a search command.
 
 ```sh
 /search bun vs node performance
@@ -1167,7 +1179,7 @@ websearch "bun vs node performance" --top 5
 #     Long description from whichever provider had the fullest one...
 ```
 
-`[CEL]` shows which providers found the page (`·` for one that did not).
+`[CELPS]` shows which providers found the page (`·` for one that did not).
 
 ```sh
 websearch "…" --explain              # the score breakdown per result

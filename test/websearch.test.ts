@@ -14,6 +14,8 @@ import {
   formatResults,
   matchScore,
   parseHits,
+  parsePerplexity,
+  parseSerper,
   rank,
   searchAll,
   terms,
@@ -181,7 +183,47 @@ describe('formatResults', () => {
   it('shows which providers found each result', () => {
     const text = formatResults(rank('a', [ok('ceramic', [hit('https://a.example/', 'A', 'about a')]), ok('linkup', [hit('https://a.example', 'A')])]));
     expect(text).toContain(' 1. A');
-    expect(text).toContain('[C·L]');
+    expect(text).toContain('[C·L··]');
     expect(text).toContain('about a');
+  });
+});
+
+describe('direct providers', () => {
+  it('reads Perplexity search results', () => {
+    expect(
+      parsePerplexity({ results: [{ title: 'T', url: 'https://a.example', snippet: 's', date: '2026-01-01' }, { title: 'no url' }] }),
+    ).toEqual([hit('https://a.example', 'T', 's')]);
+  });
+
+  it('reads Serper organic results in Google order', () => {
+    expect(
+      parseSerper({ organic: [{ title: 'G', link: 'https://g.example', snippet: 'x', position: 1 }], peopleAlsoAsk: [] }),
+    ).toEqual([hit('https://g.example', 'G', 'x')]);
+  });
+
+  // The day this shipped, Cloudflare had no credits: the direct providers must
+  // answer with no Cloudflare credential at all.
+  it('ranks from direct providers with no Cloudflare credential', async () => {
+    const results = await searchAll('q', ['perplexity', 'serper', 'ceramic'], async () => ({ hits: [], latencyMs: 0 }), [], {
+      direct: {
+        perplexity: async () => ({ hits: [hit('https://a.example/', 'q')], latencyMs: 1 }),
+        serper: async () => ({ hits: [hit('https://a.example', 'q')], latencyMs: 1 }),
+      },
+    });
+    expect(results.find((r) => r.provider === 'ceramic')!.error).toBe('no Cloudflare credential');
+    const ranked = rank('q', results);
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]!.seenBy).toEqual({ perplexity: 1, serper: 1 });
+  });
+
+  it('says a direct provider has no key instead of sending it to Cloudflare', async () => {
+    let called = false;
+    const caller: Caller = async () => {
+      called = true;
+      return { hits: [], latencyMs: 0 };
+    };
+    const [result] = await searchAll('q', ['serper'], caller, [{ kind: 'token', token: 't' }]);
+    expect(called).toBe(false);
+    expect(result!.error).toMatch(/no serper key/);
   });
 });
