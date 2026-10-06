@@ -228,6 +228,17 @@ set_env POOLER_PROXY_PORT_TRANSACTION "$POOLER_PORT"
 set_env DISABLE_SIGNUP false
 set_env ENABLE_EMAIL_SIGNUP true
 set_env ENABLE_EMAIL_AUTOCONFIRM false
+# Upstream .env.example ships phone signup ON with SMS autoconfirm ON. With no
+# SMS provider, POST /auth/v1/signup {phone,password} then returns a live session
+# for any made-up number, skipping email confirmation entirely; with a provider,
+# autoconfirm still skips the OTP. So: autoconfirm always off, and phone signup
+# only on for a site whose auth.env configures a way to send the SMS.
+set_env ENABLE_PHONE_AUTOCONFIRM false
+if grep -qE '^GOTRUE_(SMS_PROVIDER|HOOK_SEND_SMS_ENABLED)=' "$DIR/volumes/auth/auth.env" 2>/dev/null; then
+  set_env ENABLE_PHONE_SIGNUP true
+else
+  set_env ENABLE_PHONE_SIGNUP false
+fi
 if [ -n "${SMTP_PASS:-}" ]; then
   set_env SMTP_HOST smtp.resend.com; set_env SMTP_PORT 465; set_env SMTP_USER resend; set_env SMTP_PASS "$SMTP_PASS"
   set_env SMTP_SENDER_NAME "${SMTP_SENDER:-$SITE}"; set_env SMTP_ADMIN_EMAIL "${SMTP_ADMIN:-noreply@$SITE}"
