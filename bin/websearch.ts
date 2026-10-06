@@ -23,7 +23,10 @@ import {
   authCandidates,
   cloudflareCaller,
   costOf,
+  ceramicCaller,
   discoverAccountId,
+  exaCaller,
+  linkupCaller,
   formatResults,
   perplexitySearchCaller,
   rank,
@@ -58,8 +61,12 @@ Options:
 
 Keys, stored once (any subset works; providers without one are skipped):
 
+  cli-tools config set ceramic             # CERAMIC_API_KEY  platform.ceramic.ai/keys
+  cli-tools config set exa                 # EXA_API_KEY      dashboard.exa.ai
+  cli-tools config set linkup              # LINKUP_API_KEY   app.linkup.so
   cli-tools config set perplexity          # PERPLEXITY_API_KEY
   cli-tools config set serper              # SERPER_API_KEY (serper.dev)
+  # Without their own keys, Ceramic, Exa and Linkup go through Cloudflare:
   cli-tools config set cloudflare          # CLOUDFLARE_API_TOKEN, Workers AI +
                                            #   AI Gateway Read
   cli-tools config set cloudflare_email    # with cloudflare_global, the
@@ -105,9 +112,17 @@ if (isMain(import.meta.url)) {
     const serperKey = credentials['SERPER_API_KEY'];
     if (perplexityKey) direct.perplexity = perplexitySearchCaller(perplexityKey, timeout);
     if (serperKey) direct.serper = serperCaller(serperKey, timeout);
+    // A provider's own key beats going through Cloudflare: no gateway credits
+    // needed, and it is the same index either way.
+    const ceramicKey = credentials['CERAMIC_API_KEY'];
+    const exaKey = credentials['EXA_API_KEY'];
+    const linkupKey = credentials['LINKUP_API_KEY'];
+    if (ceramicKey) direct.ceramic = ceramicCaller(ceramicKey, timeout);
+    if (exaKey) direct.exa = exaCaller(exaKey, timeout);
+    if (linkupKey) direct.linkup = linkupCaller(linkupKey, timeout);
 
     const isCloudflare = (p: Provider) => (CLOUDFLARE_PROVIDERS as readonly string[]).includes(p);
-    const configured = PROVIDERS.filter((p) => (isCloudflare(p) ? auths.length > 0 : !!direct[p]));
+    const configured = PROVIDERS.filter((p) => !!direct[p] || (isCloudflare(p) && auths.length > 0));
     const providers = (asked.length ? [...new Set(asked)] : configured) as Provider[];
     if (providers.length === 0) {
       throw new UsageError(
@@ -119,7 +134,7 @@ if (isMain(import.meta.url)) {
     // The account id is needed only when a Cloudflare provider is asked. If it
     // cannot be found, those providers fail and the direct ones still answer.
     let accountId = values.get('--account') ?? credentials['CLOUDFLARE_ACCOUNT_ID'] ?? '';
-    if (!accountId && auths.length > 0 && providers.some(isCloudflare)) {
+    if (!accountId && auths.length > 0 && providers.some((p) => isCloudflare(p) && !direct[p])) {
       for (const auth of auths) {
         try {
           accountId = await discoverAccountId(auth, timeout);

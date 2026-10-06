@@ -186,7 +186,7 @@ export function describeError(status: number, text: string): SearchError {
     const effective = Number(gw.status ?? status);
     if (code === 'web_search_payment_required') {
       return new SearchError(
-        'no AI Gateway credits on this account — add some under AI > AI Gateway > Credits (402)',
+        'no Cloudflare AI Gateway credits (402) — give each provider its own key instead: `cli-tools config set ceramic` / `exa` / `linkup`',
         effective,
       );
     }
@@ -263,6 +263,95 @@ export function parseSerper(body: any): Hit[] {
       title: typeof r.title === 'string' ? r.title.trim() : '',
       description: typeof r.snippet === 'string' ? r.snippet.trim() : '',
     }));
+}
+
+/** Ceramic: `result.results[]` of { title, url, description }. */
+export function parseCeramic(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.result?.results) ? body.result.results : Array.isArray(body?.results) ? body.results : [];
+  return results
+    .filter((r) => typeof r?.url === 'string' && r.url)
+    .map((r) => ({
+      url: r.url.trim(),
+      title: typeof r.title === 'string' ? r.title.trim() : '',
+      description: typeof r.description === 'string' ? r.description.trim() : '',
+    }));
+}
+
+/** Exa: `results[]` of { title, url, highlights[] }; the highlights are the snippet. */
+export function parseExa(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.results) ? body.results : [];
+  return results
+    .filter((r) => typeof r?.url === 'string' && r.url)
+    .map((r) => ({
+      url: r.url.trim(),
+      title: typeof r.title === 'string' ? r.title.trim() : '',
+      description: Array.isArray(r.highlights)
+        ? r.highlights.filter((h: unknown) => typeof h === 'string').join(' … ').trim()
+        : typeof r.text === 'string'
+          ? r.text.trim().slice(0, 1000)
+          : '',
+    }));
+}
+
+/** Linkup searchResults: `results[]` of { name, url, content }. */
+export function parseLinkup(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.results) ? body.results : [];
+  return results
+    .filter((r) => typeof r?.url === 'string' && r.url)
+    .map((r) => ({
+      url: r.url.trim(),
+      title: typeof r.name === 'string' ? r.name.trim() : '',
+      // Linkup returns page content, sometimes the whole page; the ranker only
+      // needs enough to match the query against.
+      description: typeof r.content === 'string' ? r.content.trim().slice(0, 1000) : '',
+    }));
+}
+
+export function ceramicCaller(apiKey: string, timeoutMs: number): DirectCaller {
+  return async (query, limit) => {
+    const { body, latencyMs } = await postJson(
+      'https://api.ceramic.ai/search',
+      { Authorization: `Bearer ${apiKey}` },
+      { query },
+      timeoutMs,
+    );
+    return { hits: parseCeramic(body).slice(0, limit), latencyMs };
+  };
+}
+
+export function exaCaller(apiKey: string, timeoutMs: number): DirectCaller {
+  return async (query, limit) => {
+    const { body, latencyMs } = await postJson(
+      'https://api.exa.ai/search',
+      { 'x-api-key': apiKey },
+      { query, type: 'auto', numResults: limit, contents: { highlights: true } },
+      timeoutMs,
+    );
+    return { hits: parseExa(body), latencyMs };
+  };
+}
+
+export function linkupCaller(apiKey: string, timeoutMs: number): DirectCaller {
+  return async (query, limit) => {
+    const started = Date.now();
+    const params = new URLSearchParams({ q: query, depth: 'fast', outputType: 'searchResults', maxResults: String(limit) });
+    const response = await fetch(`https://api.linkup.so/v1/search?${params}`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      let message = text.trim().slice(0, 200) || `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(text);
+        message = parsed?.error?.message ?? parsed?.message ?? message;
+      } catch {
+        // keep the raw text
+      }
+      throw new SearchError(`${message} (${response.status})`, response.status);
+    }
+    return { hits: parseLinkup(JSON.parse(text)).slice(0, limit), latencyMs: Date.now() - started };
+  };
 }
 
 export function perplexitySearchCaller(apiKey: string, timeoutMs: number): DirectCaller {
