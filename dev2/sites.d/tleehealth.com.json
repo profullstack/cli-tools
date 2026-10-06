@@ -1,0 +1,36 @@
+{
+ "site": "tleehealth.com",
+ "service": "tleehealth.com",
+ "repo": "profullstack/tleehealth.com",
+ "branch": "master",
+ "image": null,
+ "domains": [
+  "tleehealth.com",
+  "www.tleehealth.com"
+ ],
+ "db": "pg",
+ "db_kinds": [
+  "pg"
+ ],
+ "redis": false,
+ "volumes": [],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3295,
+ "health_path": "/healthz",
+ "max_body": "25m",
+ "mem_limit": "512m",
+ "mem_note": "Bun + Hono web and API; no workers yet",
+ "env_overrides": {
+  "SITE_URL": "https://tleehealth.com",
+  "NODE_ENV": "production"
+ },
+ "notes": "Not a Railway site: born on dev2 2026-10-06. Telehealth + practice management. Database via db-create (migrations run on app boot). Secrets in vault tleehealth--prod. Deploys on push to master.",
+ "vault": "tleehealth--prod"
+}

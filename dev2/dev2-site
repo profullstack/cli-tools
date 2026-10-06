@@ -184,7 +184,12 @@ def site_variables(s, sid=None, envfile="app.env"):
     except RuntimeError as e: warn(f"railway variables: {str(e)[:120]}")
     if vars_: return vars_
     txt = ssh("root", f"cat {WWW}/{shlex.quote(s['site'])}/{shlex.quote(envfile)} 2>/dev/null", check=False)
-    if not txt.strip(): die(f"{s['site']}: no variables on Railway and no {envfile} on dev2 to fall back to")
+    if not txt.strip():
+        # A site born on dev2 (sites.d "project": null) has never had Railway variables;
+        # start it from nothing and let env_overrides, db-create and the vault fill it.
+        if not s.get("project_id"):
+            note(f"{s['site']}: no Railway project and no {envfile} yet; starting from env_overrides"); return {}
+        die(f"{s['site']}: no variables on Railway and no {envfile} on dev2 to fall back to")
     note(f"{s['site']}: Railway has no variables (service retired); using the live {envfile} from dev2")
     return parse_env_file(txt)
 
