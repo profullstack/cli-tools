@@ -12,6 +12,7 @@ import {
   costOf,
   describeError,
   formatResults,
+  linkupCaller,
   matchScore,
   parseCeramic,
   parseExa,
@@ -256,5 +257,26 @@ describe('direct keys for the Cloudflare providers', () => {
     });
     expect(cloudflareCalled).toBe(false);
     expect(result!.error).toBeNull();
+  });
+});
+
+describe('linkupCaller', () => {
+  // Linkup's documented GET answers 404 "Cannot GET /v1/search"; only POST works.
+  it('POSTs a JSON body, not a GET with query parameters', async () => {
+    const seen: { method?: string | undefined; body?: string } = {};
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      seen.method = init.method;
+      seen.body = String(init.body);
+      return new Response(JSON.stringify({ results: [{ name: 'L', url: 'https://l.example', content: 'c' }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const { hits } = await linkupCaller('k', 1000)('bun', 3);
+      expect(seen.method).toBe('POST');
+      expect(JSON.parse(seen.body!)).toMatchObject({ q: 'bun', depth: 'fast', outputType: 'searchResults', maxResults: 3 });
+      expect(hits).toEqual([hit('https://l.example', 'L', 'c')]);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });
