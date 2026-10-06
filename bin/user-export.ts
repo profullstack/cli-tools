@@ -4,6 +4,8 @@
  *
  *   user-export -o users.csv
  *   → site,name,email,last_login
+ *   user-export --clean -o list.csv --dropped dropped.csv
+ *   → email,first_name,last_name, only the addresses worth mailing
  *
  * Which databases, and with which credentials, is a config file whose secret
  * fields are references (`env:NAME`, `vault:<project>/<env>/<KEY>`), so the
@@ -25,9 +27,19 @@ import {
   secretResolver,
   toCsv,
 } from '../src/user-export.ts';
+import {
+  cleanUsers,
+  defaultMynaContacts,
+  formatCleanSummary,
+  mynaOptOuts,
+  resendSuppressions,
+  toCleanCsv,
+  toDroppedCsv,
+} from '../src/user-clean.ts';
 
 const USAGE = `Usage:
   user-export [--config FILE] [-o FILE] [--only site,site] [--source] [--json]
+  user-export --clean [-o FILE] [--dropped FILE] [--only site,site]
   user-export --example        print a sample config
 
 Reads every source in the config and writes one CSV of
@@ -51,6 +63,14 @@ Secret fields take a literal, env:NAME, vault:<project>/<env>/<KEY>
 (logicsrc team vault; team from "vaultTeam" or vault:<team>/<project>/<env>/<KEY>),
 or cmd:<shell> (the command's trimmed stdout).
 
+--clean writes email,first_name,last_name instead: one row per address
+that is worth mailing. Dropped, in this order: myna unsubscribes, addresses
+Resend bounced/suppressed/got a complaint about (last 31 days, key from
+$RESEND_API_KEY), config "clean.excludePatterns" (our test accounts), addresses
+that never logged in on any site, then whatever email-cleaner rejects (syntax,
+dead domain, disposable, role, duplicate). The config's "clean" block takes
+excludePatterns, resendKey (a secret reference), resendDays and mynaContacts.
+
 Options:
       --config FILE  config path (default: $USER_EXPORT_CONFIG, then
                      ~/.config/cli-tools/user-export.json)
@@ -58,6 +78,11 @@ Options:
       --only SITES   comma-separated site labels to read
       --source       add a source column
       --json         rows and per-source results as JSON
+      --clean        only the addresses worth mailing (see above)
+      --dropped FILE with --clean: every dropped address and why
+      --keep-never-logged-in   with --clean: do not drop those
+      --no-resend    with --clean: skip the Resend bounce lookup
+      --no-dns       with --clean: skip email-cleaner's DNS checks
   -q, --quiet        no per-source summary on stderr
   -h, --help         show this help
 
@@ -67,8 +92,8 @@ The output is personal data. -o writes it owner-readable only.
 if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
-      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet'],
-      string: ['--config', '-o', '--out', '--only'],
+      boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--keep-never-logged-in', '--no-resend', '--no-dns'],
+      string: ['--config', '-o', '--out', '--only', '--dropped'],
     });
 
     if (flags.has('-h') || flags.has('--help')) {
@@ -87,21 +112,45 @@ if (isMain(import.meta.url)) {
     const results = await exportUsers(config, resolve, { only: csv(values, '--only') });
 
     const rows = results.flatMap((r) => r.rows);
-    const sources = results.flatMap((r) => r.rows.map(() => r.source));
-    const text = flags.has('--json')
-      ? `${JSON.stringify({ rows, sources: results.map(({ rows: r, ...rest }) => ({ ...rest, count: r.length })) }, null, 2)}\n`
-      : toCsv(rows, { withSource: flags.has('--source'), sources });
-
+    const quiet = flags.has('-q') || flags.has('--quiet');
     const out = values.get('-o') || values.get('--out');
+    let text: string;
+    let cleanSummary = '';
+
+    if (flags.has('--clean')) {
+      const clean = config.clean ?? {};
+      const resendKey = flags.has('--no-resend') || clean.resendKey === '' ? '' : resolve(clean.resendKey ?? 'env:RESEND_API_KEY', 'clean.resendKey');
+      if (!resendKey && !flags.has('--no-resend')) throw new ExportError('--clean needs a Resend key (RESEND_API_KEY or clean.resendKey), or --no-resend');
+      const suppressed = resendKey ? await resendSuppressions(resendKey, { days: clean.resendDays ?? 31 }) : new Map<string, string>();
+      const result = await cleanUsers(rows, {
+        suppressed,
+        optedOut: mynaOptOuts(clean.mynaContacts ?? defaultMynaContacts()),
+        exclude: (clean.excludePatterns ?? []).map((p) => new RegExp(p, 'i')),
+        keepNeverLoggedIn: flags.has('--keep-never-logged-in'),
+        cleaner: flags.has('--no-dns') ? { dns: false } : {},
+      });
+      text = toCleanCsv(result.kept);
+      const dropped = values.get('--dropped');
+      if (dropped) writeFileSync(dropped, toDroppedCsv(result.dropped), { mode: 0o600 });
+      cleanSummary = formatCleanSummary(result);
+    } else {
+      const sources = results.flatMap((r) => r.rows.map(() => r.source));
+      text = flags.has('--json')
+        ? `${JSON.stringify({ rows, sources: results.map(({ rows: r, ...rest }) => ({ ...rest, count: r.length })) }, null, 2)}\n`
+        : toCsv(rows, { withSource: flags.has('--source'), sources });
+    }
+
     if (out) writeFileSync(out, text, { mode: 0o600 });
     else process.stdout.write(text);
 
-    if (!flags.has('-q') && !flags.has('--quiet')) {
+    if (!quiet) {
       process.stderr.write(formatSummary(results));
-      if (out) process.stderr.write(`wrote ${rows.length} rows to ${out}\n`);
+      process.stderr.write(cleanSummary);
+      if (out) process.stderr.write(`wrote ${text.split('\n').length - 2} rows to ${out}\n`);
     }
     // Partial output is still output, but a script should know it was partial.
-    process.exit(results.some((r) => r.error) ? 3 : 0);
+    // exitCode, not exit(): exit() cut piped stdout off at 64 KiB.
+    process.exitCode = results.some((r) => r.error) ? 3 : 0;
   } catch (error) {
     if (error instanceof UsageError || error instanceof ExportError) {
       process.stderr.write(`user-export: ${error.message}\n`);
