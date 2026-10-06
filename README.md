@@ -15,6 +15,7 @@ TypeScript, installed as executables on `PATH`.
 | [`free-names`](#free-names) | Name ideas nobody has registered yet, in one command |
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
+| [`websearch`](#websearch) | One query across Ceramic, Exa and Linkup (Cloudflare Web Search), ranked by our own fusion; `/search` in the pit |
 | [`tts`](#tts) | Read text aloud and keep the audio |
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
 | [`genrewatch`](#genrewatch) | What is coming out, and whether it exists at all |
@@ -397,8 +398,8 @@ ln -sf ~/scripts/bin/gh-prs-merge ~/.local/bin/gh-prs-merge   # and so on
 
 ## API keys
 
-Five commands here call a paid API: `generate-names` and `free-names` (OpenAI
-or Anthropic), `ask-web` (Perplexity) and `tts` (ElevenLabs). Store the keys once, and nothing
+Six commands here call a paid API: `generate-names` and `free-names` (OpenAI
+or Anthropic), `ask-web` (Perplexity), `websearch` (Cloudflare) and `tts` (ElevenLabs). Store the keys once, and nothing
 has to carry them in an environment again:
 
 ```sh
@@ -1125,6 +1126,61 @@ would mislabel every source. When the answer cites a marker no source backs,
 that is reported on stderr rather than dropped.
 
 Answers go to stdout and status to stderr, so `ask-web … | pbcopy` gets prose.
+
+### `websearch`
+
+One query, all three [Cloudflare Web Search](https://developers.cloudflare.com/web-search/providers/)
+providers at once (Ceramic, Exa, Linkup), merged into one list with a ranking
+of our own. In the pit it is `/search`:
+
+```sh
+/search bun vs node performance
+websearch "bun vs node performance" --top 5
+# (illustrative output)
+#  1. Bun vs Node.js: benchmarks that matter
+#     https://example.com/bun-vs-node
+#     [CEL] 1.412
+#     Long description from whichever provider had the fullest one...
+```
+
+`[CEL]` shows which providers found the page (`·` for one that did not).
+
+```sh
+websearch "…" --explain              # the score breakdown per result
+websearch "…" --providers ceramic    # one cheap provider only
+websearch "…" --urls | head -3       # URLs only, for piping
+websearch "…" --json                 # ranked results + per-provider status
+```
+
+**The ranking is ours, and every term is printable.** `--explain` shows the
+four factors, multiplied together:
+
+- **fusion**: Reciprocal Rank Fusion, `sum of 1/(60 + rank)` over the providers
+  that returned the page, normalised so rank 1 everywhere is 1.0. It only needs
+  ranks, which matters because the API returns no provider scores.
+- **consensus**: how many providers found it independently, worth `+50%` each
+  beyond the first. Two indexes agreeing is the best signal available without
+  fetching the page.
+- **match**: share of the query's terms in the title (counted double) and the
+  description. It catches a provider that put a tangential page first.
+- **diversity**: `0.8^n` for the nth extra result from the same host, so one
+  site cannot take the whole page.
+
+A page counts as the same across providers when its URL matches with scheme,
+`www.`, trailing slash, fragment and tracking parameters ignored. When a
+provider fails, the others still rank and the failure is printed on stderr.
+
+**Credentials.** Either a token with *Workers AI Read* and *AI Gateway Read*
+(`cli-tools config set cloudflare`), or email + global key
+(`cloudflare_email`, `cloudflare_global`). When both are set and the token
+lacks the scope, the run falls through to the global key once and stays there.
+The account id is discovered from the credential when only one account is
+visible; otherwise pass `--account` or set `cloudflare_account`.
+
+**Cost.** Billed per request from AI Gateway credits: Ceramic $0.25, Exa $7,
+Linkup $5 per 1,000, so about 1.2c for a full three-provider run. The stderr
+line prints the estimate. An account with no credits gets `402
+web_search_payment_required` from every provider, and the command says so.
 
 ### `tts`
 
@@ -2649,6 +2705,7 @@ without writing anything.
 | `/names` | `free-names` |
 | `/prs` | `gh-prs` |
 | `/speak` | `tts` |
+| `/search` | `websearch` |
 | `/update` | `sysupdate` |
 | `/web` | `ask-web` |
 | `/whois` | `domainjson` |
