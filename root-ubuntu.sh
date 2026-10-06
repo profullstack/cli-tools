@@ -38,6 +38,8 @@
 #   8. moshcode  (curl https://moshcode.sh/install.sh | sh)
 #      + threatcrush CLI (curl https://threatcrush.com/install.sh | sh); the
 #        enforcing daemon is a separate opt-in (`threatcrush install-service`)
+#      + hqsh (curl https://hqterm.sh/install | sh -s -- --server), so
+#        `hqterm connect` works; skipped when already at the latest release
 #   9. a per-user ssh-agent as a systemd user service
 #  10. motd from $MOTD_URL
 #  11. nginx per-user pages, per-user dev apps, TLS
@@ -3249,6 +3251,8 @@ _sandbox_tools() {
 			curl -fsSL https://moshcode.sh/install.sh | sh >/dev/null 2>&1
 			# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as mise/moshcode above
 			curl -fsSL https://threatcrush.com/install.sh | sh >/dev/null 2>&1
+			# threatcrush-disable-next-line sh-remote-script-execution first-party installer (hqsh, for hqterm connect)
+			curl -fsSL https://hqterm.sh/install | sh -s -- --server >/dev/null 2>&1
 			true' >/dev/null 2>&1 \
 		|| warn "$name: one of the tool installers failed (not fatal)"
 	return 0
@@ -5150,6 +5154,29 @@ install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | s
 # took dev2 off the network), so it stays an explicit opt-in per box.
 # threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as install_moshcode above
 install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
+
+# hqsh, the server half of hqterm (https://hqterm.sh): `hqterm connect HOST`
+# and the desktop app reach a box over plain ssh, which runs `hqsh server
+# attach` here. There is no service, port or unit to manage: that command starts
+# a per-user daemon on demand that holds the shell across disconnects. The
+# client finds the binary on PATH or in ~/.local/bin, where the installer puts
+# it, so a per-login install is all a box needs.
+#
+# Idempotent: the installed `hqsh --version` is compared with the latest
+# release tag (read from GitHub's redirect, not the rate-limited API), and a
+# current install is left alone. Otherwise the installer swaps the binary in
+# atomically, so a running daemon is never half-overwritten.
+install_hqsh() {
+	as_user "$1" '
+		have="$("$HOME/.local/bin/hqsh" --version 2>/dev/null | awk "{print \$2}")"
+		want="$(curl -fsSI -o /dev/null -w "%{redirect_url}" https://github.com/profullstack/hqsh/releases/latest 2>/dev/null | sed "s|.*/tag/v||")"
+		if [ -n "$have" ] && [ "$have" = "$want" ]; then
+			echo "hqsh $have is current"
+			exit 0
+		fi
+		# threatcrush-disable-next-line sh-remote-script-execution first-party installer, same accepted idiom as install_moshcode
+		curl -fsSL https://hqterm.sh/install | sh -s -- --server --bin="$HOME/.local/bin"'
+}
 
 # Enables the ONE per-box enforcing daemon, as root. Fleet-wide enablement is an
 # explicit opt-in (the owner's call, 2026-09-25): the daemon auto-bans, so turning it on
@@ -7218,6 +7245,7 @@ else
 		# separate step: installing moshcode does not update what it manages
 		try "moshcode tools ($login)" update_moshcode_tools "$login"
 		try "threatcrush ($login)" install_threatcrush "$login"
+		try "hqsh ($login)"        install_hqsh "$login"
 	done < <(printf 'root\n'; all_logins)
 
 	# One enforcing daemon per box, once, as root -- not per login. Explicit
