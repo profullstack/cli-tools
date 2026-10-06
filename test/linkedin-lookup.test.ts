@@ -97,6 +97,12 @@ describe('lookupLinkedin', () => {
     expect(capped.searches).toBe(2);
     expect(capped.stopped).toMatch(/linkedin-max 2/);
 
+    // past the cap, cached answers still apply to every contact
+    const cache = new Map([[personQuery(many[4]!), [{ title: 'Pat4 Doe | LinkedIn', link: 'https://www.linkedin.com/in/pat4-doe' }]]]);
+    const cachedOnly = await lookupLinkedin(many, async () => { throw new Error('should not search'); }, { cache, maxSearches: 0, concurrency: 1 });
+    expect(cachedOnly.contacts[4]!.linkedin_url).toBe('https://www.linkedin.com/in/pat4-doe');
+    expect(cachedOnly).toMatchObject({ searches: 0, people: 1, stopped: 'reached --linkedin-max 0' });
+
     const broke = await lookupLinkedin(many, async () => { throw new OutOfCredits(); }, { concurrency: 1 });
     expect(broke.searches).toBe(1);
     expect(broke.stopped).toMatch(/402/);
