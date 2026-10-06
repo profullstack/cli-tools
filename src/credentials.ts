@@ -41,6 +41,16 @@ export const KNOWN_KEYS: Record<string, string> = {
   // ~/.moshcode/credentials.json and that is what gets picked up. This is for a
   // box that has the key but not moshcode.
   moshcode: 'MOSHCODE_API_KEY',
+  // Read by `proxy` (@profullstack/proxy). The proxy login is what traffic
+  // needs; the API keys only add `proxy status`. Webshare can do without its
+  // user/password: given the API key, the package reads the login from the
+  // account, which survives a password change in the dashboard.
+  proxiware: 'PROXIWARE_API_KEY',
+  proxiware_proxy_user: 'PROXIWARE_PROXY_USER',
+  proxiware_proxy_password: 'PROXIWARE_PROXY_PASSWORD',
+  webshare: 'WEBSHARE_API_KEY',
+  webshare_proxy_user: 'WEBSHARE_PROXY_USER',
+  webshare_proxy_password: 'WEBSHARE_PROXY_PASSWORD',
 };
 
 export type Source = 'env' | 'file' | 'unset';

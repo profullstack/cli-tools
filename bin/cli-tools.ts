@@ -100,6 +100,8 @@ Keys (config set <key>):
   anthropic   ANTHROPIC_API_KEY   generate-names
   perplexity  PERPLEXITY_API_KEY  ask-web
   elevenlabs  ELEVENLABS_API_KEY  tts
+  proxiware   PROXIWARE_API_KEY   proxy (status); proxiware_proxy_user/_password: traffic
+  webshare    WEBSHARE_API_KEY    proxy (status, and the login when no user/password)
 
 Options:
   --force   link: take over a symlink owned by another checkout

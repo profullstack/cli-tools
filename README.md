@@ -36,6 +36,7 @@ TypeScript, installed as executables on `PATH`.
 | [`openinstall`](#openinstall) | Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
+| [`proxy`](#proxy) | Fetch through our paid residential proxies (Proxiware, Webshare); also a local forward proxy, an MCP server and a TUI |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 | [`scorecard`](#scorecard) | One weekly number for the whole fleet: traffic, channels, posts and ads, week over week |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
@@ -452,6 +453,10 @@ carries the same masked previews, not the values.
 | `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
 | `moshcode` | `MOSHCODE_API_KEY` | `shorten` |
 | `resend` | `RESEND_API_KEY` | `mail`, as the fallback sender |
+| `proxiware` | `PROXIWARE_API_KEY` | `proxy status` |
+| `proxiware_proxy_user`, `proxiware_proxy_password` | `PROXIWARE_PROXY_USER`, `PROXIWARE_PROXY_PASSWORD` | `proxy` |
+| `webshare` | `WEBSHARE_API_KEY` | `proxy` (status, and the proxy login when no user/password is set) |
+| `webshare_proxy_user`, `webshare_proxy_password` | `WEBSHARE_PROXY_USER`, `WEBSHARE_PROXY_PASSWORD` | `proxy` |
 
 A key earns a row here by being read by a command in this repository, not by
 being a key the team owns. The vault holds more than twice as many; the rest
@@ -2078,6 +2083,36 @@ keeping a second, looser copy of those rules that would drift. The short url is
 the only thing on stdout, so it pipes.
 
 The same thing lives inside moshcode as `/shorten`; this is the copy that pipes.
+
+### `proxy`
+
+Call the web through the residential proxies we pay for. Everything past the
+keys is [`@profullstack/proxy`](https://github.com/profullstack/proxy), run
+in-process, so `proxy --help` is its help.
+
+```sh
+proxy https://example.com                    # body to stdout, US residential exit (Proxiware)
+proxy -i -c gb https://example.com           # status + headers, UK exit
+proxy -s job42 --ttl 10 https://example.com  # sticky: same exit IP for 10 minutes
+proxy -p webshare https://example.com        # a specific provider
+proxy ip                                     # 50.25.147.254  US North Carolina …  AS19108 Optimum  (proxiware)
+proxy status                                 # credit, plan, renewal, expiry per provider
+export HTTPS_PROXY="$(proxy url --reveal)"   # hand the URL to another tool
+proxy serve --port 8888                      # local forward proxy holding the credentials + JSON API
+proxy mcp                                    # MCP server on stdio
+proxy tui                                    # accounts and a live exit test
+```
+
+**Keys need no setup on a box that can reach the team vault.** The first run
+with none stored pulls the proxy keys (only those) from the same vault
+`cli-tools config pull` reads, and caches them in the credential store; later
+runs are local. Shell variables still win, one by one. To set one by hand:
+`cli-tools config set proxiware_proxy_password`.
+
+The default User-Agent is `curl/8.5.0 (+@profullstack/proxy)` because ESPN, for
+one, allowlists curl-like agents and refuses browser and runtime defaults
+whatever the exit IP. Exit codes follow curl where it has one: 22 for a non-2xx
+answer, plus 3 for no credentials.
 
 ### `users-dump`
 
