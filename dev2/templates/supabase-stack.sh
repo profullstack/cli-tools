@@ -66,6 +66,13 @@ backup_ext() { local f=$1 d b stem ext n=1; [ -e "$f" ] || return 0; d=$(dirname
 backup() { local f=$1 n=1; [ -e "$f" ] || return 0; while [ -e "$f.bak-$(printf %03d $n)" ]; do n=$((n+1)); done; cp -a "$f" "$f.bak-$(printf %03d $n)"; }
 set_env() { local k=$1 v=$2; if grep -q "^$k=" "$DIR/.env"; then awk -v k="$k" -v v="$v" 'BEGIN{FS="="} $1==k {print k "=" v; next} {print}' "$DIR/.env" > "$DIR/.env.tmp" && mv "$DIR/.env.tmp" "$DIR/.env"; else printf '%s=%s\n' "$k" "$v" >> "$DIR/.env"; fi; }
 get_env() { grep "^$1=" "$DIR/.env" | head -n1 | cut -d= -f2-; }
+# Files the overlay names in env_file must exist, empty is fine. auth.env holds a
+# site's GOTRUE_* extras (e.g. GOTRUE_SMS_PROVIDER=twilio + its credentials for
+# phone sign-in), which the base compose file only ships commented out.
+ensure_env_files() {
+  [ -f "$DIR/volumes/functions/secrets.env" ] || { install -d "$DIR/volumes/functions"; (umask 077; : > "$DIR/volumes/functions/secrets.env"); }
+  [ -f "$DIR/volumes/auth/auth.env" ] || { install -d "$DIR/volumes/auth"; (umask 077; : > "$DIR/volumes/auth/auth.env"); }
+}
 compose() { (cd "$DIR" && docker compose "$@"); }
 DBC="$SLUG-supabase-db"
 sql_admin() { docker exec -i "$DBC" psql -U supabase_admin -h localhost -d postgres -v ON_ERROR_STOP=1 -X -q -At "$@"; }
@@ -95,6 +102,7 @@ render_overlay() {
       api-gw)   echo "    networks:"; echo "      default:"; echo "        aliases: [envoy, kong]"; echo "    ports: !override"; echo "      - \"127.0.0.1:${API_PORT}:8000/tcp\"" ;;
       supavisor) echo "    ports: !override"; echo "      - \"127.0.0.1:${POOLER_PORT}:6543\"" ;;
       storage)  echo "    environment:"; echo "      FILE_SIZE_LIMIT: 5368709120" ;;   # the base file pins 50 MiB; buckets declare up to GiBs
+      auth)     echo "    env_file:"; echo "      - ./volumes/auth/auth.env" ;;   # per-site GOTRUE_* extras the base file leaves commented (SMS provider, hooks); environment: still wins
       functions) echo "    env_file:"; echo "      - .env"; echo "      - ./volumes/functions/secrets.env" ;;   # cloud function secrets (supabase-functions)
       db) echo "    shm_size: 512m"; echo "    ports: !override"; echo "      - \"${DB_PORT}:5432\""; echo "    volumes:"
           echo "      - ./volumes/$SLUG/$SLUG.conf:/etc/postgresql-custom/conf.d/zz-$SLUG.conf:ro,z"
@@ -145,7 +153,7 @@ lean_overlay() {
 # dropped services (or creates restored ones). db is never recreated here.
 if [ "$MODE" = services ]; then
   [ -f "$DIR/.env" ] && [ -f "$DIR/docker-compose.$SLUG.yml" ] || die "no stack at $DIR; run the full supabase-stack first"
-  cd "$DIR"
+  cd "$DIR"; ensure_env_files
   new="$DIR/.docker-compose.$SLUG.yml.new"; (umask 027; lean_overlay "$DIR/docker-compose.$SLUG.yml" > "$new")
   # every file COMPOSE_FILE lists, with this overlay swapped for the new one
   fargs=(); IFS=: read -ra cfs <<< "$(get_env COMPOSE_FILE)"; [ ${#cfs[@]} -gt 0 ] || die "no COMPOSE_FILE in $DIR/.env"
@@ -278,7 +286,7 @@ chown "$PG_UID:$PG_GID" "$V/tls/server.key" "$V/tls/server.crt"
 log "Overlay docker-compose.$SLUG.yml (own project name, container names, ports, subnet; dropped: ${DROP_SERVICES:-none})"
 render_overlay > "$DIR/docker-compose.$SLUG.yml"
 
-[ -f "$DIR/volumes/functions/secrets.env" ] || { install -d "$DIR/volumes/functions"; (umask 077; : > "$DIR/volumes/functions/secrets.env"); }
+ensure_env_files
 
 # ---------------------------------------------------------------- 3. start
 log "Starting $SLUG-supabase"
