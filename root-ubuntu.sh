@@ -161,6 +161,9 @@
 #   NO_REBOOT=1    skip the reboot at the end
 #   MOTD_URL=...   override the motd endpoint
 #   TS_AUTHKEY=... tailscale auth key, to join the tailnet unattended
+#   BOX_HOSTNAME=.. this box's hostname, ideally its full DNS name
+#                  (box1.example.com); asked for on an interactive run, left
+#                  alone on an unattended one unless set
 #   TS_HOSTNAME=.. name this node takes on the tailnet (default: short hostname)
 #   WEB_DOMAIN=... domain for the per-user pages
 #   DEV_APPS=0     turn off <app>.<user>.$WEB_DOMAIN hosting
@@ -302,7 +305,10 @@ KEYS_DIR="${KEYS_DIR:-}"
 # Tailscale. TS_AUTHKEY joins the tailnet unattended; without it the script
 # prints the command to run by hand.
 TS_AUTHKEY="${TS_AUTHKEY:-}"
+# set_box_hostname renames the box; a tailnet name nobody chose follows it.
+TS_HOSTNAME_GIVEN="${TS_HOSTNAME:+1}"
 TS_HOSTNAME="${TS_HOSTNAME:-$(hostname -s)}"
+BOX_HOSTNAME="${BOX_HOSTNAME:-}"
 
 # Per-user web hosting: https://WEB_DOMAIN/~user and https://user.WEB_DOMAIN
 WEB_DOMAIN="${WEB_DOMAIN:-dev.profullstack.com}"
@@ -4021,6 +4027,60 @@ EOF
 	return 0
 }
 
+# The hostname. A stock image names the box after the image ("ubuntu", "user"),
+# and every shell prompt, log line and mail header on it repeats that. The
+# full DNS name is what the box is called: the prompt shows all of it, and
+# /etc/hosts maps it (and the short name) to 127.0.1.1 so sudo and anything
+# else resolving its own name does not stall on DNS.
+valid_hostname() {
+	[[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ && ${#1} -le 253 ]]
+}
+
+set_box_hostname() {
+	local current want short hosts
+	current="$(hostname -f 2>/dev/null || hostname)"
+	want="$BOX_HOSTNAME"
+	if [[ -z "$want" ]] && interactive; then
+		read -r -p "Hostname for this box, its full DNS name (e.g. box1.example.com) [$current]: " want
+	fi
+	want="${want:-$current}"
+	want="${want,,}"
+	valid_hostname "$want" || { warn "not a hostname: $want -- keeping $current"; return 1; }
+	short="${want%%.*}"
+
+	if [[ "$(hostname)" != "$want" ]]; then
+		if command -v hostnamectl >/dev/null 2>&1; then
+			hostnamectl set-hostname "$want" || return 1
+		else
+			printf '%s\n' "$want" >/etc/hostname && hostname "$want" || return 1
+		fi
+		note "hostname $want"
+	fi
+
+	# One 127.0.1.1 line, naming the box both ways; everything else untouched.
+	hosts="$(grep -v '^127\.0\.1\.1[[:space:]]' /etc/hosts)"
+	{
+		printf '%s\n' "$hosts"
+		if [[ "$short" != "$want" ]]; then
+			printf '127.0.1.1\t%s %s\n' "$want" "$short"
+		else
+			printf '127.0.1.1\t%s\n' "$want"
+		fi
+	} | write_if_changed /etc/hosts && note "/etc/hosts names $want"
+
+	# cloud-init sets the hostname back to the droplet's name on every boot
+	# unless told the box owns it now.
+	if [[ -d /etc/cloud/cloud.cfg.d ]]; then
+		printf 'preserve_hostname: true\n' | write_if_changed /etc/cloud/cloud.cfg.d/99-preserve-hostname.cfg \
+			&& note "cloud-init keeps the hostname"
+	fi
+
+	[[ -n "$TS_HOSTNAME_GIVEN" ]] || TS_HOSTNAME="$short"
+	return 0
+}
+
+try "hostname" set_box_hostname
+
 if [[ "$SKIP_APT" == 1 ]]; then
 	log "skipping apt (--skip-apt)"
 else
@@ -5092,7 +5152,7 @@ install_moshcode() { as_user "$1" 'curl -fsSL https://moshcode.sh/install.sh | s
 install_threatcrush() { as_user "$1" 'curl -fsSL https://threatcrush.com/install.sh | sh'; }
 
 # Enables the ONE per-box enforcing daemon, as root. Fleet-wide enablement is an
-# explicit opt-in (Anthony, 2026-09-25): the daemon auto-bans, so turning it on
+# explicit opt-in (the owner's call, 2026-09-25): the daemon auto-bans, so turning it on
 # everywhere is a blast-radius decision, not a default. Safe only on >=0.12.4 (a
 # port-scan-ban regression once took dev2 off the network); provisioning installs
 # latest, so that floor is met. `install-service` run as root writes the systemd
