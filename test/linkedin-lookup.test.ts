@@ -102,6 +102,23 @@ describe('lookupLinkedin', () => {
     expect(broke.contacts).toHaveLength(5);
   });
 
+  it('reports progress every N searches', async () => {
+    const many = Array.from({ length: 5 }, (_, i) => contact({ email: `p${i}@x.io`, first_name: `Pat${i}`, last_name: 'Doe' }));
+    const seen: number[] = [];
+    await lookupLinkedin(many, async () => [], { concurrency: 1, every: 2, onProgress: (r) => seen.push(r.searches) });
+    expect(seen).toEqual([2, 4]);
+  });
+
+  it('valueSerp gives every request a timeout signal', async () => {
+    let signal: AbortSignal | undefined;
+    const search = valueSerp('k', { timeoutMs: 5, fetchImpl: async (_u, init) => {
+      signal = init?.signal;
+      return { ok: true, status: 200, json: async () => ({}) };
+    } });
+    await search('q');
+    expect(signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('valueSerp turns a 402 into OutOfCredits and retries a 429', async () => {
     const statuses = [429, 200];
     const ok = valueSerp('k', { pauseMs: 0, fetchImpl: async () => {

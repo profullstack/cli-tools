@@ -43,16 +43,24 @@ export class OutOfCredits extends Error {
   }
 }
 
-type Fetch = (url: string) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+type Fetch = (url: string, init?: { signal?: AbortSignal }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
-export function valueSerp(apiKey: string, { fetchImpl = fetch as unknown as Fetch, pauseMs = 1000 } = {}): Search {
+/**
+ * ValueSERP takes anywhere from 2 to 60+ seconds a query, so throughput comes
+ * from running many at once (see `concurrency`), and one stuck request is cut
+ * off at `timeoutMs` and counted as a miss rather than holding a worker.
+ */
+export function valueSerp(
+  apiKey: string,
+  { fetchImpl = fetch as unknown as Fetch, pauseMs = 1000, timeoutMs = 60_000 } = {},
+): Search {
   return async (query) => {
     const url = new URL('https://api.valueserp.com/search');
     url.searchParams.set('api_key', apiKey);
     url.searchParams.set('q', query);
     url.searchParams.set('num', '10');
     for (let attempt = 0; ; attempt++) {
-      const res = await fetchImpl(url.toString());
+      const res = await fetchImpl(url.toString(), { signal: AbortSignal.timeout(timeoutMs) });
       if (res.status === 402) throw new OutOfCredits();
       if (res.ok) {
         const body = (await res.json()) as { organic_results?: SerpResult[] };
@@ -187,11 +195,20 @@ export interface LookupResult {
 export async function lookupLinkedin(
   contacts: readonly ContactRow[],
   search: Search,
-  { cache = new Map() as LookupCache, maxSearches = 3000, concurrency = 3 } = {},
+  {
+    cache = new Map() as LookupCache,
+    maxSearches = 3000,
+    concurrency = 20,
+    /** Called every `every` new searches: progress, and a chance to save the cache. */
+    onProgress = (() => {}) as (r: LookupResult, done: number, total: number) => void,
+    every = 50,
+  } = {},
 ): Promise<LookupResult> {
   const out = contacts.map((c) => ({ ...c }));
   const result: LookupResult = { contacts: out, people: 0, companies: 0, searches: 0, cached: 0 };
   const inflight = new Map<string, Promise<SerpResult[] | undefined>>();
+  const work = out.filter((c) => !c.linkedin_url && ((c.first_name && c.last_name) || c.company_domain));
+  let next = 0;
 
   /** Results for a query, or undefined when the budget or the credits are gone. */
   const ask = async (query: string): Promise<SerpResult[] | undefined> => {
@@ -202,6 +219,7 @@ export async function lookupLinkedin(
         return undefined;
       }
       result.searches += 1;
+      if (result.searches % every === 0) onProgress(result, next, work.length);
       inflight.set(
         query,
         search(query).catch((error: Error) => {
@@ -225,8 +243,6 @@ export async function lookupLinkedin(
     return pick(results);
   };
 
-  const work = out.filter((c) => !c.linkedin_url && ((c.first_name && c.last_name) || c.company_domain));
-  let next = 0;
   const worker = async () => {
     while (next < work.length && !result.stopped) {
       const contact = work[next++]!;
