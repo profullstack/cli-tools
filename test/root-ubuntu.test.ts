@@ -1535,3 +1535,46 @@ describe('quiet_networkd_dispatcher', () => {
     expect(run(dir, 'FAKE_ACTIVE=1')).toContain('already off');
   });
 });
+
+describe('install_hqsh', () => {
+  // as_user is replaced by a plain bash run under a fake HOME, with a curl that
+  // answers the "latest release" probe with tag v0.2.0 and otherwise serves an
+  // installer that only reports how it was invoked.
+  const setup = (installed?: string) => {
+    const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-hqsh-'));
+    mkdirSync(join(dir, 'fakebin'));
+    mkdirSync(join(dir, 'home/.local/bin'), { recursive: true });
+    writeFileSync(
+      join(dir, 'fakebin/curl'),
+      '#!/bin/bash\ncase " $* " in *" -w "*) echo https://github.com/profullstack/hqsh/releases/tag/v0.2.0 ;; *) echo \'echo "installer ran: $*"\' ;; esac\n',
+      { mode: 0o755 },
+    );
+    if (installed) {
+      writeFileSync(join(dir, 'home/.local/bin/hqsh'), `#!/bin/sh\necho "hqsh ${installed}"\n`, { mode: 0o755 });
+    }
+    return dir;
+  };
+  const run = (dir: string) =>
+    shell(
+      ['install_hqsh'],
+      `as_user() { HOME=${JSON.stringify(join(dir, 'home'))} PATH=${JSON.stringify(join(dir, 'fakebin'))}:$PATH bash -c "$2"; }\ninstall_hqsh alice`,
+    );
+
+  it('leaves a current install alone, so a re-run downloads nothing', () => {
+    expect(run(setup('0.2.0'))).toBe('hqsh 0.2.0 is current');
+  });
+
+  it('runs the server-only installer into ~/.local/bin when hqsh is outdated', () => {
+    const dir = setup('0.1.0');
+    expect(run(dir)).toBe(`installer ran: --server --bin=${join(dir, 'home/.local/bin')}`);
+  });
+
+  it('installs hqsh where there is none yet', () => {
+    expect(run(setup())).toContain('installer ran: --server');
+  });
+
+  it('runs for every login in the tool loop, and inside tenant instances', () => {
+    expect(SOURCE).toMatch(/try "hqsh \(\$login\)"\s+install_hqsh "\$login"/);
+    expect(SOURCE).toContain('curl -fsSL https://hqterm.sh/install | sh -s -- --server >/dev/null 2>&1');
+  });
+});
