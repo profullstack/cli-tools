@@ -2277,6 +2277,33 @@ A source that fails is reported on stderr and the rest still export; the exit
 status is 3 when the output is partial. The config is found at `--config`, then
 `$USER_EXPORT_CONFIG`, then `~/.config/cli-tools/user-export.json`.
 
+#### `--clean`: the list worth mailing
+
+```sh
+user-export --clean -o list.csv --dropped dropped.csv   # email,first_name,last_name
+```
+
+`--clean` writes one row per address, `email,first_name,last_name`, and drops,
+in this order: myna unsubscribes (`optedOut` in `~/.config/myna/contacts.json`),
+addresses Resend bounced, suppressed or got a complaint about in the last 31
+days (key from `$RESEND_API_KEY`), the config's `clean.excludePatterns` (our own
+test accounts), addresses that never logged in on any site, and then whatever
+[`email-cleaner`](#email-cleaner) rejects (with `--allow-no-website`).
+`--dropped` writes `email,reason` for the rest. A raw export mailed as-is bounced
+at 16%: signups that never came back bounced at 36%, everyone else at 3%.
+
+```json
+"clean": {
+  "resendKey": "env:RESEND_API_KEY",
+  "resendDays": 31,
+  "mynaContacts": "~/.config/myna/contacts.json",
+  "excludePatterns": ["^claude-diag-", "^e2e-[^@]*@example\\.com$"]
+}
+```
+
+`--keep-never-logged-in`, `--no-resend` and `--no-dns` switch single steps off.
+Supabase sources should select only `email_confirmed_at is not null`.
+
 ### `email-cleaner`
 
 Clean a mailing list before you send to it, with the options of

@@ -108,6 +108,8 @@ export interface Config {
   /** Default team for `vault:` references. */
   vaultTeam?: string;
   sources: Source[];
+  /** Settings for `--clean`; see src/user-clean.ts. */
+  clean?: import('./user-clean.ts').CleanConfig;
 }
 
 /**
