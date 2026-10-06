@@ -43,6 +43,7 @@ TypeScript, installed as executables on `PATH`.
 | [`scorecard`](#scorecard) | One weekly number for the whole fleet: traffic, channels, posts and ads, week over week |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
 | [`user-export`](#user-export) | Every user across many databases, as one CSV |
+| [`explee`](#explee) | Add more of your own leads to an Explee project from a CSV |
 | [`email-cleaner`](#email-cleaner) | Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses |
 
 One thing here is not a `PATH` command and does not need Node:
@@ -804,6 +805,28 @@ Names ending in a Moshpit TLD are served from the registry API; everything else
 goes through OpenRDAP. Either way `dig` adds records, hosts, reverse lookups and
 per-nameserver AXFR attempts. Errors are JSON too — a tool whose output gets
 parsed should not change shape when it fails.
+
+### `explee`
+
+Explee's app takes your CSV once, when a campaign is created; there is no
+"import more leads" on an existing campaign, in the app or the API. `explee
+import` does the next best thing: a new campaign in the same project, with the
+brief (first email, follow-ups, language) copied from the campaign you name.
+Explee drops anyone the project already contacted, so overlapping CSVs are safe.
+
+```sh
+user-export --clean --no-resend --format explee -o more.csv        # or any CSV with these columns
+explee import more.csv --project 38837 --brief-from 222092 --dry-run   # check the file
+explee import more.csv --project 38837 --brief-from 222092             # import and wait
+explee status <task_id>
+```
+
+The project and campaign ids are in the app URL: `/p/<project>/segments/<campaign>`.
+Columns by name: `email`, `first_name`, `last_name`, `company_domain`, `job_title`
+(required; rows without them are listed and left out, since Explee would skip
+them silently), `linkedin_url`, `company_name`. The key is `$EXPLEE_API_KEY`, or
+a reference in `$EXPLEE_API_KEY_REF` (`vault:<team>/<project>/<env>/<KEY>`).
+Importing is free; sending is billed by Explee.
 
 ### `fe` and `dealsubs`
 
