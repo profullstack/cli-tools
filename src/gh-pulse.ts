@@ -1016,6 +1016,13 @@ const fmtWhen = (d: Date): string => d.toUTCString().replace(/:\d\d GMT$/, ' UTC
 
 // ---------------------------------------------------------------- html
 
+/** What the headline numbers mean, printed in every report so nobody has to ask. */
+export const DEFINITIONS = [
+  'Clone: one full download of a repo with git (git clone, or a fetch GitHub counts the same way). Most are bots, CI runners, mirrors and package tools, not people; unique cloners counts distinct machines.',
+  'View: a page view on github.com; unique visitors counts distinct people.',
+  'Repos moved: repos with any commit, PR, issue, release, star, fork or traffic in the window.',
+];
+
 export function renderHtml(c: ReportContext): string {
   const { movers, detailed } = c;
   const maxScore = Math.max(1, ...movers.map((x) => x.m.score));
@@ -1048,6 +1055,7 @@ ${tile('Views', n(c.port.views), `${n(c.port.uniques)} unique visitors · ${esc(
 ${tile('Clones', n(c.port.clones), `${n(c.port.cloners)} unique cloners · ${esc(c.trafficLabel)}`)}
 </tr></table>
 <div style="font-size:13px;color:#52514e;margin-top:8px">Followers: ${n(c.followers.length)} · ${followerDelta}${c.trafficBlind ? ` · traffic unavailable for ${c.trafficBlind} repos (no push access)` : ''}${c.range?.partialRepos ? ` · counts for ${c.range.partialRepos} repos are lower bounds (page budget reached)` : ''}</div>
+<div style="font-size:12px;color:#52514e;margin-top:6px">${DEFINITIONS.map((d) => { const i = d.indexOf(':'); return `<b style="color:#0b0b0b">${esc(d.slice(0, i))}</b>${esc(d.slice(i))}`; }).join('<br>')}</div>
 <img src="${c.portfolioImg}" width="640" alt="${c.range ? esc(c.range.label) : '14-day'} views and clones across all repos" style="display:block;width:100%;max-width:640px;height:auto;margin:14px 0 6px;border:1px solid #e6e5e1;border-radius:8px">
 `;
 
@@ -1123,6 +1131,7 @@ export function renderText(c: ReportContext): string {
   out.push(c.range ? c.range.coverage : `window since ${c.cutoff.toISOString()} · traffic: ${c.trafficLabel}, newest GitHub day ${c.newestDay}`);
   out.push('');
   out.push(`${c.movers.length} of ${c.repoCount} repos moved · stars ${c.totalStars}${c.prevTotalStars === null ? '' : ` (${signed(c.totalStars - c.prevTotalStars)})`} · views ${c.port.views}/${c.port.uniques} unique · clones ${c.port.clones}/${c.port.cloners} unique · followers ${c.followers.length} (${signed(c.followerMoves.gained.length - c.followerMoves.lost.length)})`);
+  out.push(...DEFINITIONS);
   out.push('');
   c.movers.forEach((x, i) => {
     out.push(`${String(i + 1).padStart(2)}. ${x.repo.full_name}  ${x.m.score.toFixed(0)} pts`);
