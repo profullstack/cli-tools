@@ -179,6 +179,18 @@ export const COMPANIONS: readonly Companion[] = [
     home: 'https://github.com/team-telnyx/telnyx-api-cli',
   },
   {
+    name: 'qc',
+    // qrypt.chat in the terminal: bare `qc` is a full-screen hqtui chat client,
+    // `qc chats|read|send|listen` are for scripts and `qc mcp` is an MCP server.
+    // Messages are encrypted (ML-KEM-1024) on the machine running qc, so the
+    // keys live in ~/.config/qc after `qc login`, a browser handoff -- a front
+    // door like `myna`: nothing about the account lives here. The package is
+    // `@profullstack/qryptchat`; the binary is `qc`.
+    install: { kind: 'npm', package: '@profullstack/qryptchat' },
+    summary: 'qrypt.chat in the terminal: end-to-end encrypted chat client, CLI and MCP server',
+    home: 'https://qrypt.chat',
+  },
+  {
     name: 'adb',
     // The Android Debug Bridge, and `fastboot` out of the same archive: one
     // download, two commands. Neither is on npm. What is published under those

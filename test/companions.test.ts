@@ -33,6 +33,7 @@ describe('the companion list', () => {
       'devdb',
       'kali',
       'telnyx',
+      'qc',
       'adb',
       'expo',
       'eas',
@@ -169,6 +170,7 @@ describe('statuses', () => {
       ['devdb', 'missing'],
       ['kali', 'missing'],
       ['telnyx', 'missing'],
+      ['qc', 'missing'],
       ['adb', 'missing'],
       ['expo', 'missing'],
       ['eas', 'missing'],
@@ -184,7 +186,7 @@ describe('ensure', () => {
     // Reinstalling over it is the surprise `link` refuses for symlinks.
     const calls: string[] = [];
     const results = ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx', 'qc'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -196,7 +198,7 @@ describe('ensure', () => {
 
   it('installs only what is missing', () => {
     const calls: string[] = [];
-    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx']);
+    const installed = new Set<string>(['timer', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx', 'qc']);
     ensure({
       onPath: (name) => (installed.has(name) ? `/usr/local/bin/${name}` : null),
       run: ({ display }) => {
@@ -211,7 +213,7 @@ describe('ensure', () => {
   it('reinstalls everything at @latest when asked', () => {
     const calls: string[] = [];
     ensure({
-      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx'),
+      onPath: present('timer', 'billing', 'bw', 'diskpush', 'myna', 'devdb', 'kali', 'telnyx', 'qc'),
       run: ({ display }) => {
         calls.push(display);
         return { status: 0 };
@@ -229,6 +231,7 @@ describe('ensure', () => {
       'go install github.com/terrablue/devdb@latest',
       'npm install -g @profullstack/kali@latest',
       'npm install -g @telnyx/api-cli@latest',
+      'npm install -g @profullstack/qryptchat@latest',
     ]);
   });
 
