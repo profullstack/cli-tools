@@ -1005,6 +1005,13 @@ def cmd_provision(args):
         key_alias = f"github.com-{s['repo'].replace('/', '__')}"
         repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
     deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\nIMAGE_ONLY={'1' if image_only else '0'}\n"
+    # Secrets come from the logicsrc team vault on every deploy (deploy-app.sh
+    # sync_env_from_vault): sites.d "vault" names it, else <repo name>--prod; "vault": ""
+    # turns it off. env_remove keys are never taken from the vault.
+    vault = s.get("vault", f"{s['repo'].split('/')[-1]}--prod" if s.get("repo") else "")
+    if vault:
+        deploy_env += f"VAULT={vault}\nVAULT_TEAM={s.get('vault_team', 'profullstack')}\n"
+        deploy_env += f"VAULT_SKIP=\"{' '.join(s.get('env_remove') or [])}\"\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")

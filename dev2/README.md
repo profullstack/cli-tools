@@ -59,12 +59,30 @@ dev2 (or its provider) starts dropping this box's connections outright.
 ├── app/                     git checkout the deploy builds from
 ├── app.env                  the app's environment (0600, anthony)
 ├── <worker>.env             one per companion service
-├── deploy.env               SITE REPO BRANCH APP_PORT BUILD_SERVICES HEALTH_PATH
+├── deploy.env               SITE REPO BRANCH APP_PORT BUILD_SERVICES HEALTH_PATH VAULT VAULT_TEAM VAULT_SKIP
 ├── docker-compose.app.yml   app (+ companions) (+ redis)
 ├── deploy-app.sh            what CI calls over ssh; --status, --rollback
 ├── volumes/<name>/          Railway volumes
 └── .deploy-state
 ```
+
+**Secrets come from the logicsrc vault on every deploy.** Before building,
+`deploy-app.sh` runs `logicsrc teams pull <VAULT_TEAM> <project> <env>` for
+`VAULT=<project>--<env>` (sites.d `"vault"`, default `<repo name>--prod`; `"vault": ""`
+turns it off) and merges it into `app.env`. The vault wins for any key it holds with a
+non-empty value. Keys only `app.env` has (a box-minted `DATABASE_URL`) stay, and
+`VAULT_SKIP` (the site's `env_remove`) is never taken from the vault. The previous
+file is kept as `app.env.prev`, and the log names the keys it changed, never their
+values. To set a secret, push it to the vault and redeploy:
+
+```sh
+printf 'KEY=value\n' > .env && logicsrc teams push profullstack <project> prod --env .env && rm .env
+gh workflow run deploy-dev2.yml -R profullstack/<repo>
+```
+
+Auth is whatever logicsrc on the box has: `LOGICSRC_API_KEY`, or the key in
+`~/.config/logicsrc/deploy-api-key`, or the account logged in there. If the vault
+cannot be read, `app.env` stays as it is and the deploy continues.
 
 The box clones over ssh with a **read-only GitHub deploy key** (the same per-repo
 key CI uses to reach dev2), under an alias `github.com-<org>__<repo>` in
