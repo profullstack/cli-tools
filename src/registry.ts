@@ -75,6 +75,7 @@ const SUMMARIES: Record<string, string> = {
   'users-dump': 'Every user account across the fleet, as one CSV: name, email, site, last login',
   vid: 'Inspect, thumbnail, clip and shrink video, through ffmpeg',
   wcag: 'Audit a site against WCAG with axe in headless Chrome, for the W3C report tool',
+  websearch: 'One query across Ceramic, Exa and Linkup via Cloudflare, ranked by our own fusion',
 };
 
 /** The repository root, found from this file rather than from the cwd. */
@@ -213,6 +214,9 @@ export const PIT_ALIASES: Record<string, string> = {
   // `pulse` opens the terminal view of the last report; the scan itself is
   // cron's job and stays the long spelling.
   pulse: 'gh-pulse show',
+  // `/search` rather than a `search` command: no alias may share a name with
+  // a command, and the short word belongs to the pit.
+  search: 'websearch',
   speak: 'tts',
   // The short word for `sysupdate`, and the reason that command is not itself
   // called `update`: `cli-tools update` already means "move this checkout",

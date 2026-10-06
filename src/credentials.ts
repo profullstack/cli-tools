@@ -54,6 +54,13 @@ export const KNOWN_KEYS: Record<string, string> = {
   webshare: 'WEBSHARE_API_KEY',
   webshare_proxy_user: 'WEBSHARE_PROXY_USER',
   webshare_proxy_password: 'WEBSHARE_PROXY_PASSWORD',
+  // Read by `websearch` (Cloudflare Web Search). The token needs Workers AI
+  // Read + AI Gateway Read; when it lacks them, email + global key are the
+  // fallback. The account id is discovered from the credential when unset.
+  cloudflare: 'CLOUDFLARE_API_TOKEN',
+  cloudflare_account: 'CLOUDFLARE_ACCOUNT_ID',
+  cloudflare_email: 'CLOUDFLARE_EMAIL',
+  cloudflare_global: 'CLOUDFLARE_GLOBAL_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';
