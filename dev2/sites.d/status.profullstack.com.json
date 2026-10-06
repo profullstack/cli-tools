@@ -1,0 +1,34 @@
+{
+ "site": "status.profullstack.com",
+ "service": "status.profullstack.com",
+ "repo": "profullstack/status.profullstack.com",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "status.profullstack.com"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [
+  {
+   "name": "data",
+   "mountPath": "/data"
+  }
+ ],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3299,
+ "health_path": "/health",
+ "max_body": "1m",
+ "mem_limit": "512m",
+ "mem_note": "Gatus (Go, static binary): ~66 checks every 2 minutes, SQLite history",
+ "notes": "Not a Railway site: born on dev2 2026-10-06. Public status page (Gatus) for every Profullstack property; checks listed in the repo's sites.tsv. No database (SQLite in volumes/data). RESEND_API_KEY for alert email in vault status--prod. Not a node app: skip `healthchecks` (the image has no shell or node). Deploys on push to main.",
+ "vault": "status--prod"
+}
