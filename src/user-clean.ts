@@ -290,6 +290,56 @@ export function toCleanCsv(rows: readonly CleanedRow[], { full = false } = {}): 
   return `${[columns.join(','), ...rows.map((r) => columns.map((c) => field(r[c] ?? '')).join(','))].join('\n')}\n`;
 }
 
+/**
+ * Explee's campaign import (POST /public/api/v1/autogtm/campaigns/import)
+ * silently skips any lead without all five of these; linkedin_url is optional.
+ */
+export const EXPLEE_REQUIRED = ['email', 'first_name', 'last_name', 'company_domain', 'job_title'] as const;
+
+export interface MissingRow {
+  email: string;
+  /** The required columns this row has no value for, joined with '+'. */
+  missing: string;
+}
+
+export interface ExpleeResult {
+  kept: ContactRow[];
+  missing: MissingRow[];
+  /** column -> rows it was missing from. */
+  counts: Record<string, number>;
+}
+
+/**
+ * Only the rows Explee will import, and for the rest exactly which required
+ * columns they lack. `defaultTitle` fills a blank job_title (Explee's writer
+ * uses the title in its copy, so a generic one reads as generic).
+ */
+export function forExplee(rows: readonly CleanedRow[], { defaultTitle = '' } = {}): ExpleeResult {
+  const result: ExpleeResult = { kept: [], missing: [], counts: {} };
+  for (const row of rows) {
+    const contact = Object.fromEntries(FULL_COLUMNS.map((c) => [c, (row[c] ?? '').trim()])) as ContactRow;
+    if (!contact.job_title && defaultTitle) contact.job_title = defaultTitle;
+    const gaps = EXPLEE_REQUIRED.filter((c) => !contact[c]);
+    if (gaps.length === 0) {
+      result.kept.push(contact);
+    } else {
+      result.missing.push({ email: contact.email, missing: gaps.join('+') });
+      for (const g of gaps) result.counts[g] = (result.counts[g] ?? 0) + 1;
+    }
+  }
+  return result;
+}
+
+export function toMissingCsv(rows: readonly MissingRow[]): string {
+  return `${['email,missing', ...rows.map((r) => [r.email, r.missing].map(field).join(','))].join('\n')}\n`;
+}
+
+export function formatExpleeSummary(r: ExpleeResult): string {
+  const lines = [`explee: ${r.kept.length} importable, ${r.missing.length} skipped for a missing required column`];
+  for (const [column, n] of Object.entries(r.counts).sort((a, b) => b[1] - a[1])) lines.push(`  no ${column.padEnd(19)} ${n}`);
+  return `${lines.join('\n')}\n`;
+}
+
 export function formatEnrichSummary(result: EnrichResult, total: number): string {
   const lines = [`enrich: ${result.matched} of ${total} contacts matched`];
   for (const [column, n] of Object.entries(result.filled)) lines.push(`  ${column.padEnd(22)} +${n}`);

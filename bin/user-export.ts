@@ -49,6 +49,9 @@ import {
   resendSuppressions,
   toCleanCsv,
   toContacts,
+  forExplee,
+  formatExpleeSummary,
+  toMissingCsv,
   type CleanedRow,
   type ContactRow,
   toDroppedCsv,
@@ -58,6 +61,7 @@ const USAGE = `Usage:
   user-export [--config FILE] [-o FILE] [--only site,site] [--source] [--json]
   user-export --clean [-o FILE] [--dropped FILE] [--only site,site]
   user-export --full [--clean] [-o FILE] [--no-enrich] [--no-linkedin] [--linkedin-max N]
+  user-export --format explee [--clean] [-o FILE] [--missing FILE] [--default-title TEXT]
   user-export --example        print a sample config
 
 Reads every source in the config and writes one CSV of
@@ -116,6 +120,11 @@ Options:
       --full         the six contact columns above, enriched
       --no-enrich    with --full: skip the "enrich" sources
       --no-linkedin  with --full: skip the LinkedIn search
+      --format explee   --full, keeping only rows Explee's import accepts:
+                     email, first_name, last_name, company_domain and job_title
+                     all set (it skips any other row without saying why)
+      --missing FILE with --format: email,missing for every row left out
+      --default-title TEXT   with --format explee: fill a blank job_title
       --linkedin-max N   with --full: at most N new searches this run
       --dropped FILE with --clean: every dropped address and why
       --keep-never-logged-in   with --clean: do not drop those
@@ -131,7 +140,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['-h', '--help', '--example', '--source', '--json', '-q', '--quiet', '--clean', '--full', '--no-enrich', '--no-linkedin', '--keep-never-logged-in', '--no-resend', '--no-dns'],
-      string: ['--config', '-o', '--out', '--only', '--dropped', '--linkedin-max'],
+      string: ['--config', '-o', '--out', '--only', '--dropped', '--linkedin-max', '--format', '--missing', '--default-title'],
     });
 
     if (flags.has('-h') || flags.has('--help')) {
@@ -152,7 +161,9 @@ if (isMain(import.meta.url)) {
     const rows = results.flatMap((r) => r.rows);
     const quiet = flags.has('-q') || flags.has('--quiet');
     const out = values.get('-o') || values.get('--out');
-    const full = flags.has('--full');
+    const format = values.get('--format');
+    if (format !== undefined && format !== 'explee') throw new UsageError(`unknown --format: ${format} (known: explee)`);
+    const full = flags.has('--full') || format === 'explee';
     let text: string;
     let cleanSummary = '';
     let contacts: CleanedRow[] | undefined;
@@ -210,6 +221,13 @@ if (isMain(import.meta.url)) {
         } finally {
           saveCache(cachePath, cache);
         }
+      }
+      if (format === 'explee') {
+        const explee = forExplee(contacts, { defaultTitle: values.get('--default-title') ?? '' });
+        contacts = explee.kept;
+        const missing = values.get('--missing');
+        if (missing) writeFileSync(missing, toMissingCsv(explee.missing), { mode: 0o600 });
+        cleanSummary += formatExpleeSummary(explee);
       }
       text = toCleanCsv(contacts, { full });
     } else {

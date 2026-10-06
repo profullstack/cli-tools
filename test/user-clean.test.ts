@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   cleanUsers,
   enrichContacts,
+  forExplee,
+  toMissingCsv,
   mynaOptOuts,
   normalizeDomain,
   normalizeLinkedin,
@@ -149,5 +151,24 @@ describe('resendSuppressions', () => {
     const map = await resendSuppressions('k', { days: 31, fetchImpl, now: Date.parse('2026-10-06T00:00:00Z'), pauseMs: 0 });
     expect(Object.fromEntries(map)).toEqual({ 'b@x.com': 'bounced', 's@x.com': 'suppressed' });
     expect(seen).toEqual(['', '2']);
+  });
+});
+
+describe('--format explee', () => {
+  const full = { email: 'a@acme.com', first_name: 'Ada', last_name: 'L', company_domain: 'acme.com', job_title: 'CTO', linkedin_url: '' };
+
+  it('keeps only rows with all five required columns and says what the rest lack', () => {
+    const r = forExplee([full, { ...full, email: 'b@acme.com', job_title: '' }, { ...full, email: 'c@gmail.com', company_domain: '', last_name: '' }]);
+    expect(r.kept.map((k) => k.email)).toEqual(['a@acme.com']);
+    expect(r.missing).toEqual([
+      { email: 'b@acme.com', missing: 'job_title' },
+      { email: 'c@gmail.com', missing: 'last_name+company_domain' },
+    ]);
+    expect(r.counts).toEqual({ job_title: 1, last_name: 1, company_domain: 1 });
+    expect(toMissingCsv(r.missing)).toBe('email,missing\nb@acme.com,job_title\nc@gmail.com,last_name+company_domain\n');
+  });
+
+  it('fills a blank title from --default-title', () => {
+    expect(forExplee([{ ...full, job_title: '' }], { defaultTitle: 'Founder' }).kept[0]!.job_title).toBe('Founder');
   });
 });
