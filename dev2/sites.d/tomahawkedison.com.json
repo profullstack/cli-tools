@@ -1,0 +1,25 @@
+{
+ "site": "tomahawkedison.com",
+ "service": "tomahawkedison.com",
+ "repo": "profullstack/tomahawkedison-web",
+ "branch": "master",
+ "image": null,
+ "domains": [
+  "tomahawkedison.com",
+  "www.tomahawkedison.com"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [],
+ "port_var": "8080",
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3292,
+ "notes": "Not a Railway site: moved off DigitalOcean App Platform (app b481d1aa) 2026-10-06. The zone is in the client's own Porkbun account, so the cert is HTTP-01 and `dns` only checks: the client points tomahawkedison.com + www at 23.95.228.174, then run cert, vhost, verify --public."
+}
