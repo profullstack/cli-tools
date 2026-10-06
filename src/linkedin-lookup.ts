@@ -230,12 +230,16 @@ export async function lookupLinkedin(
   const work = out.filter((c) => !c.linkedin_url && ((c.first_name && c.last_name) || c.company_domain));
   let next = 0;
 
+  // Past the cap the run still walks every contact, so cached answers keep
+  // applying; it only stops spending. A 402 (no credits at all) stops it outright.
+  let capped = false;
+
   /** Results for a query, or undefined when the budget or the credits are gone. */
   const ask = async (query: string): Promise<SerpResult[] | undefined> => {
     if (result.stopped) return undefined;
     if (!inflight.has(query)) {
       if (result.searches >= maxSearches) {
-        result.stopped = `reached --linkedin-max ${maxSearches}`;
+        capped = true;
         return undefined;
       }
       result.searches += 1;
@@ -292,6 +296,7 @@ export async function lookupLinkedin(
     }
   };
   await Promise.all(Array.from({ length: Math.min(concurrency, work.length) }, worker));
+  if (capped && !result.stopped) result.stopped = `reached --linkedin-max ${maxSearches}`;
   return result;
 }
 
