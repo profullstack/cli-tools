@@ -2304,6 +2304,34 @@ at 16%: signups that never came back bounced at 36%, everyone else at 3%.
 `--keep-never-logged-in`, `--no-resend` and `--no-dns` switch single steps off.
 Supabase sources should select only `email_confirmed_at is not null`.
 
+#### `--full`: contact columns, enriched
+
+```sh
+user-export --clean --full -o list.csv   # email,first_name,last_name,company_domain,job_title,linkedin_url
+user-export --full -o everyone.csv       # the same, every address, uncleaned
+```
+
+`--full` writes one row per address with six columns and always enriches it
+(`--no-enrich` skips that). Any source may return `first_name`, `last_name`,
+`job_title`, `linkedin_url` and `company_domain` alongside the usual columns;
+the default Supabase query takes them from sign-up metadata (`job_title`,
+`title`, `headline`; `linkedin_url`, `linkedin`; `company_domain`, `website`).
+
+Enrichment reads the config's `enrich` array: sources of the same types,
+usually our other databases, whose rows are matched to users by email. They only
+fill blank fields, and earlier sources win. `company_domain` falls back to the
+address's own domain unless that is webmail, and a domain a source names
+replaces that guess. LinkedIn values are normalized to
+`https://www.linkedin.com/in/<handle>`; anything that is not a LinkedIn URL is
+dropped.
+
+```json
+"enrich": [
+  { "type": "postgres", "site": "crm", "via": "ssh db.internal", "url": "postgresql:///crm",
+    "query": "select email, first_name, last_name, title as job_title, linkedin as linkedin_url, domain as company_domain from people where email is not null" }
+]
+```
+
 ### `email-cleaner`
 
 Clean a mailing list before you send to it, with the options of

@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 
 import { cleanEmails, type CleanOptions } from './email-cleaner.ts';
+import { domainOf, isWebmailDomain } from './mail.ts';
 import type { UserRow } from './user-export.ts';
 
 /** The `clean` block of user-export.json. Every field is optional. */
@@ -39,7 +40,15 @@ export interface CleanedRow {
   email: string;
   first_name: string;
   last_name: string;
+  /** The --full columns; '' when nothing knew them. */
+  company_domain?: string;
+  job_title?: string;
+  linkedin_url?: string;
 }
+
+/** The columns `--full` writes, in order. */
+export const FULL_COLUMNS = ['email', 'first_name', 'last_name', 'company_domain', 'job_title', 'linkedin_url'] as const;
+export type ContactRow = Record<(typeof FULL_COLUMNS)[number], string>;
 
 export interface DroppedRow {
   email: string;
@@ -75,7 +84,53 @@ export function splitName(name: string): { first_name: string; last_name: string
   return { first_name: first, last_name: rest.join(' ') };
 }
 
-export async function cleanUsers(rows: readonly UserRow[], options: CleanUsersOptions = {}): Promise<CleanUsersResult> {
+/**
+ * Mail hosts mail.ts does not know, because nobody sends from them through
+ * us, but whose addresses say nothing about an employer. substack.com is a
+ * third of our list: publication handles, not people at Substack.
+ */
+const NOT_A_COMPANY = new Set([
+  'substack.com', 'duck.com', 'qq.com', '163.com', '126.com', 'mail.ru', 'web.de', 'naver.com',
+  'hotmail.co.uk', 'hotmail.fr', 'outlook.de', 'live.co.uk', 'yahoo.co.in', 'yahoo.co.jp',
+  'comcast.net', 'att.net', 'verizon.net', 'sbcglobal.net', 'btinternet.com', 'cox.net', 'charter.net',
+]);
+
+/** `https://www.Acme.com/about` -> `acme.com`. Webmail hosts are not companies. */
+export function normalizeDomain(value: string): string {
+  const host = value.trim().toLowerCase().replace(/^[a-z]+:\/\//, '').replace(/^www\./, '').split(/[/?#:]/)[0] ?? '';
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(host) && !isWebmailDomain(host) && !NOT_A_COMPANY.has(host) ? host : '';
+}
+
+/** A LinkedIn profile URL from a URL, a bare `linkedin.com/in/x`, or a handle. Anything else is ''. */
+export function normalizeLinkedin(value: string): string {
+  const v = value.trim();
+  if (!v) return '';
+  if (/^[\w-]{3,100}$/.test(v)) return `https://www.linkedin.com/in/${v}`;
+  const m = v.match(/^(?:https?:\/\/)?(?:[a-z]{2,3}\.)?(?:www\.)?linkedin\.com\/((?:in|company|pub)\/[^?#\s]+)/i);
+  return m ? `https://www.linkedin.com/${m[1]!.replace(/\/+$/, '')}` : '';
+}
+
+const first = (values: (string | undefined)[]) => values.map((v) => v?.trim() ?? '').find(Boolean) ?? '';
+
+/**
+ * One contact from every row that shares an address. Explicit first/last names
+ * win over a split full name; the company is whatever a source said, else the
+ * address's own domain unless that is webmail.
+ */
+export function buildContact(email: string, group: readonly UserRow[]): ContactRow {
+  const split = splitName(group.map((r) => r.name.trim()).find((n) => n && !n.includes('@')) ?? '');
+  const firstName = first(group.map((r) => r.first_name));
+  return {
+    email,
+    first_name: firstName || split.first_name,
+    last_name: firstName ? first(group.map((r) => r.last_name)) : split.last_name,
+    company_domain: first(group.map((r) => normalizeDomain(r.company_domain ?? ''))) || normalizeDomain(domainOf(email)),
+    job_title: first(group.map((r) => r.job_title)),
+    linkedin_url: first(group.map((r) => normalizeLinkedin(r.linkedin_url ?? ''))),
+  };
+}
+
+function groupByEmail(rows: readonly UserRow[]): Map<string, UserRow[]> {
   const byEmail = new Map<string, UserRow[]>();
   for (const row of rows) {
     const email = row.email.trim().toLowerCase();
@@ -84,9 +139,66 @@ export async function cleanUsers(rows: readonly UserRow[], options: CleanUsersOp
     if (list) list.push(row);
     else byEmail.set(email, [row]);
   }
+  return byEmail;
+}
+
+/** Every address once, uncleaned: `--full` without `--clean`. */
+export function toContacts(rows: readonly UserRow[]): ContactRow[] {
+  return [...groupByEmail(rows)].map(([email, group]) => buildContact(email, group));
+}
+
+export interface EnrichResult {
+  contacts: ContactRow[];
+  /** column -> how many contacts it was filled in for. */
+  filled: Record<string, number>;
+  /** Contacts that at least one enrichment row matched. */
+  matched: number;
+}
+
+/**
+ * Fill each contact's blank fields from `found` (rows read from the config's
+ * `enrich` sources), matched by email. A field a contact already has is never
+ * overwritten, and sources earlier in the config win over later ones.
+ */
+export function enrichContacts(contacts: readonly CleanedRow[], found: readonly UserRow[]): EnrichResult {
+  const byEmail = groupByEmail(found);
+  const filled: Record<string, number> = {};
+  let matched = 0;
+  const out = contacts.map((contact) => {
+    const base: ContactRow = Object.fromEntries(FULL_COLUMNS.map((c) => [c, contact[c] ?? ''])) as ContactRow;
+    const group = byEmail.get(contact.email.toLowerCase());
+    if (!group) return base;
+    matched += 1;
+    const extra = buildContact(base.email, group);
+    const bump = (column: string) => (filled[column] = (filled[column] ?? 0) + 1);
+    if (!base.first_name && !base.last_name && (extra.first_name || extra.last_name)) {
+      base.first_name = extra.first_name;
+      base.last_name = extra.last_name;
+      bump('name');
+    }
+    // A company a source names beats one guessed from the address's domain.
+    const sourced = first(group.map((r) => normalizeDomain(r.company_domain ?? '')));
+    const guessed = normalizeDomain(domainOf(base.email));
+    if (sourced && sourced !== base.company_domain && (!base.company_domain || base.company_domain === guessed)) {
+      base.company_domain = sourced;
+      bump('company_domain');
+    }
+    for (const column of ['job_title', 'linkedin_url'] as const) {
+      if (!base[column] && extra[column]) {
+        base[column] = extra[column];
+        bump(column);
+      }
+    }
+    return base;
+  });
+  return { contacts: out, filled, matched };
+}
+
+export async function cleanUsers(rows: readonly UserRow[], options: CleanUsersOptions = {}): Promise<CleanUsersResult> {
+  const byEmail = groupByEmail(rows);
 
   const dropped: DroppedRow[] = [];
-  const candidates: { email: string; name: string }[] = [];
+  const candidates: { email: string; group: UserRow[] }[] = [];
   for (const [email, group] of byEmail) {
     const reason = options.optedOut?.has(email)
       ? 'unsubscribed'
@@ -101,16 +213,15 @@ export async function cleanUsers(rows: readonly UserRow[], options: CleanUsersOp
       dropped.push({ email, reason });
       continue;
     }
-    const name = group.map((r) => r.name.trim()).find((n) => n && !n.includes('@')) ?? '';
-    candidates.push({ email, name });
+    candidates.push({ email, group });
   }
 
   const result = await cleanEmails(
     candidates.map((c) => ({ input: c.email, email: c.email })),
     { allowNoWebsite: true, ...options.cleaner },
   );
-  const names = new Map(candidates.map((c) => [c.email, c.name]));
-  const kept = result.valid.map((v) => ({ email: v.email, ...splitName(names.get(v.email.toLowerCase()) ?? '') }));
+  const groups = new Map(candidates.map((c) => [c.email, c.group]));
+  const kept = result.valid.map((v) => buildContact(v.email, groups.get(v.email.toLowerCase()) ?? []));
   for (const bad of result.invalid) dropped.push({ email: bad.email, reason: bad.reasons.join('+') || 'invalid' });
 
   const counts: Record<string, number> = {};
@@ -174,8 +285,15 @@ export function defaultMynaContacts(): string {
   return `${homedir()}/.config/myna/contacts.json`;
 }
 
-export function toCleanCsv(rows: readonly CleanedRow[]): string {
-  return `${['email,first_name,last_name', ...rows.map((r) => [r.email, r.first_name, r.last_name].map(field).join(','))].join('\n')}\n`;
+export function toCleanCsv(rows: readonly CleanedRow[], { full = false } = {}): string {
+  const columns = full ? FULL_COLUMNS : (['email', 'first_name', 'last_name'] as const);
+  return `${[columns.join(','), ...rows.map((r) => columns.map((c) => field(r[c] ?? '')).join(','))].join('\n')}\n`;
+}
+
+export function formatEnrichSummary(result: EnrichResult, total: number): string {
+  const lines = [`enrich: ${result.matched} of ${total} contacts matched`];
+  for (const [column, n] of Object.entries(result.filled)) lines.push(`  ${column.padEnd(22)} +${n}`);
+  return `${lines.join('\n')}\n`;
 }
 
 export function toDroppedCsv(rows: readonly DroppedRow[]): string {
