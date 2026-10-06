@@ -130,6 +130,8 @@ export interface Config {
     serpKey?: string;
     /** New searches per run (cached answers are free). Default 3000. */
     maxSearches?: number;
+    /** Searches in flight at once. Default 20. */
+    concurrency?: number;
   };
   /** Settings for `--clean`; see src/user-clean.ts. */
   clean?: import('./user-clean.ts').CleanConfig;

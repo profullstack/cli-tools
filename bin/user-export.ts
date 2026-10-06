@@ -193,7 +193,18 @@ if (isMain(import.meta.url)) {
         const cachePath = defaultCachePath();
         const cache = loadCache(cachePath);
         try {
-          const found = await lookupLinkedin(contacts as ContactRow[], valueSerp(resolve(serpKey, 'linkedin.serpKey')), { cache, maxSearches });
+          const found = await lookupLinkedin(contacts as ContactRow[], valueSerp(resolve(serpKey, 'linkedin.serpKey')), {
+            cache,
+            maxSearches,
+            concurrency: config.linkedin?.concurrency ?? 20,
+            // A long run is visible, and a killed one keeps what it paid for.
+            onProgress: (r, done, total) => {
+              saveCache(cachePath, cache);
+              if (!quiet) {
+                process.stderr.write(`linkedin: ${done}/${total} contacts, ${r.searches} searches, +${r.people} profiles, +${r.companies} company pages\n`);
+              }
+            },
+          });
           contacts = found.contacts;
           cleanSummary += formatLookupSummary(found);
         } finally {
