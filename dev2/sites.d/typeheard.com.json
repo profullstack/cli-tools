@@ -1,0 +1,42 @@
+{
+ "site": "typeheard.com",
+ "service": "typeheard.com",
+ "repo": "profullstack/typeheard.com",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "typeheard.com",
+  "www.typeheard.com"
+ ],
+ "db": "pg",
+ "db_kinds": [
+  "pg"
+ ],
+ "redis": false,
+ "volumes": [
+  {
+   "name": "data",
+   "mountPath": "/data"
+  }
+ ],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3294,
+ "health_path": "/healthz",
+ "max_body": "1100m",
+ "mem_limit": "3g",
+ "mem_note": "whisper.cpp base model ~400 MB per transcription, CONCURRENCY=2",
+ "env_overrides": {
+  "SITE_URL": "https://typeheard.com",
+  "DATA_DIR": "/data",
+  "CONCURRENCY": "2",
+  "NODE_ENV": "production"
+ },
+ "notes": "Not a Railway site: born on dev2 2026-10-06. Transcription SaaS (whisper.cpp in the image). Database via db-create; uploads wait in volumes/data until transcribed. Domain not registered yet (Porkbun credit $0), so cert/vhost/dns wait for it."
+}

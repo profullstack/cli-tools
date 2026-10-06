@@ -605,6 +605,9 @@ def render_env(vars_, s, st, service_name=None):
         for k in ("PGHOST", "PGPORT", "PGUSER", "PGPASSWORD", "PGDATABASE", "PGSSLMODE"):
             if k in out:
                 out[k] = {"PGHOST": DEV2_HOST, "PGPORT": "5432", "PGUSER": st["db_user"], "PGPASSWORD": st["db_password"], "PGDATABASE": st["db_name"], "PGSSLMODE": (s.get("db_sslparams") or sslparams_for(s, st)).split("=")[-1]}[k]
+        # A site born on dev2 (no Railway project, so no Railway URL to re-point) gets its
+        # db-create database as DATABASE_URL, the same way a Turso port does.
+        if not s.get("project_id"): out.setdefault("DATABASE_URL", st["database_url"])
     if s["db"] == "turso" and st.get("database_url"):
         # After `db-create` + the app's Postgres port: every libsql:// URL becomes the new
         # DATABASE_URL, the Turso token goes, DATABASE_URL is set if the app never had one.
