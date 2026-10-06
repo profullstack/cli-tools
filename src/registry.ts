@@ -40,6 +40,7 @@ const SUMMARIES: Record<string, string> = {
   dl: 'Download a video, or just its audio, through yt-dlp',
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',
+  entity: 'Keep a company in good standing: registered agent, renewals, state filing window, federal checklist',
   favicon: 'Every icon a site links, rendered from one SVG',
   icon: 'UI icons as SVG, PNG and terminal glyphs (Nerd Font, Unicode, ASCII): the OpenIcon set',
   'email-cleaner': 'Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses',
