@@ -453,6 +453,7 @@ carries the same masked previews, not the values.
 | `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
 | `moshcode` | `MOSHCODE_API_KEY` | `shorten` |
 | `resend` | `RESEND_API_KEY` | `mail`, as the fallback sender |
+| `forwardemail` | `FORWARDEMAIL_API_TOKEN` | `fe` (also read straight from the shared vault) |
 | `proxiware` | `PROXIWARE_API_KEY` | `proxy status` |
 | `proxiware_proxy_user`, `proxiware_proxy_password` | `PROXIWARE_PROXY_USER`, `PROXIWARE_PROXY_PASSWORD` | `proxy` |
 | `webshare` | `WEBSHARE_API_KEY` | `proxy` (status, and the proxy login when no user/password is set) |
@@ -800,6 +801,28 @@ Names ending in a Moshpit TLD are served from the registry API; everything else
 goes through OpenRDAP. Either way `dig` adds records, hosts, reverse lookups and
 per-nameserver AXFR attempts. Errors are JSON too — a tool whose output gets
 parsed should not change shape when it fails.
+
+### `fe` and `dealsubs`
+
+`fe` manages Forward Email aliases (profullstack.com, c0upons.com) with an account
+API token, since on a paid plan an alias exists only in the account and the
+dashboard login is behind Turnstile. `ensure` is idempotent and only adds
+recipients, so cron can call it:
+
+```sh
+fe ls c0upons.com
+fe ensure submit@c0upons.com https://c0upons.com/api/webhooks/email --key-from-vault c0upons--prod:INBOUND_EMAIL_SECRET
+```
+
+`dealsubs` subscribes one inbox to the coupon and deal newsletters in
+`data/deal-newsletters.json`, driving TronBrowser: it finds the email box (following a
+same-site "newsletter" link when the homepage has none), types, submits, and records
+the verdict. Throttled per the site-automation rule: at most two tries per site, a week
+apart, never again after success or a CAPTCHA, three per run, eight a day, one run at a
+time. `dealsubs probe --all` checks the catalog without submitting anything.
+
+`scripts/coupons-intake.sh` ties them together for cron: ensure the aliases, prove once
+with a real test mail that the inbox reaches the c0upons intake, then `dealsubs run`.
 
 ### `porkbun`
 
