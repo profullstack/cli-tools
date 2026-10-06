@@ -333,24 +333,15 @@ export function exaCaller(apiKey: string, timeoutMs: number): DirectCaller {
 
 export function linkupCaller(apiKey: string, timeoutMs: number): DirectCaller {
   return async (query, limit) => {
-    const started = Date.now();
-    const params = new URLSearchParams({ q: query, depth: 'fast', outputType: 'searchResults', maxResults: String(limit) });
-    const response = await fetch(`https://api.linkup.so/v1/search?${params}`, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    const text = await response.text();
-    if (!response.ok) {
-      let message = text.trim().slice(0, 200) || `HTTP ${response.status}`;
-      try {
-        const parsed = JSON.parse(text);
-        message = parsed?.error?.message ?? parsed?.message ?? message;
-      } catch {
-        // keep the raw text
-      }
-      throw new SearchError(`${message} (${response.status})`, response.status);
-    }
-    return { hits: parseLinkup(JSON.parse(text)).slice(0, limit), latencyMs: Date.now() - started };
+    // POST with a JSON body. The docs show a GET with query parameters, but
+    // the live API answers that with 404 "Cannot GET /v1/search" (2026-10-06).
+    const { body, latencyMs } = await postJson(
+      'https://api.linkup.so/v1/search',
+      { Authorization: `Bearer ${apiKey}` },
+      { q: query, depth: 'fast', outputType: 'searchResults', maxResults: limit },
+      timeoutMs,
+    );
+    return { hits: parseLinkup(body).slice(0, limit), latencyMs };
   };
 }
 
