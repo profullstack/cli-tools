@@ -1007,7 +1007,7 @@ def cmd_healthchecks(args):
             if args.no_recreate:
                 note("compose updated; --no-recreate"); summary.append((name, "not recreated")); continue
             ssh(DEPLOY_USER, f"cd {shlex.quote(root)} && docker compose -f docker-compose.app.yml --env-file deploy.env up -d --no-build 2>&1 | tail -n 4", timeout=900)
-            state = wait_healthy(root, list(tests))
+            state = wait_healthy(root, list(tests)) or {svc: "unknown" for svc in tests}
             bad = {k: v for k, v in state.items() if v != "healthy"}
             if bad: warn(f"{name}: {bad}"); failed.append(name)
             summary.append((name, ", ".join(f"{k} {v}" for k, v in state.items())))
@@ -1019,7 +1019,7 @@ def cmd_healthchecks(args):
 
 def wait_healthy(root, services, limit_s=180):
     """{svc: health} once nothing is `starting`, or after limit_s."""
-    fmt = "{{.Label \"com.docker.compose.service\"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
+    fmt = "{{index .Config.Labels \"com.docker.compose.service\"}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
     q = f"docker ps -q --filter label=com.docker.compose.project.working_dir={shlex.quote(root)} | xargs -r docker inspect --format {shlex.quote(fmt)}"
     t0, state = time.time(), {}
     while True:
