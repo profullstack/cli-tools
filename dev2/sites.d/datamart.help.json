@@ -1,0 +1,31 @@
+{
+ "site": "datamart.help",
+ "service": "datamart.help",
+ "repo": "profullstack/datamart.help",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "datamart.help",
+  "www.datamart.help"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3310,
+ "health_path": "/healthz",
+ "max_body": "1m",
+ "mem_limit": "128m",
+ "node_heap_mb": 0,
+ "mem_note": "Bun serving one static index.html",
+ "notes": "Not a Railway site: born on dev2 2026-10-07. Placeholder page (index.html with an h1) behind a tiny Bun server. No database, no secrets. Deploys on push to main.",
+ "vault": ""
+}
