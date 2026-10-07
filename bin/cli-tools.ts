@@ -40,7 +40,7 @@ import {
   mask,
   saveStored,
 } from '../src/credentials.ts';
-import { pullVault, vaultTarget } from '../src/vault.ts';
+import { EXTRA_VAULTS, pullExtras, pullVault, vaultTarget } from '../src/vault.ts';
 import { isMain } from '../src/is-main.ts';
 import { promptSecret } from '../src/prompt.ts';
 import {
@@ -102,6 +102,8 @@ Keys (config set <key>):
   elevenlabs  ELEVENLABS_API_KEY  tts
   proxiware   PROXIWARE_API_KEY   proxy (status); proxiware_proxy_user/_password: traffic
   webshare    WEBSHARE_API_KEY    proxy (status, and the login when no user/password)
+  ngc         NGC_API_KEY         ngc, nim (fallback); ngc_org: NGC_ORG
+  nvidia      NVIDIA_API_KEY      nim
 
 Options:
   --force   link: take over a symlink owned by another checkout
@@ -467,6 +469,15 @@ async function configCommand(rest: readonly string[], json: boolean): Promise<nu
       process.stderr.write(`config: ${(error as Error).message}\n`);
       return 1;
     }
+
+    // Keys kept in an identity's own vault (src/vault.ts EXTRA_VAULTS). The
+    // shared vault wins where both have a key.
+    for (const { target: extra } of EXTRA_VAULTS) {
+      process.stderr.write(`config: pulling ${extra.team}/${extra.project}--${extra.env}…\n`);
+    }
+    const extras = pullExtras();
+    for (const failure of extras.failures) process.stderr.write(`config: skipped: ${failure}\n`);
+    vault = { ...extras.keys, ...vault };
 
     // Only the keys these commands use. Copying the whole vault down would make
     // this file a second, drifting copy of every team secret — which is the

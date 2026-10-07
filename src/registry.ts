@@ -54,6 +54,8 @@ const SUMMARIES: Record<string, string> = {
   ftb: 'Create and activate MyFTB accounts, business and personal, from the CA returns on disk',
   statements: 'Download the PDF statements behind every SimpleFIN account, from each bank, into one folder',
   jobhunt: 'Find remote roles worth applying to, and apply through a browser, never twice',
+  ngc: "NVIDIA's NGC CLI: the model and container catalog, installed and verified on first use",
+  nim: "NVIDIA's hosted NIM API: list models, chat, and check whether a key can call it",
   mail: 'The inbox from the terminal: read, search, reply, send, file, delete',
   openinstall: 'Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis',
   openmcp: 'The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own',
