@@ -3833,6 +3833,11 @@ BASE_PACKAGES=(
 	# has to write to needs a second group, and a second group is only sayable
 	# as an ACL. Not installed by default on a minimal Ubuntu image.
 	acl
+	# PDFs: poppler-utils for pdftotext/pdfinfo/pdftoppm/pdfimages, qpdf to
+	# decrypt (--password=... --decrypt), split, merge and repair. Statements,
+	# invoices and tax copies arrive password-locked, and without these an
+	# agent on the box has nothing to read them with.
+	poppler-utils qpdf
 	# ripgrep gives you rg, which is what anyone reaching for `find | rg`
 	# expects to already be there. ack stays -- it is what .ackrc configures.
 	ripgrep
