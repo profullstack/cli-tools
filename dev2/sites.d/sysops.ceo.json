@@ -1,0 +1,29 @@
+{
+ "site": "sysops.ceo",
+ "service": "sysops.ceo",
+ "repo": "profullstack/sysops.ceo",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "sysops.ceo",
+  "www.sysops.ceo"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3330,
+ "health_path": "/",
+ "max_body": "1m",
+ "mem_limit": "64m",
+ "mem_note": "nginx:alpine-slim serving one static index.html",
+ "notes": "Not a Railway site: born on dev2 2026-10-07. Placeholder page (index.html with <h1>sysops.ceo</h1>) served by nginx in the container. No database, no secrets. Not a node app: skip `healthchecks`. Deploys on push to main."
+}
