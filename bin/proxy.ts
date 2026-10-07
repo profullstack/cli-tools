@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * proxy — call the web through our paid proxies (Proxiware, Webshare).
+ * proxy — call the web through our paid proxies (Proxiware, Webshare, HProxy).
  *
  *   proxy https://example.com          body to stdout, US residential exit
  *   proxy -i -c gb https://example.com
@@ -38,7 +38,8 @@ if (isMain(import.meta.url)) {
       'proxy: no proxy credentials. Pull them with `cli-tools config pull`, or set one:\n' +
         '  cli-tools config set proxiware_proxy_user\n' +
         '  cli-tools config set proxiware_proxy_password\n' +
-        '  cli-tools config set webshare        # Webshare API key (login is read from it)\n',
+        '  cli-tools config set webshare        # Webshare API key (login is read from it)\n' +
+        '  cli-tools config set hproxy          # HProxy API key (lines are generated from it)\n',
     );
   }
 

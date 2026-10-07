@@ -54,6 +54,12 @@ export const KNOWN_KEYS: Record<string, string> = {
   webshare: 'WEBSHARE_API_KEY',
   webshare_proxy_user: 'WEBSHARE_PROXY_USER',
   webshare_proxy_password: 'WEBSHARE_PROXY_PASSWORD',
+  // HProxy works the same way as Webshare: the API key alone is enough (the
+  // package generates a line from the account's plan), the login skips that.
+  hproxy: 'HPROXY_API_KEY',
+  hproxy_proxy_user: 'HPROXY_PROXY_USER',
+  hproxy_proxy_password: 'HPROXY_PROXY_PASSWORD',
+  hproxy_plan_id: 'HPROXY_PLAN_ID',
   // Read by `websearch` (Cloudflare Web Search). The token needs Workers AI
   // Read + AI Gateway Read; when it lacks them, email + global key are the
   // fallback. The account id is discovered from the credential when unset.

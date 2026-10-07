@@ -102,6 +102,7 @@ Keys (config set <key>):
   elevenlabs  ELEVENLABS_API_KEY  tts
   proxiware   PROXIWARE_API_KEY   proxy (status); proxiware_proxy_user/_password: traffic
   webshare    WEBSHARE_API_KEY    proxy (status, and the login when no user/password)
+  hproxy      HPROXY_API_KEY      proxy (status, and generated lines); hproxy_proxy_user/_password: traffic
   ngc         NGC_API_KEY         ngc, nim (fallback); ngc_org: NGC_ORG
   nvidia      NVIDIA_API_KEY      nim
 

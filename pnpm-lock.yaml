@@ -12,8 +12,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@profullstack/proxy':
-        specifier: ^0.1.0
-        version: 0.1.0
+        specifier: ^0.2.0
+        version: 0.2.0
       '@resvg/resvg-js':
         specifier: ^2.6.2
         version: 2.6.2
@@ -393,8 +393,8 @@ packages:
     engines: {bun: '>=1.1', node: '>=22.6'}
     hasBin: true
 
-  '@profullstack/proxy@0.1.0':
-    resolution: {integrity: sha512-XobCE8NPNAzLcSEC8e8yXZI53/LCGLRTP3BLJKTIsQOHeyNxnH1oyKUSDB7SE1TwmWnCQnvjCkFLFMeKxshoaw==}
+  '@profullstack/proxy@0.2.0':
+    resolution: {integrity: sha512-ZRliOlSzaBsOjaMKCGG5CbH6mXR/2UPIDh27DpPUhtochKnRjD0jlfQhUjnFdjTvXEZVBFJCnyYfy9yT2uqpJQ==}
     engines: {node: '>=22.19'}
     hasBin: true
 
@@ -1295,7 +1295,7 @@ snapshots:
 
   '@profullstack/hqtui@0.6.0': {}
 
-  '@profullstack/proxy@0.1.0':
+  '@profullstack/proxy@0.2.0':
     dependencies:
       undici: 8.11.2
 

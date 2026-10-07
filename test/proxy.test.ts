@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { keyVariable, loadStored, saveStored } from '../src/credentials.ts';
+import { PROVIDERS } from '@profullstack/proxy';
 import { hasProxyLogin, proxyEnv, PROXY_VARIABLES } from '../src/proxy.ts';
 
 const dirs: string[] = [];
@@ -37,6 +38,22 @@ describe('proxy keys', () => {
     expect(hasProxyLogin({ PROXIWARE_PROXY_USER: 'u', PROXIWARE_PROXY_PASSWORD: 'p' })).toBe(true);
     expect(hasProxyLogin({ WEBSHARE_API_KEY: 'k' })).toBe(true);
     expect(hasProxyLogin({ PROXIWARE_API_KEY: 'k' })).toBe(false);
+    expect(hasProxyLogin({ HPROXY_API_KEY: 'hpx_k' })).toBe(true);
+    expect(hasProxyLogin({ HPROXY_PROXY_USER: 'u' })).toBe(false);
+    expect(hasProxyLogin({ HPROXY_PROXY_USER: 'u', HPROXY_PROXY_PASSWORD: 'p' })).toBe(true);
+  });
+
+  it('take the HProxy keys from a vault pull, and nothing else', async () => {
+    const env = await sandbox();
+    const pulled = { HPROXY_API_KEY: 'hpx_k', HPROXY_PLAN_ID: 'plan1', UNRELATED_SECRET: 'x' };
+    const result = proxyEnv({ env, pull: () => pulled });
+    expect(result.source).toBe('vault');
+    expect(result.env.HPROXY_API_KEY).toBe('hpx_k');
+    expect(result.env.HPROXY_PLAN_ID).toBe('plan1');
+    expect(loadStored(env)).toEqual({ HPROXY_API_KEY: 'hpx_k', HPROXY_PLAN_ID: 'plan1' });
+    expect(keyVariable('hproxy')).toBe('HPROXY_API_KEY');
+    expect(keyVariable('hproxy_proxy_password')).toBe('HPROXY_PROXY_PASSWORD');
+    expect(PROXY_VARIABLES).toContain('HPROXY_PROXY_USER');
   });
 });
 
@@ -97,8 +114,9 @@ describe('proxyEnv', () => {
   });
 
   it('covers every variable the package reads', () => {
-    expect([...PROXY_VARIABLES].sort()).toEqual(
-      ['PROXIWARE_API_KEY', 'PROXIWARE_PROXY_PASSWORD', 'PROXIWARE_PROXY_USER', 'WEBSHARE_API_KEY', 'WEBSHARE_PROXY_PASSWORD', 'WEBSHARE_PROXY_USER'],
-    );
+    // Read off the installed package, so a provider it adds fails here until
+    // its keys are pulled and stored too. HPROXY_PLAN_ID is read beside them.
+    const fromPackage = Object.values(PROVIDERS).flatMap((provider) => [provider.env.user, provider.env.password, provider.env.apiKey]);
+    expect([...PROXY_VARIABLES].sort()).toEqual([...fromPackage, 'HPROXY_PLAN_ID'].sort());
   });
 });

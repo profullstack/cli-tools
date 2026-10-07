@@ -40,7 +40,7 @@ TypeScript, installed as executables on `PATH`.
 | [`openinstall`](#openinstall) | Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
 | [`shorten`](#shorten) | Mint a short link on the pit, and follow it from `/f/<code>` |
-| [`proxy`](#proxy) | Fetch through our paid residential proxies (Proxiware, Webshare); also a local forward proxy, an MCP server and a TUI |
+| [`proxy`](#proxy) | Fetch through our paid residential proxies (Proxiware, Webshare, HProxy); also a local forward proxy, an MCP server and a TUI |
 | [`sysupdate`](#sysupdate) | Update this box: apt lists, apt packages, snaps |
 | [`scorecard`](#scorecard) | One weekly number for the whole fleet: traffic, channels, posts and ads, week over week |
 | [`users-dump`](#users-dump) | Every user account across the fleet, as one CSV |
@@ -472,6 +472,8 @@ carries the same masked previews, not the values.
 | `proxiware_proxy_user`, `proxiware_proxy_password` | `PROXIWARE_PROXY_USER`, `PROXIWARE_PROXY_PASSWORD` | `proxy` |
 | `webshare` | `WEBSHARE_API_KEY` | `proxy` (status, and the proxy login when no user/password is set) |
 | `webshare_proxy_user`, `webshare_proxy_password` | `WEBSHARE_PROXY_USER`, `WEBSHARE_PROXY_PASSWORD` | `proxy` |
+| `hproxy` | `HPROXY_API_KEY` | `proxy` (status, and generated lines when no user/password is set) |
+| `hproxy_proxy_user`, `hproxy_proxy_password`, `hproxy_plan_id` | `HPROXY_PROXY_USER`, `HPROXY_PROXY_PASSWORD`, `HPROXY_PLAN_ID` | `proxy -p hproxy` |
 | `ngc`, `ngc_org` | `NGC_API_KEY`, `NGC_ORG` | `ngc` (when it has no key of its own), `nim` (last resort) |
 | `nvidia` | `NVIDIA_API_KEY` | `nim` |
 

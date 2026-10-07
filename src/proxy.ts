@@ -19,6 +19,10 @@ export const PROXY_VARIABLES = [
   'WEBSHARE_API_KEY',
   'WEBSHARE_PROXY_USER',
   'WEBSHARE_PROXY_PASSWORD',
+  'HPROXY_API_KEY',
+  'HPROXY_PROXY_USER',
+  'HPROXY_PROXY_PASSWORD',
+  'HPROXY_PLAN_ID',
 ] as const;
 
 // The store only keeps what KNOWN_KEYS names; a variable missing from there
@@ -36,7 +40,9 @@ export function hasProxyLogin(env: Env): boolean {
   return Boolean(
     (env.PROXIWARE_PROXY_USER && env.PROXIWARE_PROXY_PASSWORD) ||
       (env.WEBSHARE_PROXY_USER && env.WEBSHARE_PROXY_PASSWORD) ||
-      env.WEBSHARE_API_KEY,
+      env.WEBSHARE_API_KEY ||
+      (env.HPROXY_PROXY_USER && env.HPROXY_PROXY_PASSWORD) ||
+      env.HPROXY_API_KEY,
   );
 }
 
