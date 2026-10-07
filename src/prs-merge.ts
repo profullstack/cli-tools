@@ -1,4 +1,4 @@
-import { Gh, type Check, type MergeState, type PullRequest } from './gh.ts';
+import { Gh, type Check, type MergeState, type PullRequest, type WorkflowRun } from './gh.ts';
 import { sleep } from './exec.ts';
 
 export interface MergeOptions {
@@ -136,6 +136,12 @@ interface Parked {
   title: string;
   /** Already counted in `fixed` — a branch update repaired it before parking. */
   repaired: boolean;
+  /**
+   * Its fork CI was just approved. Runs take a moment to report a check, and
+   * until they do the PR still has none — which here means "not started yet",
+   * not "this repo has no CI".
+   */
+  awaitingChecks?: boolean;
 }
 
 export async function sweep(
@@ -284,6 +290,23 @@ export async function sweep(
     }
 
     const checks = await gh.checks(url);
+
+    // No checks can mean no CI, or CI that GitHub is holding for a maintainer
+    // because the PR comes from a first-time contributor's fork. Only the
+    // second is a blocker this tool can clear.
+    if (checks.length === 0 && pr.state === 'OPEN' && !pr.isDraft) {
+      const outcome = await approveForkRuns(pr, options, gh, emit);
+      if (outcome === 'parked') {
+        summary.fixed += 1;
+        parked.push({ url, title: pr.title, repaired: true, awaitingChecks: true });
+        continue;
+      }
+      if (outcome === 'skipped') {
+        summary.skipped += 1;
+        continue;
+      }
+    }
+
     const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
 
     // Repair is for open PRs. A PR that was merged or closed between the search
@@ -350,6 +373,86 @@ export async function sweep(
 }
 
 /**
+ * Approve the fork workflow runs GitHub is holding on this PR.
+ *
+ * Only `pull_request` runs are approved. From a fork those get a read-only
+ * token and no secrets, so approving one spends runner minutes and nothing
+ * else; the merge that follows is still gated on what the runs report. Any
+ * other event is left for a human, since approving it is a trust decision.
+ *
+ * `none` — nothing held, judge the PR as usual. `parked` — approved, wait for
+ * the checks. `skipped` — held runs exist that this call did not approve.
+ */
+async function approveForkRuns(
+  pr: PullRequest,
+  options: MergeOptions,
+  gh: Gh,
+  emit: (line: Line) => void,
+): Promise<'none' | 'parked' | 'skipped'> {
+  let held: WorkflowRun[];
+  try {
+    held = await gh.runsAwaitingApproval(pr.url, pr.headRefOid);
+  } catch (error) {
+    emit({
+      kind: 'warn',
+      text: `could not list workflow runs for ${pr.url} — ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return 'none';
+  }
+
+  if (held.length === 0) return 'none';
+
+  const names = held.map((run) => run.name).join(', ');
+  const approvable = held.filter((run) => run.event === 'pull_request');
+  const other = held.filter((run) => run.event !== 'pull_request');
+
+  if (other.length > 0) {
+    emit({
+      kind: 'fixme',
+      url: pr.url,
+      text: `fork CI awaiting approval (${other
+        .map((run) => `${run.name} on ${run.event}`)
+        .join(', ')}); not a pull_request run, so approve it by hand`,
+      title: pr.title,
+    });
+    return 'skipped';
+  }
+
+  if (!options.apply) {
+    emit({
+      kind: 'skip',
+      url: pr.url,
+      reason: `fork CI awaiting maintainer approval (${names}); --apply approves and waits for it`,
+      title: pr.title,
+    });
+    return 'skipped';
+  }
+
+  for (const run of approvable) {
+    const approved = await gh.approveRun(pr.url, run.id);
+    if (approved.code !== 0) {
+      const message = (approved.stderr.trim() || approved.stdout.trim()).replace(/\s+/g, ' ');
+      emit({
+        kind: 'fixme',
+        url: pr.url,
+        text: `could not approve fork CI run ${run.name} (${run.id}): ${message}`,
+        title: pr.title,
+      });
+      return 'skipped';
+    }
+  }
+
+  emit({
+    kind: 'fixing',
+    url: pr.url,
+    text: `approved fork CI awaiting maintainer approval (${names}); parked for the second pass`,
+  });
+  return 'parked';
+}
+
+/**
  * Second pass: wait out the PRs whose checks were still running.
  *
  * The deadline is shared by the whole queue rather than spent per PR. Ten
@@ -385,7 +488,7 @@ async function drainParked(
         continue;
       }
 
-      if (checks.some(isPending)) {
+      if (checks.some(isPending) || (item.awaitingChecks && checks.length === 0)) {
         stillRunning.push(item);
         continue;
       }

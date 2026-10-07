@@ -48,6 +48,15 @@ Eligibility:
 
   - the head commit has not changed when the merge is submitted
 
+Fork CI awaiting approval:
+  GitHub holds workflow runs on a first-time contributor's fork PR at
+  "action_required" until a maintainer approves them, and until then the PR
+  reports no checks at all. Such a PR is not a repo without CI. With --apply
+  its held pull_request runs are approved (from a fork they get a read-only
+  token and no secrets) and the PR is parked until they finish, within the
+  --fix-wait budget; a dry run only names them. Held runs on any other event
+  are reported as FIXME and left for a human.
+
 Fixing (--fix):
   A skip is not always a verdict on the PR. Some are this tool arriving at the
   wrong moment. Requires --apply, since every repair writes.
