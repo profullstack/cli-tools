@@ -68,7 +68,7 @@ const SUMMARIES: Record<string, string> = {
   explee: 'Add more of your own leads to an Explee project: a CSV becomes a campaign with the same brief',
   fe: 'Forward Email aliases without the dashboard: list, ensure (idempotent), remove',
   dealsubs: 'Subscribe an inbox to coupon and deal newsletters, throttled, through TronBrowser',
-  proxy: 'Fetch through our paid proxies (Proxiware, Webshare); serve, MCP and TUI too',
+  proxy: 'Fetch through our paid proxies (Proxiware, Webshare, HProxy); serve, MCP and TUI too',
   scorecard: 'One weekly number for the whole fleet: traffic, channels, posts and ads, week over week',
   shorten: 'Mint a short link on the pit, and follow it from /f/<code>',
   sysupdate: 'Update this box: apt lists, apt packages, snaps',
