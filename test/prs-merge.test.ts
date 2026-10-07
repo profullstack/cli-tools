@@ -4,6 +4,7 @@ import {
   parseChecks,
   parseMergeAsync,
   parsePullRequest,
+  parseRunsAwaitingApproval,
   parsePullRequestUrl,
   GhError,
 } from '../src/gh.ts';
@@ -44,6 +45,9 @@ function stubGh(options: {
   stacked?: boolean;
   /** How many polls the asynchronous merge takes before it reports merged. */
   asyncPolls?: number;
+  /** Workflow runs GitHub is holding for maintainer approval on the head. */
+  heldRuns?: { id: number; name: string; event: string }[];
+  approveFails?: boolean;
 }) {
   const calls: string[] = [];
   let viewIndex = 0;
@@ -121,6 +125,25 @@ function stubGh(options: {
 
     if (args[0] === 'pr' && args[1] === 'ready') return ok('');
 
+    if (args[0] === 'api' && args.some((a) => a.includes('/actions/runs?head_sha='))) {
+      const approved = calls.some((c) => c.includes('/approve'));
+      const runs = approved ? [] : (options.heldRuns ?? []);
+      return ok(
+        JSON.stringify({
+          workflow_runs: [
+            { id: 1, name: 'already ran', event: 'push', conclusion: 'success' },
+            ...runs.map((r) => ({ ...r, conclusion: 'action_required' })),
+          ],
+        }),
+      );
+    }
+
+    if (args[0] === 'api' && args.some((a) => a.endsWith('/approve'))) {
+      return options.approveFails
+        ? { code: 1, stdout: '', stderr: 'HTTP 403: Must have admin rights' }
+        : ok('{}');
+    }
+
     return ok('');
   };
 
@@ -190,6 +213,9 @@ function stubFleet(prs: { url: string; createdAt: string; steps: StubStep[] }[])
     if (args[0] === 'pr' && args[1] === 'update-branch') return ok('Updated branch');
     if (args[0] === 'pr' && args[1] === 'merge') return ok('Merged');
     if (args[0] === 'pr' && args[1] === 'ready') return ok('');
+    if (args[0] === 'api' && args.some((a) => a.includes('/actions/runs?head_sha='))) {
+      return ok(JSON.stringify({ workflow_runs: [] }));
+    }
 
     return ok('');
   };
@@ -726,5 +752,95 @@ describe('parseMergeAsync', () => {
 
   it('returns nothing rather than inventing a status', () => {
     expect(parseMergeAsync('not json')).toBeUndefined();
+  });
+});
+
+describe('fork CI held for maintainer approval', () => {
+  const lines = () => {
+    const out: Line[] = [];
+    return { out, emit: (line: Line) => out.push(line) };
+  };
+  const held = [
+    { id: 41, name: 'CI', event: 'pull_request' },
+    { id: 42, name: 'scan', event: 'pull_request' },
+  ];
+
+  it('keeps only runs concluded action_required', () => {
+    expect(
+      parseRunsAwaitingApproval({
+        workflow_runs: [
+          { id: 1, name: 'CI', event: 'pull_request', conclusion: 'action_required' },
+          { id: 2, name: 'CI', event: 'push', conclusion: 'success' },
+          { id: 3, name: 'CI', event: 'pull_request', conclusion: null },
+        ],
+      }),
+    ).toEqual([{ id: 1, name: 'CI', event: 'pull_request' }]);
+  });
+
+  it('refuses a response with no workflow_runs rather than reading it as none', () => {
+    expect(() => parseRunsAwaitingApproval({ message: 'Not Found' })).toThrow(GhError);
+  });
+
+  it('approves the runs, waits for their checks, then merges', async () => {
+    const { gh, calls } = stubGh({
+      heldRuns: held,
+      steps: [
+        { checks: [], mergeStateStatus: 'UNSTABLE' },
+        { checks: [], mergeStateStatus: 'UNSTABLE' },
+        { checks: [{ name: 'lint', bucket: 'pending' }] },
+        { checks: [{ name: 'lint', bucket: 'pass' }] },
+      ],
+    });
+    const { out, emit } = lines();
+    const summary = await sweep(baseOptions(), gh, emit);
+
+    expect(calls.filter((c) => c.endsWith('/approve'))).toEqual([
+      'api --method POST repos/acme/repo/actions/runs/41/approve',
+      'api --method POST repos/acme/repo/actions/runs/42/approve',
+    ]);
+    expect(out.some((l) => l.kind === 'fixing' && /approved fork CI/.test(l.text))).toBe(true);
+    expect(summary).toMatchObject({ merged: 1, fixed: 1, skipped: 0 });
+  });
+
+  it('only reports in a dry run', async () => {
+    const { gh, calls } = stubGh({ heldRuns: held, steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(baseOptions({ apply: false }), gh, emit);
+
+    expect(calls.some((c) => c.endsWith('/approve'))).toBe(false);
+    expect(render(out.find((l) => l.kind === 'skip')!)).toMatch(
+      /fork CI awaiting maintainer approval \(CI, scan\)/,
+    );
+    expect(summary.skipped).toBe(1);
+  });
+
+  it('leaves non-pull_request runs to a human', async () => {
+    const { gh, calls } = stubGh({
+      heldRuns: [{ id: 7, name: 'deploy', event: 'pull_request_target' }],
+      steps: [{ checks: [] }],
+    });
+    const { out, emit } = lines();
+    const summary = await sweep(baseOptions(), gh, emit);
+
+    expect(calls.some((c) => c.endsWith('/approve'))).toBe(false);
+    expect(out.some((l) => l.kind === 'fixme' && /approve it by hand/.test(l.text))).toBe(true);
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+  });
+
+  it('reports a refused approval instead of waiting on it', async () => {
+    const { gh } = stubGh({ heldRuns: held, approveFails: true, steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(baseOptions(), gh, emit);
+
+    expect(out.some((l) => l.kind === 'fixme' && /Must have admin rights/.test(l.text))).toBe(true);
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+  });
+
+  it('still skips a PR in a repo with no CI at all', async () => {
+    const { gh } = stubGh({ steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    await sweep(baseOptions(), gh, emit);
+
+    expect(out.find((l) => l.kind === 'skip')).toMatchObject({ reason: 'no CI checks found' });
   });
 });

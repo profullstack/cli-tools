@@ -124,6 +124,35 @@ export function parseChecks(raw: unknown, where = 'gh pr checks'): Check[] {
   });
 }
 
+export interface WorkflowRun {
+  id: number;
+  name: string;
+  /** `pull_request` runs from a fork get a read-only token and no secrets. */
+  event: string;
+}
+
+export function parseRunsAwaitingApproval(
+  raw: unknown,
+  where = 'gh api actions/runs',
+): WorkflowRun[] {
+  const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (!Array.isArray(record.workflow_runs)) {
+    throw new GhError(`${where}: expected workflow_runs, got ${JSON.stringify(raw).slice(0, 200)}`);
+  }
+
+  return record.workflow_runs
+    .map((entry) => entry as Record<string, unknown>)
+    .filter((run) => run.conclusion === 'action_required')
+    .map((run) => {
+      if (typeof run.id !== 'number') fail('id', run.id, where);
+      return {
+        id: run.id,
+        name: asString(run.name, 'name', where),
+        event: asString(run.event, 'event', where),
+      };
+    });
+}
+
 /**
  * The refusal GitHub returns from the GraphQL merge mutation for a pull
  * request that belongs to a stack. Matched as a substring because the rest of
@@ -324,6 +353,42 @@ export class Gh {
         };
       });
     });
+  }
+
+  /**
+   * Workflow runs on this PR's head that GitHub is holding for a maintainer.
+   *
+   * A fork PR from a first-time contributor gets its runs created and then
+   * parked at conclusion `action_required` until someone clicks "Approve and
+   * run". Until then `gh pr checks` reports nothing at all, so the PR looks
+   * exactly like one in a repo with no CI — which is how a CVE bump with a
+   * perfectly good CI workflow sat skipped as "no CI checks found".
+   *
+   * Filtered here rather than with the API's `status=` parameter, because the
+   * one thing this method must never do is report "none" for a query GitHub
+   * read differently than we meant.
+   */
+  async runsAwaitingApproval(url: string, headSha: string): Promise<WorkflowRun[]> {
+    const target = parsePullRequestUrl(url);
+    if (!target) throw new GhError(`cannot read owner/repo from ${url}`);
+
+    return this.json(
+      ['api', `repos/${target.slug}/actions/runs?head_sha=${headSha}&per_page=100`],
+      (raw) => parseRunsAwaitingApproval(raw),
+    );
+  }
+
+  async approveRun(url: string, runId: number): Promise<RunResult> {
+    const target = parsePullRequestUrl(url);
+    if (!target) {
+      return { code: 1, stdout: '', stderr: `cannot read owner/repo from ${url}` };
+    }
+    return this.call([
+      'api',
+      '--method',
+      'POST',
+      `repos/${target.slug}/actions/runs/${runId}/approve`,
+    ]);
   }
 
   async ready(url: string): Promise<RunResult> {
