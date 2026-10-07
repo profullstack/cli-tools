@@ -68,6 +68,13 @@ export const KNOWN_KEYS: Record<string, string> = {
   linkup: 'LINKUP_API_KEY',
   // Read by `websearch`: Google results from serper.dev, called directly.
   serper: 'SERPER_API_KEY',
+  // Read by `ngc` (as NGC_CLI_API_KEY / NGC_CLI_ORG for NVIDIA's CLI, when it has
+  // no ~/.ngc/config) and by `nim` as its last-resort key. These live in the
+  // riotcoder vault, not the shared one; `config pull` reads both (src/vault.ts).
+  ngc: 'NGC_API_KEY',
+  ngc_org: 'NGC_ORG',
+  // Read by `nim`: a build.nvidia.com key for the hosted inference API.
+  nvidia: 'NVIDIA_API_KEY',
 };
 
 export type Source = 'env' | 'file' | 'unset';

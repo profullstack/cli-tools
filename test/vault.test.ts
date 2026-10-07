@@ -4,7 +4,9 @@ import { describe, expect, it } from 'vitest';
 
 import {
   DEFAULT_TARGET,
+  EXTRA_VAULTS,
   parseEnvFile,
+  pullExtras,
   pullVault,
   vaultTarget,
   type Runner,
@@ -106,5 +108,32 @@ describe('pullVault', () => {
   it('complains when logicsrc succeeds but writes no file', () => {
     const run: Runner = () => ({ status: 0, stderr: '' });
     expect(() => pullVault(DEFAULT_TARGET, run)).toThrow(/wrote no file/);
+  });
+});
+
+describe('pullExtras', () => {
+  it('takes the NVIDIA keys from the riotcoder vault', () => {
+    expect(EXTRA_VAULTS.map((extra) => extra.target)).toContainEqual({
+      team: 'profullstack',
+      project: 'riotcoder',
+      env: 'prod',
+    });
+  });
+
+  it('keeps only the listed keys', () => {
+    const { run, seen } = writing('NGC_API_KEY=nvapi-x\nNGC_ORG=123\nNVIDIA_ACCOUNT_PASSWORD=nope\n');
+    const result = pullExtras(
+      [{ target: { team: 't', project: 'p', env: 'e' }, keys: ['NGC_API_KEY', 'NGC_ORG'] }],
+      run,
+    );
+    expect(result).toEqual({ keys: { NGC_API_KEY: 'nvapi-x', NGC_ORG: '123' }, failures: [] });
+    expect(seen.args).toEqual(['teams', 'pull', 't', 'p', 'e']);
+  });
+
+  it('reports an unreadable vault without throwing', () => {
+    const run: Runner = () => ({ status: 1, stderr: 'access denied' });
+    const result = pullExtras([{ target: { team: 't', project: 'p', env: 'e' }, keys: ['A'] }], run);
+    expect(result.keys).toEqual({});
+    expect(result.failures[0]).toMatch(/access denied/);
   });
 });

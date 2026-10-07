@@ -34,6 +34,8 @@ TypeScript, installed as executables on `PATH`.
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
 | [`alchemy`](#alchemy) | Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402 |
+| [`ngc`](#ngc) | NVIDIA's NGC CLI: the model and container catalog, installed and verified on first use |
+| [`nim`](#nim) | NVIDIA's hosted NIM API: list models, chat, and check whether a key can call it |
 | [`jobhunt`](#jobhunt) | Find remote roles worth applying to, and apply through a browser, never twice |
 | [`openinstall`](#openinstall) | Give a repo an idempotent bin/install.sh: systemd, nginx + TLS, postgres, redis |
 | [`openmcp`](#openmcp) | The OpenMCP catalog of MCP relays: list, find a tool, call it, register your own |
@@ -99,6 +101,9 @@ One thing here is not a `PATH` command and does not need Node:
   same reason: each is an npm package installed on first use, and both ask for
   a newer Node than anything else here (`openmcp` keeps its catalog in
   `node:sqlite`)
+- **Linux x64 or arm64, and `unzip` (or `python3`)** — `ngc` only: NVIDIA
+  publishes its CLI as a zip for those two and as a `.pkg` installer for macOS,
+  which `ngc` runs if you point `NGC_BIN` at it but will not install for you
 
 ## Install
 
@@ -426,6 +431,11 @@ cli-tools config pull
 
 It defaults to `profullstack/profullstack-sharable-keys--prod`, overridable with
 `CLI_TOOLS_VAULT_TEAM`, `CLI_TOOLS_VAULT_PROJECT` and `CLI_TOOLS_VAULT_ENV`.
+It also reads `profullstack/riotcoder--prod` for the NVIDIA keys alone
+(`NGC_API_KEY`, `NGC_ORG`, `NVIDIA_API_KEY`), since that account belongs to the
+riotcoder identity; a vault you cannot read there is reported and skipped, and
+the shared vault wins where both have a key. `EXTRA_VAULTS` in `src/vault.ts`
+is the list.
 Needs the `logicsrc` CLI and a login (`moshcode install secrets`, then
 `logicsrc login`); if it is missing, the error says so rather than failing
 obscurely.
@@ -462,6 +472,8 @@ carries the same masked previews, not the values.
 | `proxiware_proxy_user`, `proxiware_proxy_password` | `PROXIWARE_PROXY_USER`, `PROXIWARE_PROXY_PASSWORD` | `proxy` |
 | `webshare` | `WEBSHARE_API_KEY` | `proxy` (status, and the proxy login when no user/password is set) |
 | `webshare_proxy_user`, `webshare_proxy_password` | `WEBSHARE_PROXY_USER`, `WEBSHARE_PROXY_PASSWORD` | `proxy` |
+| `ngc`, `ngc_org` | `NGC_API_KEY`, `NGC_ORG` | `ngc` (when it has no key of its own), `nim` (last resort) |
+| `nvidia` | `NVIDIA_API_KEY` | `nim` |
 
 A key earns a row here by being read by a command in this repository, not by
 being a key the team owns. The vault holds more than twice as many; the rest
@@ -2148,6 +2160,83 @@ this wrapper (`moshcode install alchemy` makes one) is used as it is.
 `ALCHEMY_BIN` points at a copy you would rather run, and `ALCHEMY_SPEC` pins a
 version. Credentials are upstream's: `alchemy auth`, or `ALCHEMY_API_KEY` in
 the environment.
+
+### `ngc`
+
+[NVIDIA](https://www.nvidia.com/)'s [NGC CLI](https://org.ngc.nvidia.com/setup/installers/cli):
+the NGC catalog and registry (models, containers, resources, Helm charts) and
+your org, from the terminal.
+
+```sh
+ngc user who                              # who the key belongs to
+ngc config current                        # org, team, and where the key comes from
+ngc registry model list 'nvidia/*'        # models in the catalog
+ngc registry image list 'nvidia/*'        # container images
+ngc registry model download-version nvidia/<model>:<version>
+ngc --format_type json user who           # for scripts and agents
+ngc --help                                # it is upstream's CLI: upstream's flags
+```
+
+Everything is handed through untouched, so
+[upstream's docs](https://docs.ngc.nvidia.com/cli/) are the docs. Two flags are
+ours, spelled `--self-*` because every plain word belongs to them:
+
+```sh
+ngc --self-update                         # reinstall the latest release
+ngc --self-where                          # which copy runs, from where, and its key source
+```
+
+**The first run installs it**, into `~/.local/share/cli-tools/vendor/ngc`. It is
+not an npm package: NVIDIA ships a zip from its own resource API, so the latest
+version is read from there (`NGC_VERSION` pins one), the zip's SHA256 is checked
+against the one in that version's release notes, and the unpacked tree is checked
+the way NVIDIA's install instructions do it,
+`find ngc-cli/ -type f -exec md5sum {} + | LC_ALL=C sort | md5sum -c ngc-cli.md5`.
+Either mismatch refuses the install, and a refused update leaves the working copy
+in place. Linux x64 and arm64 only; macOS is a `.pkg` from NVIDIA, which `ngc`
+runs once `NGC_BIN` points at it.
+
+Like [`alchemy`](#alchemy), upstream's executable has this wrapper's name, so it
+never follows PATH back into itself. In order it runs `NGC_BIN`, its own copy, a
+copy installed by hand in `~/.local/share/ngc-cli`, or any other `ngc` on PATH.
+
+**The key**: upstream's own sources win, `NGC_CLI_API_KEY` in the environment or
+`~/.ngc/config` from `ngc config set`. With neither, `ngc` passes `NGC_API_KEY`
+and `NGC_ORG` from [`cli-tools config`](#api-keys) to it as `NGC_CLI_API_KEY` and
+`NGC_CLI_ORG`, so `cli-tools config pull` is all a new box needs. The key goes
+into the child's environment and is never printed.
+
+### `nim`
+
+NVIDIA's hosted [NIM](https://build.nvidia.com/) inference API, which is
+OpenAI-compatible at `https://integrate.api.nvidia.com/v1`.
+
+```sh
+nim models                                # every model id it serves; no key needed
+nim models nemotron                       # filtered
+nim chat "explain RAID 5 in two lines"    # one reply, to stdout
+git diff | nim chat -m nvidia/nemotron-3-super-120b-a12b --max-tokens 400
+nim key                                   # can this key call the hosted API?
+nim models --json                         # --json on all three
+```
+
+The default chat model is `openai/gpt-oss-20b`; `NIM_MODEL` changes it and
+`NIM_BASE_URL` points at another OpenAI-compatible endpoint, such as a NIM you
+run yourself. The key is the first of `NVIDIA_API_KEY`, `NVIDIA_NIM_API_KEY` and
+`NGC_API_KEY`, from the environment or `cli-tools config`.
+
+Most of what it adds is saying why a call failed, because NVIDIA's answers do not:
+
+- **`403 Authorization failed`** means the key is real but cannot use the hosted
+  API: the build.nvidia.com account is not verified yet ("API Access
+  Unavailable"), or the key was generated without "Public API Endpoints". An NGC
+  catalog key gets exactly this. `nim key` makes one 1-token call and says which.
+- **`410 Gone`** means the model reached end of life, and NVIDIA's `detail` says
+  when; it is printed as is. `meta/llama-3.1-8b-instruct` and
+  `meta/llama-3.3-70b-instruct` went on 2026-08-26.
+
+Not to be confused with the Nim language's compiler, also `nim`: this one is in
+`~/.local/bin`, which comes first on PATH.
 
 ### `openmcp`
 

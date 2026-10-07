@@ -30,6 +30,52 @@ export const DEFAULT_TARGET: VaultTarget = {
   env: 'prod',
 };
 
+/**
+ * Keys that live in a vault of their own, not the shared one.
+ *
+ * The NVIDIA account belongs to the riotcoder identity, so its keys are in
+ * that identity's vault. Each entry names the only keys taken from it: the
+ * same rule as the main pull, applied per vault.
+ */
+export interface ExtraVault {
+  target: VaultTarget;
+  keys: readonly string[];
+}
+
+export const EXTRA_VAULTS: readonly ExtraVault[] = [
+  {
+    target: { team: 'profullstack', project: 'riotcoder', env: 'prod' },
+    keys: ['NGC_API_KEY', 'NGC_ORG', 'NVIDIA_API_KEY'],
+  },
+];
+
+/**
+ * Pull the extra vaults and return only their listed keys.
+ *
+ * A vault that cannot be read is reported, not fatal: losing access to one
+ * identity's vault should not stop the shared keys from refreshing.
+ */
+export function pullExtras(
+  extras: readonly ExtraVault[] = EXTRA_VAULTS,
+  run: Runner = logicsrcRunner,
+): { keys: Record<string, string>; failures: string[] } {
+  const keys: Record<string, string> = {};
+  const failures: string[] = [];
+  for (const { target, keys: wanted } of extras) {
+    let vault: Record<string, string>;
+    try {
+      vault = pullVault(target, run);
+    } catch (error) {
+      failures.push((error as Error).message);
+      continue;
+    }
+    for (const key of wanted) {
+      if (vault[key] && !(key in keys)) keys[key] = vault[key]!;
+    }
+  }
+  return { keys, failures };
+}
+
 /** Resolve the target, letting the environment point at a different vault. */
 export function vaultTarget(env: NodeJS.ProcessEnv = process.env): VaultTarget {
   return {
