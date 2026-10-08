@@ -23,9 +23,8 @@
  "port": 3310,
  "health_path": "/healthz",
  "max_body": "1m",
- "mem_limit": "128m",
- "node_heap_mb": 0,
- "mem_note": "Bun serving one static index.html",
- "notes": "Not a Railway site: born on dev2 2026-10-07. Placeholder page (index.html with an h1) behind a tiny Bun server. No database, no secrets. Deploys on push to main.",
+ "mem_limit": "512m",
+ "mem_note": "Next.js 16 standalone on Bun (the Datamart web app), server-rendered pages over the mcp.profullstack.com API",
+ "notes": "Not a Railway site: born on dev2 2026-10-07 as a placeholder; since 2026-10-08 the Datamart web app (Next.js on Bun, pages over the Datamart API at mcp.profullstack.com). No database, no secrets. Deploys on push to main.",
  "vault": ""
 }
