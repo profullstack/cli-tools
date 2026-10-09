@@ -8,8 +8,10 @@
   "hdtilt.com",
   "www.hdtilt.com"
  ],
- "db": "none",
- "db_kinds": [],
+ "db": "pg",
+ "db_kinds": [
+  "pg"
+ ],
  "redis": false,
  "volumes": [],
  "port_var": null,
@@ -25,6 +27,6 @@
  "max_body": "16m",
  "mem_limit": "384m",
  "mem_note": "Bun node:http server: PWA, API, MCP and the IPTV stream proxy (public mode, 3 streams/IP); guides are parsed in memory (6h cache, 8 guides max)",
- "notes": "Born on dev2 2026-10-09. Open-source TiviMate-style IPTV player (github.com/profullstack/hdtilt.com). No database, no secrets: playlists live in the browser. Deploys on push to main.",
- "vault": ""
+ "notes": "Born on dev2 2026-10-09. Open-source TiviMate-style IPTV player (github.com/profullstack/hdtilt.com). Since 0.2.0 (2026-10-09): accounts (auth-system, username+password, email confirmed via Resend noreply@hdtilt.com), OAuth 2.1 for the CLI/TUI, synced libraries encrypted with HDTILT_LIBRARY_KEY; Postgres database hdtilt_com in the shared cluster, tables created on boot. Secrets in vault hdtilt-com--prod. Deploys on push to main.",
+ "vault": "hdtilt-com--prod"
 }
