@@ -1,0 +1,30 @@
+{
+ "site": "hdtilt.com",
+ "service": "hdtilt.com",
+ "repo": "profullstack/hdtilt.com",
+ "branch": "main",
+ "image": null,
+ "domains": [
+  "hdtilt.com",
+  "www.hdtilt.com"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3340,
+ "health_path": "/api/health",
+ "max_body": "16m",
+ "mem_limit": "384m",
+ "mem_note": "Bun node:http server: PWA, API, MCP and the IPTV stream proxy (public mode, 3 streams/IP); guides are parsed in memory (6h cache, 8 guides max)",
+ "notes": "Born on dev2 2026-10-09. Open-source TiviMate-style IPTV player (github.com/profullstack/hdtilt.com). No database, no secrets: playlists live in the browser. Deploys on push to main.",
+ "vault": ""
+}
