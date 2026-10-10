@@ -118,6 +118,12 @@ export interface HqDrawOptions {
   styleDir: string;
   concurrency: number;
   quality: string;
+  /**
+   * The image model; HQ_MODEL when absent. gpt-image-2 now answers
+   * "Transparent background is not supported for this model", so a top-up
+   * drawing (a new icon after the set shipped) needs one that still does.
+   */
+  model?: string;
   force: boolean;
   log: (line: string) => void;
   render: (svg: string, size: number) => Promise<Buffer> | Buffer;
@@ -202,7 +208,7 @@ export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
       try {
         report.calls += 1;
         const result = await options.caller({
-          model: HQ_MODEL,
+          model: options.model ?? HQ_MODEL,
           // A brand takes no style reference: the mark is the only thing the
           // model should be looking at, and an emoji master beside it is an
           // invitation to redraw.
@@ -213,7 +219,7 @@ export async function drawHq(options: HqDrawOptions): Promise<HqDrawReport> {
         await writeFile(join(master, `${key}.png`), result.png);
         await writeFile(
           join(options.out, style.dir, 'prompts.jsonl'),
-          `${JSON.stringify({ key, style: style.id, prompt, brand: Boolean(brand), references: brand ? ['mark'] : ['line', ...style.emojiRefs] })}\n`,
+          `${JSON.stringify({ key, style: style.id, model: options.model ?? HQ_MODEL, prompt, brand: Boolean(brand), references: brand ? ['mark'] : ['line', ...style.emojiRefs] })}\n`,
           { flag: 'a' },
         );
         report.drawn.push(key);

@@ -47,7 +47,7 @@ const USAGE = `Usage:
   icon style   <${Object.keys(STYLES).join('|')}|agentic|all> [DRAW OPTIONS]
 
   DRAW OPTIONS: [--out DIR] [--only mail,…] [--no-draw] [--draw-only] [--force]
-                [--concurrency N] [--quality low|medium|high]
+                [--concurrency N] [--quality low|medium|high] [--model M]
                 [--style-dir DIR] [--dry-run]
 
 A colour style draws every UI icon with an image model (needs OPENAI_API_KEY),
@@ -133,7 +133,7 @@ if (isMain(import.meta.url)) {
   try {
     const { flags, values, positional } = parseArgs(process.argv.slice(2), {
       boolean: ['--json', '--help', '--no-draw', '--draw-only', '--force', '--dry-run'],
-      string: ['-o', '--out', '--sizes', '--color', '--only', '--category', '--mode', '--concurrency', '--quality', '--style-dir'],
+      string: ['-o', '--out', '--sizes', '--color', '--only', '--category', '--mode', '--concurrency', '--quality', '--style-dir', '--model'],
     });
     const [verb, ...rest] = positional;
     if (flags.has('--help') || !verb) {
@@ -275,6 +275,7 @@ if (isMain(import.meta.url)) {
               styleDir: values.get('--style-dir') ?? join(process.env['HOME'] ?? '', 'brand-assets', 'openemoji', 'master'),
               concurrency: Number(values.get('--concurrency') ?? HQ_CONCURRENCY),
               quality,
+              ...(values.get('--model') ? { model: values.get('--model')! } : {}),
               force: flags.has('--force'),
               log: (line) => process.stderr.write(`${line}\n`),
               render: (svg, size) => Buffer.from(new Resvg(svg, { fitTo: { mode: 'width', value: size } }).render().asPng()),
