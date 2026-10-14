@@ -19,11 +19,12 @@
 # a restart from zero. Scoping agreed with the session that owns those
 # databases; do not widen the exclusions without asking it.
 #
-# RETENTION is 7 days for both classes. That is cheap for the frequent dumps
-# (~700 MB a run) and expensive for the daily fulls, because seven copies of
-# the bulk databases is hundreds of GB. The script therefore warns when the
-# backup directory passes BACKUP_WARN_GB, rather than letting backups cause
-# the disk outage they exist to protect against.
+# RETENTION on this box is 7 days for the frequent dumps (~700 MB a run) and
+# 2 days for the daily fulls. Seven fulls of the bulk databases was ~300 GB and
+# took dev2's root disk to 94% (2026-10-14), so the fulls now live off-box: the
+# seed box's pull-dev2-backups.sh takes them too and keeps 7 days of both. The
+# script still warns when the backup directory passes BACKUP_WARN_GB, rather
+# than letting backups cause the disk outage they exist to protect against.
 #
 # Every dump is checked with `pg_restore --list` before it counts as good. A
 # pg_dump can exit 0 and still be truncated if the disk fills, and a backup
@@ -33,10 +34,10 @@ set -uo pipefail
 MODE=${1:-frequent}
 OUT=${OUT:-/var/backups/postgres}
 LOG=${LOG:-/var/log/dev2-pg-backup.log}
-# Both classes roll on age, not count: "7 days of history" should mean the
-# same thing whichever dump you reach for.
+# Both classes roll on age, not count. Fulls keep 2 days here because the seed
+# box holds the 7-day history of them.
 KEEP_FREQUENT_DAYS=${KEEP_FREQUENT_DAYS:-7}
-KEEP_FULL_DAYS=${KEEP_FULL_DAYS:-7}
+KEEP_FULL_DAYS=${KEEP_FULL_DAYS:-2}
 # Backups that quietly eat the disk would cause the outage they exist to
 # prevent. Flag it well before the disk alarm would.
 BACKUP_WARN_GB=${BACKUP_WARN_GB:-450}
@@ -169,7 +170,7 @@ total_gb=$(du -s --block-size=1G "$OUT" 2>/dev/null | cut -f1)
 avail=$(df -h --output=avail / | tail -1 | tr -d ' ')
 say "retained $(ls -1 "$OUT"/*.dump 2>/dev/null | wc -l) dumps, $total total, $avail free on /"
 if [ "${total_gb:-0}" -ge "$BACKUP_WARN_GB" ]; then
-  alert "backups are using ${total_gb}GB (warn at ${BACKUP_WARN_GB}GB). Seven days of full dumps of the bulk databases is the likely cause — shorten KEEP_FULL_DAYS or move them off-box."
+  alert "backups are using ${total_gb}GB (warn at ${BACKUP_WARN_GB}GB). Full dumps of the bulk databases are the likely cause — check KEEP_FULL_DAYS and that the seed box is pulling them."
 fi
 
 # Backups are useless if they are all on the machine that fails. Say so every

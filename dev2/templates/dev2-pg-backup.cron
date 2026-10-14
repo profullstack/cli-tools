@@ -6,7 +6,8 @@
 #   rssamplifier because they are re-importable from public sources. Measured
 #   at ~700 MB and ~50 seconds per run, so four-hourly is cheap.
 #
-# full (daily): the complete copies including those bulk tables, kept 2 deep.
+# full (daily): the complete copies including those bulk tables, kept 2 days
+#   here; the seed box pulls them and holds 7 days.
 #   Six full dumps a day of a 165 GB database would outgrow the disk in days,
 #   which is why the frequent job excludes them.
 #
