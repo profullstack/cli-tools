@@ -1539,6 +1539,10 @@ def render_vhost(s):
     for p in proxies:  # one more server block per proxied host, same certificate
         blk = tmpl("nginx-vhost.conf").split("server {", 2)[2]  # the 443 block only
         blk = "server {" + proxy_tuned(blk, p).replace("__SITE__", s["site"]).replace("__APP_PORT__", str(p["port"])).replace("__SERVER_NAMES__", p["host"])
+        if p.get("locations"):  # host-specific locations ahead of its catch-all (social.w3bs.org's PDS paths)
+            anchor = "    location / {\n        proxy_pass"
+            if blk.count(anchor) != 1: die(f"{p['host']}: cannot find the proxied `location /` to insert locations before")
+            blk = blk.replace(anchor, p["locations"].rstrip("\n") + "\n\n" + anchor)
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
     return keepalive_upstreams(conf, s["site"]), domains
