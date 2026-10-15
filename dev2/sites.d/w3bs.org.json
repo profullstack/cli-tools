@@ -1,4 +1,17 @@
 {
   "bbs_note": "w3bs.org/bbs is the tsbb board in ~/www/w3bs.org-bbs (port 3341, vault w3bs-org-bbs--prod). It follows tsbb releases on its own.",
-  "nginx_locations": "    # w3bs.org/bbs: the tsbb board in ~/www/w3bs.org-bbs (TSBB_BASE_URL=https://w3bs.org/bbs).\n    # The path is passed through unstripped: tsbb (>= 0.9.0) mounts itself under it.\n    location ~ ^/bbs(/|$) {\n        proxy_pass http://127.0.0.1:3341;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-Host $host;\n        proxy_read_timeout 300s;\n    }\n"
+  "nginx_locations": "    # w3bs.org/bbs: the tsbb board in ~/www/w3bs.org-bbs (TSBB_BASE_URL=https://w3bs.org/bbs).\n    # The path is passed through unstripped: tsbb (>= 0.9.0) mounts itself under it.\n    location ~ ^/bbs(/|$) {\n        proxy_pass http://127.0.0.1:3341;\n        proxy_http_version 1.1;\n        proxy_set_header Host $host;\n        proxy_set_header X-Real-IP $remote_addr;\n        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n        proxy_set_header X-Forwarded-Proto $scheme;\n        proxy_set_header X-Forwarded-Host $host;\n        proxy_read_timeout 300s;\n    }\n",
+  "social_note": "social.w3bs.org (+ *.social.w3bs.org handles) is the AT Protocol PDS in ~/www/w3bs.org-social (port 3342, vault w3bs-org-social--prod); w3bs.org/social is the app's page about it.",
+  "proxies": [
+    {
+      "host": "social.w3bs.org",
+      "port": 3342,
+      "max_body": "100m"
+    },
+    {
+      "host": "*.social.w3bs.org",
+      "port": 3342,
+      "max_body": "100m"
+    }
+  ]
 }
