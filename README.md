@@ -1824,6 +1824,27 @@ watch directory (`--watch`, `$TORLINK_WATCH`) as the offline handoff. How long
 it seeds for is a torlnk daemon setting (`--seed-time`), not a per-torrent one;
 left alone, it seeds indefinitely.
 
+### `submitfleet`
+
+[SubmitFleet](https://submitfleet.com)'s CLI, wrapped so it is a command on every box:
+
+```bash
+submitfleet login                 # browser sign-in (OAuth 2.1 + PKCE)
+submitfleet login --key -         # or an API key from Settings, read from stdin
+submitfleet products list
+submitfleet catalog search ai
+submitfleet campaign status <id>
+submitfleet queue                 # submissions waiting for a person
+submitfleet mcp --stdio           # MCP server, signed in as you
+submitfleet --self-update         # refresh the installed CLI
+```
+
+`@profullstack/submitfleet` is installed on first use into a private prefix
+(`~/.local/share/cli-tools/vendor/submitfleet`), never globally, because the
+upstream executable has the same name. `SUBMITFLEET_API_KEY` (and
+`SUBMITFLEET_URL`) let agents use it without a browser; `SUBMITFLEET_BIN` runs a
+checkout instead, `SUBMITFLEET_SPEC` pins a version.
+
 ### `crawlproof`
 
 What the fleet costs and what it returns —
