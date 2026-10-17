@@ -335,7 +335,9 @@ do $$ declare r record; begin
   for r in select 'alter table storage.'||quote_ident(tablename)||' owner to supabase_storage_admin' as cmd from pg_tables where schemaname='storage' loop execute r.cmd; end loop;
   execute 'grant anon, authenticated, service_role to authenticator';
   execute 'grant anon, authenticated, service_role to postgres';
-  execute 'grant service_role to supabase_storage_admin';
+  -- storage-api SETs ROLE to the caller's JWT role; without anon/authenticated
+  -- every signed-in upload fails with 'permission denied to set role'.
+  execute 'grant anon, authenticated, service_role to supabase_storage_admin';
 end $$;
 grant usage on schema public to anon, authenticated, service_role;
 grant usage on schema storage to anon, authenticated, service_role;
