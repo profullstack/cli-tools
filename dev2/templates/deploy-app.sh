@@ -18,6 +18,14 @@
 # next deploy, never by editing this box. See sync_env_from_vault below.
 #
 set -euo pipefail
+# Three deploys at a time on this box (@profullstack/deploy deploy-gate): a merge
+# that lands with many others queues for a slot instead of building with all of them.
+# No gate installed, a --status call, or already inside the gate: carry on as before.
+if [ -z "${DEPLOY_GATED:-}" ] && [ "${1:-}" != --status ]; then
+  for gate in /usr/local/bin/deploy-gate "$HOME/.local/bin/deploy-gate"; do
+    [ -x "$gate" ] && exec "$gate" --name "$(basename "$(dirname "$(readlink -f "$0")")")" -- "$0" "$@"
+  done
+fi
 
 ROOT=${ROOT:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}
 APP_DIR="$ROOT/app"

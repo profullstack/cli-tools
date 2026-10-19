@@ -21,7 +21,8 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # Room to queue: deploys build 3 at a time on dev2 (@profullstack/deploy), so a wave of merges waits its turn.
+    timeout-minutes: 120
     steps:
       # ${{ }} values go through env, never straight into a run: body.
       - name: Resolve target revision

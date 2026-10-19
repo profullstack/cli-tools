@@ -19,6 +19,9 @@
 #     every process of supabase-db and the other *-db / *postgres* containers, now
 #     and every 5 minutes (a systemd timer), so restarts and recreates stay covered.
 #  3. fixes earlyoom's avoid list to match ".postgres-wrapp" (and postgrest, pgbouncer).
+#  4. installs /usr/local/bin/deploy-gate (@profullstack/deploy, pinned and checksummed):
+#     every deploy on the box (deploy-app.sh, OpenInstall bin/install.sh) then takes one
+#     of 3 slots, so a wave of merges builds three at a time instead of all at once.
 set -euo pipefail
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo bash $0"; exit 1; }
 
@@ -70,9 +73,24 @@ if [ -f /etc/default/earlyoom ] && ! grep -q 'postgres\.\*' /etc/default/earlyoo
 fi
 grep EARLYOOM_ARGS /etc/default/earlyoom | sed 's/^/  /'
 
+echo "== 4. deploy gate: three deploys at a time"
+GATE_VERSION=0.1.0
+GATE_SHA256=c4e3b64144f186f97b5e0f7fe1f20021282bb9547c2b13d55c2c0312d9ef7b52
+tmp=$(mktemp -d)
+if curl -fsSL "https://registry.npmjs.org/@profullstack/deploy/-/deploy-$GATE_VERSION.tgz" -o "$tmp/d.tgz" \
+  && tar -xzf "$tmp/d.tgz" -C "$tmp" package/bin/deploy-gate \
+  && echo "$GATE_SHA256  $tmp/package/bin/deploy-gate" | sha256sum -c --quiet -; then
+  install -m 0755 -o root -g root "$tmp/package/bin/deploy-gate" /usr/local/bin/deploy-gate
+  /usr/local/bin/deploy-gate status | sed 's/^/  /'
+else
+  echo "  could not fetch or verify @profullstack/deploy $GATE_VERSION; deploys stay ungated for root (anthony's use ~/.local/bin/deploy-gate)"
+fi
+rm -rf "$tmp"
+
 echo
 echo "Done. Check: free -g; systemctl show -p MemoryCurrent,MemoryMax user-1001.slice cron.service"
 echo "Undo: systemctl set-property user-1001.slice MemoryHigh=infinity MemoryMax=infinity"
 echo "      systemctl set-property cron.service MemoryHigh=infinity MemoryMax=infinity"
 echo "      systemctl disable --now protect-db-oom.timer"
 echo "      mv /etc/default/earlyoom.bak-memory-guard /etc/default/earlyoom && systemctl restart earlyoom"
+echo "      rm /usr/local/bin/deploy-gate   # deploys run ungated again"
