@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  adUnit,
+  adScripts,
+  adSlot,
   blogDir,
   createPost,
   DEFAULT_DIR,
@@ -125,14 +126,23 @@ describe('renderPost', () => {
     expect(html).toContain("<title>A Post &mdash; Someone's Blog</title>");
   });
 
-  it('carries the CrawlProof tracker and ad unit, last thing before </body>', () => {
-    expect(html).toContain(tracker(CONFIGURED.trackerSiteId));
+  it('puts the ad unit at the top of the post, never at the foot of the page', () => {
     expect(html).toContain('data-cp-ad');
-    // Placement matters: the tags are async, but keeping them after the
-    // article means nothing about the post waits on a third-party host.
-    const unit = adUnit(CONFIGURED);
-    expect(html.indexOf(unit)).toBeGreaterThan(html.indexOf('</article>'));
-    expect(html.indexOf(unit)).toBeLessThan(html.indexOf('</body>'));
+    // No ads in footers: the slot sits under the heading, inside the article.
+    const slot = html.indexOf(adSlot(CONFIGURED));
+    expect(slot).toBeGreaterThan(html.indexOf('<h1>'));
+    expect(slot).toBeLessThan(html.indexOf('<nav>'));
+    expect(slot).toBeLessThan(html.indexOf('</article>'));
+  });
+
+  it('keeps the CrawlProof scripts last thing before </body>', () => {
+    expect(html).toContain(tracker(CONFIGURED.trackerSiteId));
+    // The tags are async, but keeping them after the article means nothing
+    // about the post waits on a third-party host.
+    const scripts = adScripts(CONFIGURED);
+    expect(scripts).toContain('ad.js');
+    expect(html.indexOf(scripts)).toBeGreaterThan(html.indexOf('</article>'));
+    expect(html.indexOf(scripts)).toBeLessThan(html.indexOf('</body>'));
   });
 
   it('runs the thin text_link bar, not a banner', () => {
@@ -171,7 +181,8 @@ describe('renderPost', () => {
       expect(bare).not.toContain('crawlproof.com');
       expect(bare).not.toContain('data-cp-ad');
       expect(bare).not.toContain('<script');
-      expect(adUnit(EMPTY_CONFIG)).toBe('');
+      expect(adSlot(EMPTY_CONFIG)).toBe('');
+      expect(adScripts(EMPTY_CONFIG)).toBe('');
       expect(tracker(null)).toBe('');
     });
 
@@ -183,7 +194,9 @@ describe('renderPost', () => {
   });
 
   it('emits the tracker without an ad unit when only a site id is set', () => {
-    const only = adUnit({ ...EMPTY_CONFIG, trackerSiteId: 'site-id-1234' });
+    const trackerOnly = { ...EMPTY_CONFIG, trackerSiteId: 'site-id-1234' };
+    expect(adSlot(trackerOnly)).toBe('');
+    const only = adScripts({ ...EMPTY_CONFIG, trackerSiteId: 'site-id-1234' });
     expect(only).toBe(tracker('site-id-1234'));
     expect(only).not.toContain('ad.js');
   });
