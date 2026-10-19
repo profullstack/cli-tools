@@ -6900,7 +6900,9 @@ $ssl
 }
 
 server {
-$listen
+${listen//ssl;/ssl default_server;}
+	# The default for 443: without one, the next vhost nginx loads (a Moshpit name's
+	# origin block, say) answers no-SNI and unmatched hosts with its own certificate.
 	server_name $WEB_DOMAIN;
 $ssl
 	root /var/www/userdirs;
