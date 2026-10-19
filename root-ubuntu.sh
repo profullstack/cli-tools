@@ -2014,13 +2014,21 @@ _confine_sysctl_floor() {
 	local key="$1" floor="$2" have
 	have="$(sysctl -n "$key" 2>/dev/null)" || return 1
 	[[ "$have" =~ ^-?[0-9]+$ ]] || return 1
+	# At the floor BECAUSE of our own file is not "already at the floor": the
+	# line stays. Otherwise the second run sees the value the first run raised,
+	# writes nothing, deletes the file, and the box boots without the hardening.
+	if (( have == floor )) && grep -qxF "$key = $floor" "${CONFINE_SYSCTL_CONF:-}" 2>/dev/null; then
+		printf '%s = %s\n' "$key" "$floor"
+		return 0
+	fi
 	(( have >= floor )) && return 1
 	printf '%s = %s\n' "$key" "$floor"
 	return 0
 }
 
+CONFINE_SYSCTL_CONF=/etc/sysctl.d/62-profullstack-confine.conf
 configure_confine_sysctl() {
-	local conf=/etc/sysctl.d/62-profullstack-confine.conf body="" dumpable
+	local conf="$CONFINE_SYSCTL_CONF" body="" dumpable
 
 	if [[ "$CONFINE_SYSCTL" != 1 ]]; then
 		info "confine: sysctl hardening off (CONFINE_SYSCTL=0)"
@@ -2052,7 +2060,11 @@ configure_confine_sysctl() {
 	# have left a box sitting on 2 alone and called it hardened. It is an exact
 	# value instead, and 0 can never be a loosening of anything.
 	dumpable="$(sysctl -n fs.suid_dumpable 2>/dev/null)"
-	[[ "$dumpable" =~ ^[0-9]+$ && "$dumpable" != 0 ]] && body+='fs.suid_dumpable = 0'$'\n'
+	# Same rule as the floors: a 0 that our own file set is kept, not dropped.
+	if [[ "$dumpable" =~ ^[0-9]+$ && "$dumpable" != 0 ]] \
+		|| { [[ "$dumpable" == 0 ]] && grep -qxF 'fs.suid_dumpable = 0' "$conf" 2>/dev/null; }; then
+		body+='fs.suid_dumpable = 0'$'\n'
+	fi
 
 	body="$(printf '%s' "$body" | grep -v '^$')"
 
@@ -3670,7 +3682,13 @@ resolve_dotfiles() {
 		DOTFILES_DIR=""
 	fi
 
-	if looks_like_dotfiles "$SCRIPT_DIR"; then
+	# ...but only a CHECKOUT. The documented way to run this is from /root
+	# (curl -O, then ./root-ubuntu.sh), and after the first run /root has a
+	# .zshrc of its own -- oh-my-zsh puts one there. Taken at face value that
+	# made the second run treat root's home as the team's dotfiles and copy
+	# root's shell config into every account. A dotfiles repo is a git
+	# checkout; a home directory is not.
+	if looks_like_dotfiles "$SCRIPT_DIR" && [[ -e "$SCRIPT_DIR/.git" ]]; then
 		DOTFILES_DIR="$SCRIPT_DIR"
 		info "dotfiles: $DOTFILES_DIR (running from inside them)"
 		return 0
