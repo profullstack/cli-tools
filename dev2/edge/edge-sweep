@@ -34,7 +34,9 @@ probe() {
   v=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:443:$IP" "https://$n/" 2>/dev/null) || true
   k=$v
   [ "${v:-000}" != 000 ] || k=$(curl -sk -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:443:$IP" "https://$n/" 2>/dev/null) || true
-  h=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:80:$IP" "http://$n/" 2>/dev/null) || true
+  # Port 80 on purpose: nginx's plain-http answer (ACME, the redirect to https) is part of what must not change.
+  plain=http
+  h=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:80:$IP" "$plain://$n/" 2>/dev/null) || true
   printf '%s\t%s\t%s\t%s\n' "$n" "${v:-000}" "${k:-000}" "${h:-000}"
 }
 # POSIX sh has no `export -f`: xargs re-enters this script once per name.

@@ -329,10 +329,28 @@ def reverse_listen(text):
     return re.sub(r"listen\s+127\.0\.0\.1:8444\s+([^;]*);", back, text)
 
 
+def backup_path(arg=None):
+    """A backup apply made: nginx-<ts>.tgz directly under BACKUPS, nothing else."""
+    if not arg:
+        with open(os.path.join(STATE, "last-backup")) as f:
+            arg = f.read().strip()
+    base = os.path.realpath(BACKUPS)
+    p = os.path.realpath(arg)
+    if os.path.dirname(p) != base or not re.fullmatch(r"nginx-\d{8}T\d{6}Z\.tgz", os.path.basename(p)) or not os.path.isfile(p):
+        raise SystemExit(f"edge-box: {arg} is not a backup under {base}")
+    return p
+
+
+def bundle_path(arg):
+    """A bundle dev2-edge shipped: a directory with edge.json and root/."""
+    p = os.path.realpath(arg)
+    if not (os.path.isfile(os.path.join(p, "edge.json")) and os.path.isdir(os.path.join(p, "root"))):
+        raise SystemExit(f"edge-box: {arg} is not a dev2-edge bundle")
+    return p
+
+
 def rollback(tgz=None):
-    if not tgz:
-        with open(f"{STATE}/last-backup") as f:
-            tgz = f.read().strip()
+    tgz = backup_path(tgz)
     say(f"rollback from {tgz}")
     run("systemctl disable --now " + " ".join(WATCHERS) + " >/dev/null 2>&1", check=False)
     for p in (DROPIN,):
@@ -378,7 +396,9 @@ def route(bundle):
     put(f"{bundle}/root/etc/nginx/stream-enabled/dev2-edge.conf", STREAM_CONF)
     run("nginx -t -q", capture=True)
     run("systemctl reload nginx")
-    on = sum(1 for l in open(STREAM_CONF) if ":8453;" in l)
+    time.sleep(2)  # the reload is asynchronous: let the new workers take over before reporting
+    with open(STREAM_CONF) as f:
+        on = sum(1 for l in f if ":8453;" in l)
     say(f"stream map installed: {on} patterns to Caddy")
 
 
@@ -401,9 +421,9 @@ def main(argv):
         return 2
     cmd, rest = argv[0], argv[1:]
     if cmd == "apply" and rest:
-        apply(rest[0])
+        apply(bundle_path(rest[0]))
     elif cmd == "route" and rest:
-        route(rest[0])
+        route(bundle_path(rest[0]))
     elif cmd == "rollback":
         rollback(rest[0] if rest and rest[0] else None)
     elif cmd == "status":
