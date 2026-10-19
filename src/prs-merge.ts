@@ -1,4 +1,4 @@
-import { Gh, type Check, type MergeState, type PullRequest, type WorkflowRun } from './gh.ts';
+import { Gh, RateLimitError, type Check, type MergeState, type PullRequest, type WorkflowRun } from './gh.ts';
 import { sleep } from './exec.ts';
 
 export interface MergeOptions {
@@ -174,6 +174,13 @@ export async function sweep(
           if (!found.has(pr.url)) found.set(pr.url, pr.createdAt);
         }
       } catch (error) {
+        // Not a verdict on the scope: its PRs were never looked at, so the
+        // run has to fail rather than summarise zero of them as all there is.
+        if (error instanceof RateLimitError) {
+          emit({ kind: 'failed', url: `${qualifier}:${owner}`, reason: error.message });
+          summary.failed += 1;
+          continue;
+        }
         emit({
           kind: 'warn',
           text: `skipped inaccessible or invalid scope ${qualifier}:${owner} — ${

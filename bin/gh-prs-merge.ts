@@ -32,6 +32,8 @@ Options:
   --no-ready-drafts      Ignore draft PRs instead of marking them ready
   --fix                  Repair mechanical blockers, then re-evaluate
   --fix-wait SECONDS     How long --fix waits on running checks; default 600
+  --rate-wait SECONDS    Longest wait for a spent GitHub API quota to reset;
+                         default 900. A later reset fails the run, exit 1
   -h, --help             Show this help
 
 Eligibility:
@@ -83,7 +85,7 @@ Fixing (--fix):
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['--apply', '--allow-no-checks', '--ready-drafts', '--no-ready-drafts', '--fix', '--no-fix', '-h', '--help'],
-    string: ['--orgs', '--users', '--limit', '--fix-wait'],
+    string: ['--orgs', '--users', '--limit', '--fix-wait', '--rate-wait'],
   });
 
   if (parsed.flags.has('-h') || parsed.flags.has('--help')) {
@@ -115,7 +117,12 @@ async function main(argv: string[]): Promise<number> {
     throw new UsageError('--fix requires --apply');
   }
 
-  const summary = await sweep(options, new Gh(), (line) => {
+  const gh = new Gh({
+    rateWaitMs: integer(parsed.values, '--rate-wait', 900, { max: 3_600 }) * 1000,
+    onRateLimit: (text) => process.stderr.write(`WAIT: ${text}\n`),
+  });
+
+  const summary = await sweep(options, gh, (line) => {
     const text = render(line);
     if (line.kind === 'failed' || line.kind === 'fixme' || line.kind === 'warn') {
       process.stderr.write(`${text}\n`);
