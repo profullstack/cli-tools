@@ -203,3 +203,21 @@ backups before each flip).
 - A duplicate standalone project (`tipoffwatch`) exists beside the live
   megaproject service (`tipoffwatch.com`); the registry keys by custom domain,
   so the duplicate is not a site.
+
+## Deploy-on-merge without Actions: `deploy-poll.sh`
+
+Private repos cannot run Actions while the org bill is unpaid, and `deploy-dev2.yml`
+is an Action. `dev2/deploy-poll.sh` (cron on dev2, every 2 minutes, as `anthony`)
+does what it did from the box: for every `~/www/<site>/deploy.env` whose `REPO` is a
+private repo, `git ls-remote <REPO> HEAD` with the site's deploy key, and when that
+is not `.deploy-state`'s `DEPLOYED_SHA`, `deploy-app.sh <sha>` in the background
+(through deploy-gate, so 3 at a time). A failed sha is not retried until a newer
+commit lands. Public repos are skipped: their workflow still runs free.
+
+```
+deploy-poll.sh --status    site, deployed, tip, current|behind|failed|unreachable
+deploy-poll.sh --dry-run   what one pass would deploy
+```
+
+Logs: `~/.local/state/deploy-poll/poll.log` and `<site>.log`.
+
