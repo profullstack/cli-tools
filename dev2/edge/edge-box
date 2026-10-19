@@ -274,7 +274,9 @@ def apply(bundle):
              "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"], capture=True)
         say("caddy validate (as caddy): ok")
         run("systemctl daemon-reload")
-        run("systemctl enable caddy.service >/dev/null 2>&1; systemctl restart caddy.service")
+        # Already serving (a re-apply after an edge.json change): reload, never drop connections.
+        run("systemctl enable caddy.service >/dev/null 2>&1; "
+            "if systemctl is-active --quiet caddy.service; then systemctl reload caddy.service; else systemctl restart caddy.service; fi")
         time.sleep(2)
         run("systemctl is-active --quiet caddy.service")
         checked, bad = caddy_check(bundle, spec, base)
