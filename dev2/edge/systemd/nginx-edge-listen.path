@@ -1,0 +1,14 @@
+# managed by cli-tools/dev2/dev2-edge
+# setup-origin.sh (every Moshpit renewal) rewrites its vhost with `listen 443` and runs
+# `nginx -s reload` itself, past the systemd drop-in; this catches that within a second.
+[Unit]
+Description=Watch nginx's vhost directories for a `listen 443` to move behind the edge
+
+[Path]
+PathChanged=/etc/nginx/sites-available
+PathChanged=/etc/nginx/sites-enabled
+PathChanged=/etc/nginx/conf.d
+Unit=nginx-edge-listen.service
+
+[Install]
+WantedBy=paths.target

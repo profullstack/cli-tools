@@ -1,0 +1,7 @@
+# managed by cli-tools/dev2/dev2-edge
+[Unit]
+Description=Copy dev2's certificates into Caddy's bundles and reload Caddy if one changed
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/caddy-edge-certs

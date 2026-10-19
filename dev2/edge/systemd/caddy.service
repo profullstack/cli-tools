@@ -1,0 +1,24 @@
+# managed by cli-tools/dev2/dev2-edge
+[Unit]
+Description=Caddy for pit.world and the Moshpit names, behind the dev2 edge stream proxy
+Documentation=https://github.com/profullstack/cli-tools/blob/master/dev2/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=caddy
+Group=caddy
+Environment=HOME=/var/lib/caddy XDG_DATA_HOME=/var/lib XDG_CONFIG_HOME=/var/lib/caddy/.config
+ExecStart=/usr/local/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+ExecReload=/usr/local/bin/caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile --force
+TimeoutStopSec=5s
+LimitNOFILE=1048576
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

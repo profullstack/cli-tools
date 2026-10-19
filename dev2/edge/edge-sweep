@@ -1,0 +1,42 @@
+#!/bin/sh
+# edge-sweep: the status code of https://<name>/ and http://<name>/ for every name.
+#
+# Installed as /usr/local/sbin/edge-sweep by cli-tools/dev2/dev2-edge, which runs it
+# before and after an edge change and compares the two. Each name is pinned to
+# $EDGE_IP (dev2's public address) so the request takes the same path a visitor's
+# does (stream proxy -> Caddy or nginx), whatever public DNS says; Moshpit names are
+# not in public DNS at all.
+#
+#   edge-sweep NAMES_FILE > out.tsv      name <TAB> https (verified) <TAB> https (-k) <TAB> http
+#   edge-sweep --names                   every name nginx and Caddy serve (needs root)
+set -eu
+IP="${EDGE_IP:-23.95.228.174}"
+JOBS="${EDGE_SWEEP_JOBS:-8}"
+TIMEOUT="${EDGE_SWEEP_TIMEOUT:-20}"
+
+if [ "${1:-}" = "--names" ]; then
+  {
+    nginx -T 2>/dev/null | awk '
+      /^[ \t]*server_name[ \t]/ { sub(/^[ \t]*server_name[ \t]+/, ""); sub(/;.*/, ""); n = split($0, a, /[ \t]+/); for (i = 1; i <= n; i++) print a[i] }'
+    # Hosts behind a regex server_name: one per certificate pit-proxy-cert made.
+    ls /etc/nginx/pit-proxy-certs 2>/dev/null | sed -n 's/\.crt$//p'
+    [ -f /etc/caddy/Caddyfile ] && sed -n 's/^https:\/\/\([a-z0-9.-]*\)\( {\|,\).*/\1/p' /etc/caddy/Caddyfile
+  } | grep -E '^[a-z0-9][a-z0-9.-]*\.[a-z0-9-]+$' | grep -v '^_$' | sort -u
+  exit 0
+fi
+
+[ -f "${1:-}" ] || { echo "usage: edge-sweep NAMES_FILE | --names" >&2; exit 2; }
+probe() {
+  n="$1"
+  # Verified first; only when that fails (000: no answer, or a certificate this box
+  # does not trust) ask again without verification, so the two columns tell a TLS
+  # change apart from an app change.
+  v=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:443:$IP" "https://$n/" 2>/dev/null) || true
+  k=$v
+  [ "${v:-000}" != 000 ] || k=$(curl -sk -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:443:$IP" "https://$n/" 2>/dev/null) || true
+  h=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:80:$IP" "http://$n/" 2>/dev/null) || true
+  printf '%s\t%s\t%s\t%s\n' "$n" "${v:-000}" "${k:-000}" "${h:-000}"
+}
+# POSIX sh has no `export -f`: xargs re-enters this script once per name.
+if [ "${EDGE_SWEEP_ONE:-}" ]; then probe "$EDGE_SWEEP_ONE"; exit 0; fi
+grep -v '^[[:space:]]*$' "$1" | xargs -P "$JOBS" -I{} env EDGE_SWEEP_ONE={} sh "$0" "$1" | sort

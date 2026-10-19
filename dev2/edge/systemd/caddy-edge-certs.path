@@ -1,0 +1,15 @@
+# managed by cli-tools/dev2/dev2-edge
+# certbot (pit.world), pit-proxy-cert (<name>.pit.world) and moshpit-renew (Moshpit
+# names) write here; Caddy picks the new certificate up within a second or two.
+[Unit]
+Description=Watch dev2's certificate directories for Caddy
+
+[Path]
+PathChanged=/etc/nginx/pit-proxy-certs
+PathChanged=/etc/ssl/moshpit
+PathChanged=/etc/ssl/moshpit-riotcoder
+PathChanged=/etc/letsencrypt/live/pit.world
+Unit=caddy-edge-certs.service
+
+[Install]
+WantedBy=paths.target

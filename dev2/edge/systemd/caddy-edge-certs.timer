@@ -1,0 +1,12 @@
+# managed by cli-tools/dev2/dev2-edge
+# Belt and braces for the .path unit: a renewal it missed is picked up within a day.
+[Unit]
+Description=Daily resync of Caddy's certificate bundles
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

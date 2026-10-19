@@ -1,0 +1,360 @@
+#!/usr/bin/env python3
+"""
+dev2-edge: pit.world and the Moshpit names on Caddy, every other dev2 site on nginx.
+
+    dev2-edge render [--out DIR] [--off]   write the box files for edge.json into DIR (nothing touches dev2)
+    dev2-edge apply --yes                  cut over: backup, baseline sweep, install, switch, sweep again;
+                                           any site whose status changed rolls the whole box back
+    dev2-edge route on|off                 point the routed names at Caddy (on) or back at nginx (off),
+                                           one nginx reload, no other change: the fast way back
+    dev2-edge rollback [TARBALL]           restore /etc/nginx from the apply's backup, stop Caddy
+    dev2-edge sweep                        status of every name on dev2 (https verified, https -k, http)
+    dev2-edge status                       what is live: routes, Caddy, certificates, listeners
+
+How it works (agreed with Anthony 2026-10-19, "pit.world first"):
+
+  visitor :443 -> nginx stream {} (ssl_preread, SNI only, TLS not terminated)
+      pit.world, *.pit.world, Moshpit names in edge.json -> 127.0.0.1:8453 Caddy
+      everything else                                     -> 127.0.0.1:8444 nginx http
+  both hops carry a PROXY protocol header, so nginx ($remote_addr via real_ip_header
+  proxy_protocol) and Caddy (proxy_protocol listener wrapper) see the visitor's address.
+  Port 80 is untouched: nginx keeps answering ACME and http->https for every name.
+
+Certificates are never issued by Caddy (auto_https off). caddy-edge-certs copies what
+certbot, pit-proxy-cert and moshpit-renew already keep current into bundles Caddy
+loads, and reloads Caddy when one changes (a .path unit on the source directories,
+plus a daily timer).
+
+nginx-edge-listen rewrites any `listen 443` a tool writes later (OpenInstall's
+bin/install.sh, setup-origin.sh on every Moshpit renewal, certbot --nginx) to the
+127.0.0.1:8444 backend; it runs before every nginx start and reload and whenever a
+vhost file changes. Without it, such a line passes `nginx -t`, the reload cannot bind
+:443 and nginx silently keeps the old configuration (a restart fails outright).
+
+Run from the box that has root ssh to dev2 (DEV2_HOST). dev2 is production.
+"""
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import urllib.request
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+EDGE = os.path.join(HERE, "edge")
+SPEC = os.path.join(EDGE, "edge.json")
+DEV2_HOST = os.environ.get("DEV2_HOST", "dev2.profullstack.com")
+SSH = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=25"]
+CACHE = os.path.expanduser(os.environ.get("DEV2_EDGE_CACHE", "~/.cache/dev2-edge"))
+HEADER = "# managed by cli-tools/dev2/dev2-edge from dev2/edge/edge.json: do not hand-edit, re-run `dev2-edge apply`\n"
+
+
+def die(msg, code=1):
+    print(f"ERROR: {msg}", file=sys.stderr, flush=True)
+    sys.exit(code)
+
+
+def log(msg):
+    print(f"\n===> {msg}", file=sys.stderr, flush=True)
+
+
+def spec(path=SPEC):
+    with open(path) as f:
+        s = json.load(f)
+    hosts = [h for site in s["sites"] for h in site["hosts"]]
+    if len(hosts) != len(set(hosts)):
+        die("edge.json: a host is listed twice")
+    for site in s["sites"]:
+        kinds = [k for k in ("proxy", "root", "redirect") if k in site]
+        if len(kinds) != 1:
+            die(f"edge.json: {site['hosts']} needs exactly one of proxy, root, redirect")
+    return s
+
+
+# ------------------------------------------------------------------ rendering
+
+def stream_pattern(host):
+    """A Caddy host as an nginx `map ... hostnames` key: nginx's *.x covers any depth."""
+    if host.startswith("*."):
+        return "*." + host.lstrip("*.")
+    return host
+
+
+def render_stream(s, on=True):
+    p = s["ports"]
+    caddy, nginx = f"127.0.0.1:{p['caddy']}", f"127.0.0.1:{p['nginx']}"
+    rows = []
+    if on:
+        seen = set()
+        for site in s["sites"]:
+            for h in site["hosts"]:
+                k = stream_pattern(h)
+                if k not in seen:
+                    seen.add(k)
+                    rows.append(f"        {k:<32} {caddy};")
+        for h, why in s.get("keep_on_nginx", {}).items():
+            if h.startswith("//"):
+                continue
+            rows.append(f"        {h:<32} {nginx};  # {why[:90]}")
+    state = "on: the names below go to Caddy" if on else "off: every name goes to nginx (dev2-edge route off)"
+    return HEADER + f"""# The edge ({state}).
+# nginx's stream module owns :443. It reads the TLS server name (ssl_preread; the TLS
+# itself is not terminated here) and passes the connection on, with a PROXY protocol
+# header carrying the visitor's address, to Caddy or to nginx's own https servers.
+stream {{
+    map $ssl_preread_server_name $dev2_edge_backend {{
+        hostnames;
+        default                          {nginx};
+""" + "\n".join(rows) + ("\n" if rows else "") + f"""    }}
+
+    server {{
+        listen 443;
+        listen [::]:443;
+        ssl_preread on;
+        preread_timeout 10s;
+        proxy_pass $dev2_edge_backend;
+        proxy_protocol on;
+        proxy_connect_timeout 5s;
+        # Never stricter than the longest proxy_read_timeout behind it (86400s).
+        proxy_timeout {s.get('stream_timeout', '24h')};
+    }}
+}}
+"""
+
+
+def render_realip(s):
+    return HEADER + f"""# Every https server listens on 127.0.0.1:{s['ports']['nginx']} behind the edge stream proxy,
+# which sends the visitor's address in a PROXY protocol header. Without these two lines
+# $remote_addr is 127.0.0.1 for every https visitor: rate limits, logs and ThreatCrush
+# would all see one client.
+set_real_ip_from 127.0.0.1;
+real_ip_header proxy_protocol;
+# nginx-made redirects (a directory without its slash) would otherwise name :{s['ports']['nginx']}.
+port_in_redirect off;
+"""
+
+
+def render_cert_sources(s):
+    out = [HEADER.rstrip("\n"), "# <dir> [<crt> <key> <name>]: read by caddy-edge-certs"]
+    for c in s["cert_sources"]:
+        out.append(" ".join([c["dir"]] + ([c["crt"], c["key"], c["as"]] if c.get("as") else [])))
+    return "\n".join(out) + "\n"
+
+
+def caddy_site(site, s):
+    tls = "edge_tls_moshpit" if site.get("moshpit") else "edge_tls"
+    lines = [", ".join(f"https://{h}" for h in site["hosts"]) + " {", f"\timport {tls}"]
+    if site.get("max_body"):
+        lines += ["\trequest_body {", f"\t\tmax_size {site['max_body']}", "\t}"]
+    if site.get("gzip"):
+        lines.append("\tencode gzip")
+    if site.get("access_log"):
+        lines += ["\tlog {", f"\t\toutput file /var/log/caddy/{site['hosts'][0]}.access.log", "\t}"]
+    if "proxy" in site:
+        lines.append(f"\timport edge_proxy {int(site['proxy'])}")
+    elif "root" in site:
+        lines += [f"\troot * {site['root']}", "\tfile_server"]
+    else:
+        lines.append(f"\tredir {site['redirect']} 301")
+    return "\n".join(lines) + "\n}\n"
+
+
+def render_caddyfile(s):
+    p = s["ports"]
+    return HEADER + f"""# Caddy only ever sees connections the nginx stream proxy hands it (127.0.0.1:{p['caddy']},
+# PROXY protocol first). It issues nothing: certificates are bundles caddy-edge-certs
+# copies from certbot / pit-proxy-cert / moshpit-renew. Upstreams are the ones nginx used.
+{{
+\tadmin localhost:{p['caddy_admin']}
+\tauto_https off
+\tpersist_config off
+\tdefault_bind 127.0.0.1
+\thttp_port {p['caddy_http']}
+\thttps_port {p['caddy']}
+\tservers {{
+\t\tlistener_wrappers {{
+\t\t\tproxy_protocol {{
+\t\t\t\ttimeout 5s
+\t\t\t\tallow 127.0.0.1/32
+\t\t\t}}
+\t\t\ttls
+\t\t}}
+\t\t# No HTTP/3: UDP 443 is not routed here, and an Alt-Svc for :{p['caddy']} would point browsers nowhere.
+\t\tprotocols h1 h2
+\t}}
+}}
+
+(edge_tls) {{
+\ttls {{
+\t\tload /etc/caddy/edge-certs
+\t}}
+}}
+
+# Moshpit names were TLS 1.3 only on nginx (with X25519MLKEM768 first, Go's default too).
+(edge_tls_moshpit) {{
+\ttls {{
+\t\tload /etc/caddy/edge-certs
+\t\tprotocols tls1.3
+\t}}
+}}
+
+(edge_proxy) {{
+\treverse_proxy 127.0.0.1:{{args[0]}} {{
+\t\theader_up X-Real-IP {{remote_host}}
+\t\t# A reload (every certificate renewal) would otherwise cut websockets (pit-bbs) at once.
+\t\tstream_close_delay 1h
+\t}}
+}}
+
+""" + "\n".join(caddy_site(site, s) for site in s["sites"])
+
+
+UNITS = ("caddy.service", "caddy-edge-certs.service", "caddy-edge-certs.path", "caddy-edge-certs.timer",
+         "nginx-edge-listen.service", "nginx-edge-listen.path")
+SCRIPTS = ("nginx-edge-listen", "caddy-edge-certs", "edge-sweep", "edge-box")
+
+
+def render(out, s, on=True):
+    """Every file the box needs, laid out as the box paths under out/root/."""
+    files = {
+        "etc/nginx/stream-enabled/dev2-edge.conf": render_stream(s, on),
+        "etc/nginx/conf.d/00-edge-realip.conf": render_realip(s),
+        "etc/caddy/Caddyfile": render_caddyfile(s),
+        "etc/caddy/edge-cert-sources": render_cert_sources(s),
+    }
+    for u in UNITS:
+        with open(os.path.join(EDGE, "systemd", u)) as f:
+            files[f"etc/systemd/system/{u}"] = f.read()
+    with open(os.path.join(EDGE, "systemd", "nginx.service.d-dev2-edge.conf")) as f:
+        files["etc/systemd/system/nginx.service.d/dev2-edge.conf"] = f.read()
+    for name, body in files.items():
+        p = os.path.join(out, "root", name)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write(body)
+    for sc in SCRIPTS:
+        d = os.path.join(out, "root", "usr/local/sbin", sc)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy(os.path.join(EDGE, sc), d)
+        os.chmod(d, 0o755)
+    with open(os.path.join(out, "edge.json"), "w") as f:
+        json.dump(s, f, indent=1)
+    return sorted(files) + [f"usr/local/sbin/{x}" for x in SCRIPTS]
+
+
+# ------------------------------------------------------------------ caddy binary
+
+def caddy_binary(version):
+    """The official static build, sha512-checked against the release's checksums file."""
+    base = f"https://github.com/caddyserver/caddy/releases/download/v{version}"
+    tgz = f"caddy_{version}_linux_amd64.tar.gz"
+    d = os.path.join(CACHE, version)
+    binp = os.path.join(d, "caddy")
+    if os.path.exists(binp):
+        return binp
+    os.makedirs(d, exist_ok=True)
+    log(f"downloading Caddy {version}")
+    sums = urllib.request.urlopen(f"{base}/caddy_{version}_checksums.txt", timeout=60).read().decode()
+    want = next((l.split()[0] for l in sums.splitlines() if l.endswith(" " + tgz)), None)
+    if not want:
+        die(f"{tgz} is not in the checksums file")
+    data = urllib.request.urlopen(f"{base}/{tgz}", timeout=300).read()
+    if hashlib.sha512(data).hexdigest() != want:
+        die(f"{tgz}: sha512 mismatch")
+    with tempfile.TemporaryDirectory(dir=d) as t:
+        p = os.path.join(t, tgz)
+        with open(p, "wb") as f:
+            f.write(data)
+        with tarfile.open(p) as tf:
+            m = tf.getmember("caddy")
+            tf.extract(m, t, filter="data") if hasattr(tarfile, "data_filter") else tf.extract(m, t)
+        shutil.move(os.path.join(t, "caddy"), binp)
+    os.chmod(binp, 0o755)
+    return binp
+
+
+# ------------------------------------------------------------------ remote
+
+def ssh_root(cmd, check=True, capture=False):
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", cmd], text=True, capture_output=capture)
+    if check and r.returncode != 0:
+        die(f"on {DEV2_HOST}: {cmd!r} exited {r.returncode}" + (f"\n{r.stderr}" if capture else ""))
+    return r
+
+
+def ship(on=True, with_caddy=True):
+    """Render + copy the bundle to root@dev2:/root/dev2-edge/<ts>/, return that path."""
+    s = spec()
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    with tempfile.TemporaryDirectory(prefix="dev2-edge-") as out:
+        render(out, s, on)
+        if with_caddy:
+            shutil.copy(caddy_binary(s["caddy_version"]), os.path.join(out, "caddy"))
+        remote = f"/root/dev2-edge/{ts}"
+        ssh_root(f"install -d -m 0700 {remote}")
+        tar = subprocess.Popen(["tar", "-C", out, "-czf", "-", "."], stdout=subprocess.PIPE)
+        r = subprocess.run(SSH + [f"root@{DEV2_HOST}", f"tar -C {remote} -xzf -"], stdin=tar.stdout)
+        tar.wait()
+        if r.returncode or tar.returncode:
+            die("could not copy the bundle to dev2")
+    return remote
+
+
+def cmd_render(a):
+    s = spec()
+    out = a.out or tempfile.mkdtemp(prefix="dev2-edge-render-")
+    for f in render(out, s, not a.off):
+        print(os.path.join(out, "root", f))
+
+
+def cmd_apply(a):
+    if not a.yes:
+        die("this changes production nginx on dev2: re-run with --yes (see `dev2-edge render` for what it writes)")
+    remote = ship()
+    log(f"bundle on dev2 at {remote}; running edge-box apply")
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", f"{remote}/root/usr/local/sbin/edge-box apply {remote}"])
+    sys.exit(r.returncode)
+
+
+def cmd_route(a):
+    remote = ship(on=(a.state == "on"), with_caddy=False)
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", f"{remote}/root/usr/local/sbin/edge-box route {remote}"])
+    sys.exit(r.returncode)
+
+
+def cmd_rollback(a):
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", "/usr/local/sbin/edge-box rollback " + shlex.quote(a.tarball or "")])
+    sys.exit(r.returncode)
+
+
+def cmd_sweep(a):
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", "edge-sweep --names > /root/dev2-edge/names.txt && edge-sweep /root/dev2-edge/names.txt"])
+    sys.exit(r.returncode)
+
+
+def cmd_status(a):
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", "/usr/local/sbin/edge-box status"])
+    sys.exit(r.returncode)
+
+
+def main():
+    ap = argparse.ArgumentParser(prog="dev2-edge", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("render"); p.add_argument("--out"); p.add_argument("--off", action="store_true"); p.set_defaults(fn=cmd_render)
+    p = sub.add_parser("apply"); p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_apply)
+    p = sub.add_parser("route"); p.add_argument("state", choices=["on", "off"]); p.set_defaults(fn=cmd_route)
+    p = sub.add_parser("rollback"); p.add_argument("tarball", nargs="?"); p.set_defaults(fn=cmd_rollback)
+    sub.add_parser("sweep").set_defaults(fn=cmd_sweep)
+    sub.add_parser("status").set_defaults(fn=cmd_status)
+    a = ap.parse_args()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
