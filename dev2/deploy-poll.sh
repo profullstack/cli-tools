@@ -24,6 +24,8 @@
 # them as well would build every merge twice.
 #
 set -uo pipefail
+# cron starts with PATH=/usr/bin:/bin, where neither gh nor the mise shims are.
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/bin:$PATH"
 
 WWW=${WWW:-/home/anthony/www}
 STATE_DIR=${STATE_DIR:-$HOME/.local/state/deploy-poll}
