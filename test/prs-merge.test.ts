@@ -475,6 +475,65 @@ describe('sweep', () => {
     expect(lines.filter((l) => l.kind === 'skip')).toHaveLength(0);
   });
 
+  it('resolves a lockfile-only conflict with --fix, then merges once CI is green', async () => {
+    const { gh } = stubGh({
+      steps: [{ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }, {}],
+    });
+    const seen: string[] = [];
+    const { summary, text } = await runSweep(
+      gh,
+      baseOptions({
+        fix: true,
+        resolveLockfiles: async (pr) => {
+          seen.push(pr.url);
+          return { kind: 'resolved', files: ['bun.lock'] };
+        },
+      }),
+    );
+
+    expect(seen).toEqual([PR_URL]);
+    expect(text).toContain('regenerated bun.lock');
+    expect(summary.fixed).toBe(1);
+    expect(summary.merged).toBe(1);
+    expect(summary.skipped).toBe(0);
+  });
+
+  it('keeps a code conflict a FIXME and names why the resolver declined', async () => {
+    const { gh, calls } = stubGh({
+      steps: [{ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }],
+    });
+    const { summary, text } = await runSweep(
+      gh,
+      baseOptions({
+        fix: true,
+        resolveLockfiles: async () => ({
+          kind: 'manual',
+          reason: 'conflicts outside lockfiles: src/index.ts',
+        }),
+      }),
+    );
+
+    expect(text).toContain('needs resolving by hand (conflicts outside lockfiles: src/index.ts)');
+    expect(summary.fixed).toBe(0);
+    expect(summary.skipped).toBe(1);
+    expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+  });
+
+  it('never calls the lockfile resolver without --fix', async () => {
+    const { gh } = stubGh({ steps: [{ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }] });
+    let called = false;
+    await runSweep(
+      gh,
+      baseOptions({
+        resolveLockfiles: async () => {
+          called = true;
+          return { kind: 'resolved', files: [] };
+        },
+      }),
+    );
+    expect(called).toBe(false);
+  });
+
   it('merges a PR GitHub calls UNSTABLE when every check is green', async () => {
     // The false skip this sweep kept producing: MERGEABLE, two green checks,
     // and an aggregate state that only meant a non-required context was not.

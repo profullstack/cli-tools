@@ -1,5 +1,6 @@
 import { Gh, RateLimitError, type Check, type MergeState, type PullRequest, type WorkflowRun } from './gh.ts';
 import { sleep } from './exec.ts';
+import type { LockfileResolver } from './lockfile-conflicts.ts';
 
 export interface MergeOptions {
   orgs: string[];
@@ -12,6 +13,11 @@ export interface MergeOptions {
   fixWaitMs: number;
   /** Poll interval while waiting on running checks. Shortened by tests. */
   pollMs: number;
+  /**
+   * With --fix, rebuilds a DIRTY PR whose only conflicts are lockfiles. Left
+   * out (as in tests), every DIRTY PR is a FIXME.
+   */
+  resolveLockfiles?: LockfileResolver;
 }
 
 export interface Summary {
@@ -357,6 +363,41 @@ export async function sweep(
           kind: 'fixme',
           url,
           text: `GitHub could not merge the base in: ${message}`,
+          title: pr.title,
+        });
+        summary.skipped += 1;
+        continue;
+      }
+
+      if (pr.mergeStateStatus === 'DIRTY' && options.resolveLockfiles) {
+        // Both sides bumped dependencies and only the lockfile collided. That
+        // is not a disagreement: the merged manifests say what both wanted.
+        emit({ kind: 'fixing', url, text: `${reason}; trying a lockfile-only conflict resolution` });
+        let outcome: Awaited<ReturnType<LockfileResolver>>;
+        try {
+          outcome = await options.resolveLockfiles(pr);
+        } catch (error) {
+          outcome = {
+            kind: 'manual',
+            reason: error instanceof Error ? error.message : String(error),
+          };
+        }
+
+        if (outcome.kind === 'resolved') {
+          emit({
+            kind: 'fixing',
+            url,
+            text: `merged the base in and regenerated ${outcome.files.join(', ') || 'nothing'}; parked for the second pass`,
+          });
+          summary.fixed += 1;
+          parked.push({ url, title: pr.title, repaired: true, awaitingChecks: true });
+          continue;
+        }
+
+        emit({
+          kind: 'fixme',
+          url,
+          text: `${reason}; the branch conflicts with its base and needs resolving by hand (${outcome.reason})`,
           title: pr.title,
         });
         summary.skipped += 1;
