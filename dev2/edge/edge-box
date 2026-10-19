@@ -52,7 +52,10 @@ def run(cmd, check=True, capture=False, **kw):
 
 
 def put(src, dst, mode=0o644):
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    d = os.path.dirname(dst)
+    if not os.path.isdir(d):
+        os.makedirs(d, 0o755, exist_ok=True)
+        os.chmod(d, 0o755)
     tmp = dst + ".edge-tmp"
     shutil.copyfile(src, tmp)
     os.chmod(tmp, mode)
@@ -189,7 +192,10 @@ def install_caddy(bundle, spec):
         os.makedirs(d, exist_ok=True)
         shutil.chown(d, "caddy", "caddy")
         os.chmod(d, 0o750)
+    # dev2's root umask is 027: a directory made here would be 0750 root:root and the
+    # caddy user could not read its own Caddyfile (the first production apply, 2026-10-19).
     os.makedirs("/etc/caddy", exist_ok=True)
+    os.chmod("/etc/caddy", 0o755)
 
 
 def install_files(bundle, which):
@@ -419,6 +425,9 @@ def status():
 
 
 def main(argv):
+    # Every mode this script sets is explicit, but a tool it runs (useradd, tar, apt)
+    # should not inherit dev2's root umask of 027 either.
+    os.umask(0o022)
     if not argv:
         print(__doc__)
         return 2
