@@ -27,6 +27,52 @@ export class GhError extends Error {
   }
 }
 
+/**
+ * GitHub refused the call because the token's quota is spent.
+ *
+ * Kept apart from GhError because it is not a verdict on the thing asked
+ * about. The sweep used to read a rate-limited search as "this org is
+ * inaccessible", warn, find no PRs anywhere, and print an all-zero summary
+ * with exit 0 — a run that did nothing, reported as a run with nothing to do.
+ */
+export class RateLimitError extends GhError {
+  readonly resetAt: Date;
+
+  constructor(message: string, resetAt: Date, result?: RunResult) {
+    super(message, result);
+    this.name = 'RateLimitError';
+    this.resetAt = resetAt;
+  }
+}
+
+/**
+ * Primary ("API rate limit exceeded", GraphQL and REST alike) and secondary
+ * ("You have exceeded a secondary rate limit") refusals. A rate-limited call
+ * was not executed, so retrying it — even a merge — cannot do anything twice.
+ */
+export function isRateLimited(stderr: string): boolean {
+  return /rate limit (already )?exceeded|exceeded a secondary rate limit|HTTP 429/i.test(stderr);
+}
+
+/**
+ * When the quota that ran out comes back, from `gh api rate_limit`.
+ *
+ * That endpoint is free: it does not count against any quota, so it still
+ * answers while everything else is refused. A secondary limit leaves every
+ * bucket with quota remaining and documents no reset, so it gets a minute.
+ */
+export function parseRateLimitReset(raw: unknown, now: number): Date {
+  const resources = (raw as { resources?: Record<string, { remaining?: unknown; reset?: unknown }> })
+    ?.resources;
+  let latest = 0;
+  for (const bucket of Object.values(resources ?? {})) {
+    if (bucket?.remaining === 0 && typeof bucket.reset === 'number') {
+      latest = Math.max(latest, bucket.reset * 1000);
+    }
+  }
+  return new Date(latest > now ? latest : now + 60_000);
+}
+
 /** Values GitHub documents for `mergeable`, plus the honest fallback. */
 export const MERGEABLE = ['MERGEABLE', 'CONFLICTING', 'UNKNOWN'] as const;
 export type Mergeable = (typeof MERGEABLE)[number];
@@ -202,22 +248,68 @@ export function parseMergeAsync(stdout: string): MergeAsyncState | undefined {
 export interface GhOptions {
   /** Swap in a fake for tests. */
   exec?: typeof run;
+  sleep?: typeof sleep;
+  /**
+   * Longest a single rate-limit wait may be. A reset further off than this
+   * throws RateLimitError instead of sitting silent for most of an hour.
+   * Default 15 minutes; 0 never waits.
+   */
+  rateWaitMs?: number;
+  /** Told before each rate-limit wait, so the pause is not a silent hang. */
+  onRateLimit?: (text: string) => void;
 }
 
 export class Gh {
   private readonly exec: typeof run;
+  private readonly sleep: typeof sleep;
+  private readonly rateWaitMs: number;
+  private readonly onRateLimit: (text: string) => void;
 
   constructor(options: GhOptions = {}) {
     this.exec = options.exec ?? run;
+    this.sleep = options.sleep ?? sleep;
+    this.rateWaitMs = options.rateWaitMs ?? 15 * 60_000;
+    this.onRateLimit = options.onRateLimit ?? (() => {});
   }
 
   private async call(args: readonly string[]): Promise<RunResult> {
     // GH_PAGER=cat so a configured pager cannot block on a TTY that is not
     // there. The bash version set this on every call site and missed none by
     // luck rather than design.
-    return this.exec('gh', args, {
-      env: { ...process.env, GH_PAGER: 'cat', CLICOLOR: '0' },
-    });
+    const env = { ...process.env, GH_PAGER: 'cat', CLICOLOR: '0' };
+
+    for (;;) {
+      const result = await this.exec('gh', args, { env });
+      if (result.code === 0 || !isRateLimited(result.stderr)) return result;
+
+      const resetAt = await this.rateLimitReset(env);
+      // A few seconds past the reset: GitHub's clock and ours are not one clock.
+      const waitMs = resetAt.getTime() - Date.now() + 5_000;
+      const when = `${resetAt.toLocaleTimeString()} (in ${Math.ceil(waitMs / 60_000)}m)`;
+
+      if (waitMs > this.rateWaitMs) {
+        throw new RateLimitError(
+          `GitHub API rate limit exhausted; it resets at ${when}, past the ` +
+            `${Math.round(this.rateWaitMs / 60_000)}m --rate-wait budget — ${result.stderr.trim()}`,
+          resetAt,
+          result,
+        );
+      }
+
+      this.onRateLimit(`GitHub API rate limit exhausted; waiting until it resets at ${when}`);
+      await this.sleep(waitMs);
+    }
+  }
+
+  private async rateLimitReset(env: NodeJS.ProcessEnv): Promise<Date> {
+    const result = await this.exec('gh', ['api', 'rate_limit'], { env });
+    let raw: unknown;
+    try {
+      raw = result.code === 0 ? JSON.parse(result.stdout) : undefined;
+    } catch {
+      raw = undefined;
+    }
+    return parseRateLimitReset(raw, Date.now());
   }
 
   private async json<T>(

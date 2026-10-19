@@ -6,6 +6,8 @@ import {
   parsePullRequest,
   parseRunsAwaitingApproval,
   parsePullRequestUrl,
+  parseRateLimitReset,
+  isRateLimited,
   GhError,
 } from '../src/gh.ts';
 import type { RunResult } from '../src/exec.ts';
@@ -628,6 +630,94 @@ describe('sweep', () => {
 
     expect(text).toContain('skipped inaccessible or invalid scope');
     expect(summary.failed).toBe(0);
+  });
+});
+
+describe('rate limit', () => {
+  const LIMITED = 'GraphQL: API rate limit already exceeded for user ID 27381.';
+
+  /** `gh search` refused `failures` times, then answers; rate_limit says reset in `resetInS`. */
+  function limitedGh(failures: number, resetInS: number, rateWaitMs: number) {
+    const calls: string[] = [];
+    const waits: number[] = [];
+    const notices: string[] = [];
+    const gh = new Gh({
+      rateWaitMs,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+      onRateLimit: (text) => notices.push(text),
+      exec: async (_f, args) => {
+        calls.push(args.join(' '));
+        if (args[0] === 'api' && args[1] === 'rate_limit') {
+          const reset = Math.floor(Date.now() / 1000) + resetInS;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              resources: {
+                core: { remaining: 4000, reset: reset + 900 },
+                graphql: { remaining: 0, reset },
+              },
+            }),
+            stderr: '',
+          };
+        }
+        if (args[0] === 'search') {
+          if (failures > 0) {
+            failures -= 1;
+            return { code: 1, stdout: '', stderr: LIMITED };
+          }
+          return { code: 0, stdout: '[]', stderr: '' };
+        }
+        return { code: 0, stdout: '[]', stderr: '' };
+      },
+    });
+    return { gh, calls, waits, notices };
+  }
+
+  it('recognises primary and secondary refusals, and nothing else', () => {
+    expect(isRateLimited(LIMITED)).toBe(true);
+    expect(isRateLimited('HTTP 403: API rate limit exceeded for user ID 1.')).toBe(true);
+    expect(isRateLimited('You have exceeded a secondary rate limit.')).toBe(true);
+    expect(isRateLimited('Could not resolve to an Organization')).toBe(false);
+  });
+
+  it('takes the reset of the bucket that ran dry, not one with quota left', () => {
+    const now = 1_000_000_000_000;
+    const reset = parseRateLimitReset(
+      {
+        resources: {
+          core: { remaining: 10, reset: now / 1000 + 3000 },
+          graphql: { remaining: 0, reset: now / 1000 + 120 },
+        },
+      },
+      now,
+    );
+    expect(reset.getTime()).toBe(now + 120_000);
+    expect(parseRateLimitReset(undefined, now).getTime()).toBe(now + 60_000);
+  });
+
+  it('waits out a reset inside the budget, then sweeps', async () => {
+    const { gh, waits, notices } = limitedGh(1, 60, 15 * 60_000);
+    const { summary, text } = await runSweep(gh, baseOptions());
+
+    expect(waits).toHaveLength(1);
+    expect(notices[0]).toContain('waiting until it resets');
+    expect(text).not.toContain('FAILED');
+    expect(summary.failed).toBe(0);
+  });
+
+  it('fails the run, not just warns, when the reset is past the budget', async () => {
+    const { gh, waits } = limitedGh(99, 45 * 60, 15 * 60_000);
+    const { summary, text } = await runSweep(
+      gh,
+      baseOptions({ orgs: ['acme', 'other'], users: ['someone'] }),
+    );
+
+    expect(waits).toHaveLength(0);
+    expect(text).toContain('FAILED org:acme — GitHub API rate limit exhausted');
+    expect(text).not.toContain('skipped inaccessible');
+    expect(summary.failed).toBe(3);
   });
 });
 
