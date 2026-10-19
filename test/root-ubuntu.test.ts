@@ -1031,7 +1031,7 @@ describe('the user confine', () => {
              -p|*) return 0 ;;
            esac
          }
-         eval "$(declare -f configure_confine_sysctl | sed 's#/etc/sysctl.d/62-profullstack-confine.conf#${dir}/out.conf#g')"
+         CONFINE_SYSCTL_CONF=${dir}/out.conf
          configure_confine_sysctl`,
       );
       try {
@@ -1051,6 +1051,52 @@ describe('the user confine', () => {
 
     it('leaves a box that is already at 0 alone', () => {
       expect(generated('0')).not.toContain('fs.suid_dumpable');
+    });
+  });
+
+  describe('second runs keep what the first run wrote', () => {
+    it('keeps a sysctl floor its own file put there, instead of deleting the file on run two', () => {
+      const run = (have: string, file: string) =>
+        shell(
+          ['_confine_sysctl_floor'],
+          `sysctl() { echo ${have}; }; CONFINE_SYSCTL_CONF=$(mktemp); printf '${file}' >"$CONFINE_SYSCTL_CONF"
+_confine_sysctl_floor kernel.kptr_restrict 2 || echo none`,
+        );
+      expect(run('1', '')).toBe('kernel.kptr_restrict = 2');
+      // at the floor because of our own file: the line stays
+      expect(run('2', 'kernel.kptr_restrict = 2\\n')).toBe('kernel.kptr_restrict = 2');
+      // at the floor on its own: nothing to write
+      expect(run('2', '')).toBe('none');
+      // stricter than the floor: never written back down
+      expect(run('3', 'kernel.kptr_restrict = 2\\n')).toBe('none');
+    });
+
+    it('keeps fs.suid_dumpable = 0 when its own file set it', () => {
+      const dir = mkdtempSync(join(tmpdir(), 'root-ubuntu-suid2-'));
+      writeFileSync(join(dir, 'out.conf'), 'fs.suid_dumpable = 0\n');
+      shell(
+        ['_confine_sysctl_floor', 'configure_confine_sysctl', 'write_if_changed', 'file_sha'],
+        `CONFINE_SYSCTL=1; note() { :; }; info() { :; }; warn() { :; }
+         sysctl() { case "\${2:-}" in fs.suid_dumpable) echo 0 ;; -p|*) echo 99 ;; esac; }
+         CONFINE_SYSCTL_CONF=${dir}/out.conf
+         configure_confine_sysctl`,
+      );
+      expect(readFileSync(join(dir, 'out.conf'), 'utf8')).toContain('fs.suid_dumpable = 0');
+    });
+
+    it("does not mistake root's home for a dotfiles checkout, but still takes a real one", () => {
+      const resolve = (dir: string) =>
+        shell(
+          ['looks_like_dotfiles', 'resolve_dotfiles'],
+          `info() { :; }; warn() { :; }; SKIP_DOTFILES=0; DOTFILES_DIR=; DOTFILES_REPO=; SCRIPT_DIR=${dir}; resolve_dotfiles; echo "[$DOTFILES_DIR]"`,
+        );
+      const home = mkdtempSync(join(tmpdir(), 'home-'));
+      writeFileSync(join(home, '.zshrc'), '# root after run one\n');
+      expect(resolve(home)).toBe('[]');
+      const repo = mkdtempSync(join(tmpdir(), 'dotfiles-'));
+      writeFileSync(join(repo, '.zshrc'), '# the team dotfiles\n');
+      execFileSync('git', ['init', '-q', repo]);
+      expect(resolve(repo)).toBe(`[${repo}]`);
     });
   });
 
