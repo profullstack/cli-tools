@@ -15,6 +15,7 @@
 import { csv, integer, parseArgs, UsageError } from '../src/args.ts';
 import { isMain } from '../src/is-main.ts';
 import { Gh } from '../src/gh.ts';
+import { resolveLockfileConflicts } from '../src/lockfile-conflicts.ts';
 import { defaults, render, renderSummary, sweep, type MergeOptions } from '../src/prs-merge.ts';
 
 const USAGE = `Usage:
@@ -74,11 +75,19 @@ Fixing (--fix):
   parked PRs are polled together and they are all running their suites at the
   same time anyway.
 
+    lockfile-only conflict  mergeStateStatus=DIRTY where every conflicting
+                            file is bun.lock(b), pnpm-lock.yaml or
+                            package-lock.json: merges the base in a blobless
+                            clone under ~/.cache, takes the base's lockfile,
+                            rebuilds it (lockfile-only, no scripts), pushes a
+                            merge commit (never a force push) and parks it.
+                            Same-repo PRs only; forks stay FIXME
+
   Never repaired:
-    mergeStateStatus=DIRTY is GitHub's settled verdict that the branch
-    conflicts with its base. update-branch cannot merge over a conflict, so it
-    is not attempted; the PR is reported once as FIXME and left alone.
-    Resolving a conflict means choosing between two authors' intent. A check
+    Any other DIRTY PR. update-branch cannot merge over a conflict, so it is
+    not attempted; the PR is reported once as FIXME, naming the conflicting
+    files, and left alone. Resolving a conflict in code means choosing
+    between two authors' intent. A check
     that ran and failed is a result, not an obstacle.
 `;
 
@@ -104,6 +113,7 @@ async function main(argv: string[]): Promise<number> {
     fixWaitMs:
       integer(parsed.values, '--fix-wait', defaults.fixWaitMs / 1000, { max: 86_400 }) * 1000,
     pollMs: defaults.pollMs,
+    resolveLockfiles: (pr) => resolveLockfileConflicts(pr),
   };
 
   if (options.orgs.length === 0 && options.users.length === 0) {
