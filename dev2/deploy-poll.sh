@@ -16,6 +16,9 @@
 #   deploy-poll.sh --dry-run  print what it would deploy
 #   deploy-poll.sh --status   one line per polled site
 #
+# A site whose workflow did more after the deploy keeps that in an executable
+# ~/www/<site>/post-deploy.sh, run once deploy-app.sh succeeds.
+#
 # A sha whose deploy failed is not retried until a newer commit lands, so a
 # broken main costs one build, not one every two minutes. Logs:
 # ~/.local/state/deploy-poll/<site>.log; the run log is poll.log beside them.
@@ -106,7 +109,10 @@ for env in "$WWW"/*/deploy.env; do
     flock -n 8 || exit 0
     {
       echo "===== $(date -u +%FT%TZ) deploy $tip"
-      if "$WWW/$site/deploy-app.sh" "$tip"; then
+      # post-deploy.sh beside deploy-app.sh holds what a workflow did after the
+      # deploy step (weedforcrypto restarts its host-side worker there).
+      if "$WWW/$site/deploy-app.sh" "$tip" &&
+         { [ ! -x "$WWW/$site/post-deploy.sh" ] || "$WWW/$site/post-deploy.sh"; }; then
         rm -f "$STATE_DIR/$site.failed"
         echo "===== ok"
         log "$site: ${tip:0:8} deployed"

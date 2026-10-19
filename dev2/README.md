@@ -212,7 +212,9 @@ does what it did from the box: for every `~/www/<site>/deploy.env` whose `REPO` 
 private repo, `git ls-remote <REPO> HEAD` with the site's deploy key, and when that
 is not `.deploy-state`'s `DEPLOYED_SHA`, `deploy-app.sh <sha>` in the background
 (through deploy-gate, so 3 at a time). A failed sha is not retried until a newer
-commit lands. Public repos are skipped: their workflow still runs free.
+commit lands. Public repos are skipped: their workflow still runs free. A step the
+workflow ran after the deploy goes in an executable `~/www/<site>/post-deploy.sh`
+(weedforcrypto.com: restart its host-side worker).
 
 ```
 deploy-poll.sh --status    site, deployed, tip, current|behind|failed|unreachable
