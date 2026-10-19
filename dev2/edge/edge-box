@@ -123,11 +123,12 @@ def backup(ts):
     tgz = f"{BACKUPS}/nginx-{ts}.tgz"
     paths = ["etc/nginx"] + [p.lstrip("/") for p in ["/etc/caddy", "/etc/systemd/system/nginx.service.d"] if os.path.exists(p)]
     paths += [f"etc/systemd/system/{u}" for u in UNITS if os.path.exists(f"/etc/systemd/system/{u}")]
-    run(["tar", "-czf", tgz, "-C", "/"] + paths)
+    # root 0600: it holds every private key under /etc/nginx.
+    old_umask = os.umask(0o077)
     try:
-        shutil.chown(tgz, "anthony", "anthony")
-    except (LookupError, PermissionError):
-        pass
+        run(["tar", "-czf", tgz, "-C", "/"] + paths)
+    finally:
+        os.umask(old_umask)
     os.chmod(tgz, 0o600)
     os.makedirs(STATE, exist_ok=True)
     with open(f"{STATE}/last-backup", "w") as f:
