@@ -106,6 +106,8 @@ export interface PullRequest {
 export interface Check {
   name: string;
   bucket: Bucket;
+  /** The check's details page; for Actions, `.../actions/runs/<run>/job/<job>`. */
+  link?: string;
 }
 
 function fail(field: string, value: unknown, where: string): never {
@@ -163,10 +165,12 @@ export function parseChecks(raw: unknown, where = 'gh pr checks'): Check[] {
 
   return raw.map((entry) => {
     const record = entry as Record<string, unknown>;
-    return {
+    const check: Check = {
       name: asString(record.name, 'name', where),
       bucket: asEnum(BUCKET, record.bucket, 'bucket', where),
     };
+    if (typeof record.link === 'string' && record.link) check.link = record.link;
+    return check;
   });
 }
 
@@ -398,7 +402,7 @@ export class Gh {
   async checks(url: string): Promise<Check[]> {
     try {
       return await this.json(
-        ['pr', 'checks', url, '--json', 'bucket,name'],
+        ['pr', 'checks', url, '--json', 'bucket,name,link'],
         (raw) => parseChecks(raw),
         { allowNonZero: true },
       );
@@ -468,6 +472,56 @@ export class Gh {
       ['api', `repos/${target.slug}/actions/runs?head_sha=${headSha}&per_page=100`],
       (raw) => parseRunsAwaitingApproval(raw),
     );
+  }
+
+  /**
+   * Red Actions checks whose job GitHub never started, with GitHub's reason.
+   *
+   * A billing block or account lock fails every job in seconds with no runner
+   * and no log, so `gh pr checks` reports `test=fail` exactly as it would for a
+   * broken test. The only place the truth is written is the check run's
+   * annotation ("The job was not started because recent account payments have
+   * failed…"). Reported as `test=fail`, it sends whoever reads the sweep off to
+   * debug code that never ran.
+   *
+   * Best effort: an annotation that cannot be read leaves the plain reason.
+   */
+  async refusedToStart(
+    url: string,
+    checks: Check[],
+  ): Promise<{ names: string[]; message: string } | null> {
+    const target = parsePullRequestUrl(url);
+    if (!target) return null;
+
+    const names: string[] = [];
+    let message = '';
+
+    for (const check of checks) {
+      if (check.bucket !== 'fail') continue;
+      const job = check.link?.match(/\/actions\/runs\/\d+\/job\/(\d+)/)?.[1];
+      if (!job) continue;
+
+      const result = await this.call(['api', `repos/${target.slug}/check-runs/${job}/annotations`]);
+      if (result.code !== 0) continue;
+
+      let annotations: unknown;
+      try {
+        annotations = JSON.parse(result.stdout);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(annotations)) continue;
+
+      const refusal = annotations
+        .map((a) => (a as Record<string, unknown>).message)
+        .find((m): m is string => typeof m === 'string' && /job was not started/i.test(m));
+      if (refusal) {
+        names.push(check.name);
+        message ||= refusal.trim();
+      }
+    }
+
+    return names.length > 0 ? { names, message } : null;
   }
 
   async approveRun(url: string, runId: number): Promise<RunResult> {

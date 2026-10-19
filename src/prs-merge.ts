@@ -215,7 +215,16 @@ export async function sweep(
 
   /** Judge a PR believed to be settled, and merge it when it is eligible. */
   const judgeAndMerge = async (pr: PullRequest, checks: Check[]): Promise<void> => {
-    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+    let reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+
+    if (reason && checks.some((c) => c.bucket === 'fail')) {
+      const refused = await gh.refusedToStart(pr.url, checks);
+      if (refused) {
+        reason += ` — GitHub never started ${refused.names.join(', ')}, so nothing was ` +
+          `tested: "${refused.message}" (account billing, not the code; run the gate ` +
+          'locally and merge by hand)';
+      }
+    }
 
     if (reason) {
       emit({ kind: 'skip', url: pr.url, reason, title: pr.title });

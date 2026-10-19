@@ -29,7 +29,7 @@ interface StubStep {
   mergeStateStatus?: string;
   isDraft?: boolean;
   state?: string;
-  checks?: { name: string; bucket: string }[];
+  checks?: { name: string; bucket: string; link?: string }[];
 }
 
 /**
@@ -50,6 +50,8 @@ function stubGh(options: {
   /** Workflow runs GitHub is holding for maintainer approval on the head. */
   heldRuns?: { id: number; name: string; event: string }[];
   approveFails?: boolean;
+  /** Annotation messages on every check run. */
+  annotations?: string[];
 }) {
   const calls: string[] = [];
   let viewIndex = 0;
@@ -138,6 +140,10 @@ function stubGh(options: {
           ],
         }),
       );
+    }
+
+    if (args[0] === 'api' && args.some((a) => /\/check-runs\/\d+\/annotations$/.test(a))) {
+      return ok(JSON.stringify((options.annotations ?? []).map((message) => ({ message }))));
     }
 
     if (args[0] === 'api' && args.some((a) => a.endsWith('/approve'))) {
@@ -932,5 +938,50 @@ describe('fork CI held for maintainer approval', () => {
     await sweep(baseOptions(), gh, emit);
 
     expect(out.find((l) => l.kind === 'skip')).toMatchObject({ reason: 'no CI checks found' });
+  });
+});
+
+describe('checks GitHub never started', () => {
+  const JOB = 'https://github.com/acme/repo/actions/runs/39262578125/job/118093807961';
+  const BILLING =
+    "The job was not started because recent account payments have failed or your " +
+    "spending limit needs to be increased. Please check the 'Billing & plans' section in your settings";
+
+  const run = async (annotations: string[]) => {
+    const { gh, calls } = stubGh({
+      steps: [{ mergeStateStatus: 'UNSTABLE', checks: [{ name: 'test', bucket: 'fail', link: JOB }] }],
+      annotations,
+    });
+    const lines: Line[] = [];
+    const summary = await sweep(baseOptions({ apply: true }), gh, (l) => lines.push(l));
+    return { summary, calls, text: lines.map(render).join('\n') };
+  };
+
+  it('says the job was refused, not that the test failed', async () => {
+    const { summary, calls, text } = await run([
+      '"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026."',
+      BILLING,
+    ]);
+    expect(summary.merged).toBe(0);
+    expect(summary.skipped).toBe(1);
+    expect(calls).toContain('api repos/acme/repo/check-runs/118093807961/annotations');
+    expect(text).toContain('checks not green: test=fail — GitHub never started test');
+    expect(text).toContain('recent account payments have failed');
+    expect(text).toContain('not the code');
+  });
+
+  it('leaves a real failure as a plain failure', async () => {
+    const { text } = await run(['Process completed with exit code 1.']);
+    expect(text).toContain('checks not green: test=fail — stub pr');
+    expect(text).not.toContain('never started');
+  });
+
+  it('reads the job link from gh pr checks', () => {
+    expect(parseChecks([{ name: 'test', bucket: 'fail', link: JOB }])).toEqual([
+      { name: 'test', bucket: 'fail', link: JOB },
+    ]);
+    expect(parseChecks([{ name: 'test', bucket: 'pass', link: '' }])).toEqual([
+      { name: 'test', bucket: 'pass' },
+    ]);
   });
 });
