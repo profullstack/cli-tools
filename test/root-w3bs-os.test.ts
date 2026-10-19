@@ -1,4 +1,5 @@
 import { execFileSync, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -519,5 +520,24 @@ describe('the unprivileged subcommands', () => {
     });
     expect(out).toContain('dry run -- nothing was changed');
     expect(out).toContain('/mnt/sshfs.files.example.com/data');
+  });
+});
+
+describe('the w3bs package (profullstack.com/root-w3bs-os)', () => {
+  it('pins the script it installs: same version, same sha256', () => {
+    const installer = readFileSync(join(dirname(SCRIPT), 'install-root-w3bs-os.sh'), 'utf8');
+    const version = /^ROOT_W3BS_OS_VERSION=(\S+)$/m.exec(SOURCE)?.[1];
+    expect(version).toBeTruthy();
+    expect(installer).toContain(`VERSION=${version}\n`);
+    const sha = createHash('sha256').update(readFileSync(SCRIPT)).digest('hex');
+    // Edit root-w3bs-os.sh => bump ROOT_W3BS_OS_VERSION, update the installer's
+    // VERSION and SHA256, tag root-w3bs-os-v<version>, publish the release.
+    expect(installer).toContain(`SHA256=${sha}\n`);
+  });
+
+  it('answers --version without root', () => {
+    expect(execFileSync('bash', [SCRIPT, '--version'], { encoding: 'utf8' }).trim()).toMatch(
+      /^root-w3bs-os \d+\.\d+\.\d+$/,
+    );
   });
 });

@@ -184,6 +184,13 @@ fi
 
 set -uo pipefail
 
+# The packaged release (w3bs install profullstack.com/root-w3bs-os). Bump with every
+# change that ships, and tag the commit root-w3bs-os-v<version>.
+ROOT_W3BS_OS_VERSION=0.1.0
+case "${1:-}" in
+	--version|-V) printf 'root-w3bs-os %s\n' "$ROOT_W3BS_OS_VERSION"; exit 0 ;;
+esac
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
 
 # ------------------------------------------------------------------ config ---
