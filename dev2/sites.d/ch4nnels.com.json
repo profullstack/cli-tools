@@ -10,7 +10,7 @@
  ],
  "db": "none",
  "db_kinds": [],
- "redis": false,
+ "redis": true,
  "volumes": [
   {
    "name": "ch4nnels-data",
@@ -34,8 +34,9 @@
   "SITE_URL": "https://ch4nnels.com",
   "DB_PATH": "/data/ch4nnels.db",
   "ROLES": "web,worker",
-  "NODE_ENV": "production"
+  "NODE_ENV": "production",
+  "REDIS_URL": "redis://redis:6379"
  },
- "notes": "Not a Railway site: born on dev2 2026-10-17. IPTV comparison + channel search engine promoting ArgonTV. SQLite on the ch4nnels-data volume (no Postgres). Secrets (ARGON_REF_URL) in vault ch4nnels-com--prod. Deploys on push to main.",
+ "notes": "Not a Railway site: born on dev2 2026-10-17. IPTV comparison + channel search engine promoting ArgonTV. SQLite on the ch4nnels-data volume (no Postgres). Secrets (ARGON_REF_URL) in vault ch4nnels-com--prod. Deploys on push to main. Redis (2026-10-19): the scraper-daemon BullMQ queue; redis service + REDIS_URL from \"redis\": true.",
  "vault": "ch4nnels-com--prod"
 }
