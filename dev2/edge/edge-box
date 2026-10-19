@@ -1,0 +1,441 @@
+#!/usr/bin/env python3
+"""
+edge-box: the dev2 side of cli-tools/dev2/dev2-edge. Runs as root on dev2.
+
+    edge-box apply BUNDLE        backup, baseline sweep, Caddy up and checked on its own port,
+                                 nginx switched, sweep again; any status change rolls back
+    edge-box route BUNDLE        install only BUNDLE's stream map (dev2-edge route on|off)
+    edge-box rollback [TARBALL]  undo apply from its backup (default: the last one)
+    edge-box status
+
+BUNDLE is what `dev2-edge` rendered and copied: BUNDLE/root/<box paths>, BUNDLE/caddy,
+BUNDLE/edge.json. Every step prints what it does; nothing is left half-applied: a
+failure after the backup restores it.
+"""
+import datetime as dt
+import glob
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tarfile
+import tempfile
+import time
+
+STATE = "/root/dev2-edge"
+LAST_BACKUP = "/root/dev2-edge/last-backup"
+BACKUPS = "/home/anthony/backups"
+NGINX_CONF = "/etc/nginx/nginx.conf"
+STREAM_DIR = "/etc/nginx/stream-enabled"
+STREAM_CONF = f"{STREAM_DIR}/dev2-edge.conf"
+REALIP_CONF = "/etc/nginx/conf.d/00-edge-realip.conf"
+CF_CONF = "/etc/nginx/conf.d/cloudflare-realip.conf"
+DROPIN = "/etc/systemd/system/nginx.service.d/dev2-edge.conf"
+UNITS = ["caddy.service", "caddy-edge-certs.service", "caddy-edge-certs.path", "caddy-edge-certs.timer",
+         "nginx-edge-listen.service", "nginx-edge-listen.path"]
+WATCHERS = ["nginx-edge-listen.path", "caddy-edge-certs.path", "caddy-edge-certs.timer"]
+STREAM_INCLUDE = "include /etc/nginx/stream-enabled/*.conf;"
+CF_MARK = "# edge: real_ip_header is proxy_protocol now (00-edge-realip.conf); was: "
+
+
+def say(msg):
+    print(f"edge-box: {msg}", flush=True)
+
+
+def run(cmd, check=True, capture=False, **kw):
+    r = subprocess.run(cmd, shell=isinstance(cmd, str), text=True, capture_output=capture, **kw)
+    if check and r.returncode != 0:
+        raise RuntimeError(f"{cmd!r} exited {r.returncode}" + (f": {(r.stderr or r.stdout).strip()[-800:]}" if capture else ""))
+    return r
+
+
+def put(src, dst, mode=0o644):
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    tmp = dst + ".edge-tmp"
+    shutil.copyfile(src, tmp)
+    os.chmod(tmp, mode)
+    os.replace(tmp, dst)
+
+
+def listening(port):
+    out = run(["ss", "-Hltn", f"sport = :{port}"], capture=True).stdout
+    return bool(out.strip())
+
+
+# ------------------------------------------------------------------ sweep
+
+def names(bundle):
+    env = dict(os.environ)
+    out = run(["sh", f"{bundle}/root/usr/local/sbin/edge-sweep", "--names"], capture=True).stdout.split()
+    # Caddy's exact hosts too (before Caddy exists the box Caddyfile is absent).
+    with open(f"{bundle}/root/etc/caddy/Caddyfile") as f:
+        for m in re.finditer(r"^https://([a-z0-9.-]+)", f.read(), re.M):
+            out.append(m.group(1))
+    return sorted(set(n for n in out if re.fullmatch(r"[a-z0-9][a-z0-9.-]*\.[a-z0-9-]+", n)))
+
+
+def sweep(bundle, hosts, path):
+    lst = path + ".names"
+    with open(lst, "w") as f:
+        f.write("\n".join(hosts) + "\n")
+    out = run(["sh", f"{bundle}/root/usr/local/sbin/edge-sweep", lst], capture=True).stdout
+    with open(path, "w") as f:
+        f.write(out)
+    return parse(out)
+
+
+def parse(text):
+    rows = {}
+    for l in text.splitlines():
+        p = l.split("\t")
+        if len(p) == 4:
+            rows[p[0]] = tuple(p[1:])
+    return rows
+
+
+def probe_one(bundle, host):
+    r = run(["sh", f"{bundle}/root/usr/local/sbin/edge-sweep", "/dev/null"], check=False, capture=True,
+            env=dict(os.environ, EDGE_SWEEP_ONE=host))
+    p = r.stdout.strip().split("\t")
+    return tuple(p[1:]) if len(p) == 4 else ("000", "000", "000")
+
+
+def compare(bundle, base, after, retries=3):
+    """Names whose (https verified, https -k, http) changed, after re-probing each a few times."""
+    bad = {}
+    for n, want in base.items():
+        got = after.get(n)
+        tries = 0
+        while got != want and tries < retries:
+            time.sleep(2)
+            got = probe_one(bundle, n)
+            tries += 1
+        if got != want:
+            bad[n] = (want, got)
+    return bad
+
+
+# ------------------------------------------------------------------ pieces
+
+def backup(ts):
+    os.makedirs(BACKUPS, exist_ok=True)
+    tgz = f"{BACKUPS}/nginx-{ts}.tgz"
+    paths = ["etc/nginx"] + [p.lstrip("/") for p in ["/etc/caddy", "/etc/systemd/system/nginx.service.d"] if os.path.exists(p)]
+    paths += [f"etc/systemd/system/{u}" for u in UNITS if os.path.exists(f"/etc/systemd/system/{u}")]
+    # root 0600: it holds every private key under /etc/nginx.
+    old_umask = os.umask(0o077)
+    try:
+        run(["tar", "-czf", tgz, "-C", "/"] + paths)
+    finally:
+        os.umask(old_umask)
+    os.chmod(tgz, 0o600)
+    os.makedirs(STATE, exist_ok=True)
+    with open(LAST_BACKUP, "w") as f:
+        f.write(tgz + "\n")
+    say(f"backup: {tgz}")
+    return tgz
+
+
+def edit_nginx_conf(spec):
+    with open(NGINX_CONF) as f:
+        old = f.read()
+    new = old
+    if STREAM_INCLUDE not in new:
+        anchor = "include /etc/nginx/modules-enabled/*.conf;"
+        if anchor not in new:
+            raise RuntimeError(f"{NGINX_CONF}: no `{anchor}` line to put the stream include after")
+        new = new.replace(anchor, anchor + "\n# dev2-edge: the :443 SNI router\n" + STREAM_INCLUDE, 1)
+    wc, nofile = spec["nginx"]["worker_connections"], spec["nginx"]["worker_rlimit_nofile"]
+    # Each https visitor is now three connections in nginx (visitor, stream->backend, backend).
+    new = re.sub(r"(\n\s*worker_connections\s+)(\d+)(\s*;)", lambda m: m.group(1) + str(max(int(m.group(2)), wc)) + m.group(3), new, count=1)
+    if not re.search(r"^\s*worker_rlimit_nofile\s", new, re.M):
+        new = re.sub(r"^(worker_processes[^\n]*\n)", r"\1worker_rlimit_nofile %d;\n" % nofile, new, count=1, flags=re.M)
+    if new != old:
+        tmp = NGINX_CONF + ".edge-tmp"
+        with open(tmp, "w") as f:
+            f.write(new)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, NGINX_CONF)
+        say("nginx.conf: stream include, worker_connections, worker_rlimit_nofile")
+
+
+def edit_cloudflare():
+    if not os.path.exists(CF_CONF):
+        return
+    with open(CF_CONF) as f:
+        old = f.read()
+    new = re.sub(r"^(\s*)(real_ip_header\s+CF-Connecting-IP\s*;)", lambda m: m.group(1) + CF_MARK + m.group(2), old, flags=re.M)
+    if new != old:
+        tmp = CF_CONF + ".edge-tmp"
+        with open(tmp, "w") as f:
+            f.write(new)
+        shutil.copymode(CF_CONF, tmp)
+        os.replace(tmp, CF_CONF)
+        say(f"{CF_CONF}: real_ip_header CF-Connecting-IP commented (one real_ip_header per level; no dev2 name is behind Cloudflare)")
+
+
+def install_caddy(bundle, spec):
+    want = spec["caddy_version"]
+    have = run("/usr/local/bin/caddy version 2>/dev/null || true", capture=True).stdout
+    if f"v{want} " not in have + " ":
+        put(f"{bundle}/caddy", "/usr/local/bin/caddy", 0o755)
+        say(f"caddy {want} -> /usr/local/bin/caddy")
+    if run(["id", "caddy"], check=False, capture=True).returncode != 0:
+        run(["useradd", "--system", "--home-dir", "/var/lib/caddy", "--shell", "/usr/sbin/nologin", "--user-group", "caddy"])
+        say("user caddy")
+    for d in ("/var/lib/caddy", "/var/log/caddy"):
+        os.makedirs(d, exist_ok=True)
+        shutil.chown(d, "caddy", "caddy")
+        os.chmod(d, 0o750)
+    os.makedirs("/etc/caddy", exist_ok=True)
+
+
+def install_files(bundle, which):
+    root = f"{bundle}/root"
+    for rel in which:
+        src = f"{root}/{rel}"
+        mode = 0o755 if rel.startswith("usr/local/sbin/") else 0o644
+        put(src, "/" + rel, mode)
+
+
+def caddy_check(bundle, spec, base):
+    """Caddy alone, on its own port, before any visitor reaches it: same answers as nginx gave."""
+    port = spec["ports"]["caddy"]
+    hosts = sorted(h for h in base if any(match(h, p) for site in spec["sites"] for p in site["hosts"])
+                   and h not in spec.get("keep_on_nginx", {}))
+    bad = {}
+    for h in hosts:
+        want = base[h][1]  # https -k: certificate trust is checked by the after-sweep
+        got = "000"
+        for _ in range(3):
+            r = run(["curl", "-sk", "-o", "/dev/null", "-m", "20", "-w", "%{http_code}", "--haproxy-protocol",
+                     "--connect-to", f"{h}:443:127.0.0.1:{port}", f"https://{h}/"], check=False, capture=True)
+            got = r.stdout.strip() or "000"
+            if got == want:
+                break
+            time.sleep(1)
+        if got != want:
+            bad[h] = (want, got)
+    return hosts, bad
+
+
+def match(host, pattern):
+    if not pattern.startswith("*."):
+        return host == pattern
+    rx = "^" + re.escape(pattern).replace(r"\*", r"[a-z0-9-]+") + "$"
+    return re.match(rx, host) is not None
+
+
+# ------------------------------------------------------------------ commands
+
+def apply(bundle):
+    if os.geteuid() != 0:
+        sys.exit("edge-box: run as root")
+    with open(f"{bundle}/edge.json") as f:
+        spec = json.load(f)
+    ts = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    work = f"{STATE}/{ts}"
+    os.makedirs(work, exist_ok=True)
+    edge_on = os.path.exists(STREAM_CONF)
+
+    run("nginx -t -q", capture=True)
+    if not edge_on:
+        for p in (spec["ports"]["nginx"], spec["ports"]["caddy"], spec["ports"]["caddy_http"], spec["ports"]["caddy_admin"]):
+            if listening(p):
+                sys.exit(f"edge-box: port {p} is already in use; nothing changed")
+
+    tgz = backup(ts)
+    try:
+        hosts = names(bundle)
+        say(f"baseline sweep of {len(hosts)} names (twice, to set flaky ones aside)")
+        b1 = sweep(bundle, hosts, f"{work}/before-1.tsv")
+        b2 = sweep(bundle, hosts, f"{work}/before-2.tsv")
+        flaky = sorted(n for n in hosts if b1.get(n) != b2.get(n))
+        base = {n: v for n, v in b2.items() if n not in flaky}
+        say(f"baseline: {len(base)} steady, {len(flaky)} flaky (not judged): {' '.join(flaky)[:600]}")
+
+        if run(["dpkg", "-s", "libnginx-mod-stream"], check=False, capture=True).returncode != 0:
+            say("apt-get install libnginx-mod-stream (nginx's own stream module, same version)")
+            run("DEBIAN_FRONTEND=noninteractive apt-get install -y -q libnginx-mod-stream", capture=True)
+        if not run("grep -ls ngx_stream_module /etc/nginx/modules-enabled/*.conf || true", capture=True).stdout.strip():
+            raise RuntimeError("libnginx-mod-stream is installed but /etc/nginx/modules-enabled loads no ngx_stream_module")
+        run("nginx -t -q", capture=True)
+
+        install_caddy(bundle, spec)
+        install_files(bundle, ["etc/caddy/Caddyfile", "etc/caddy/edge-cert-sources"]
+                      + [f"usr/local/sbin/{x}" for x in ("nginx-edge-listen", "caddy-edge-certs", "edge-sweep", "edge-box")]
+                      + [f"etc/systemd/system/{u}" for u in UNITS])
+        run(["env", "EDGE_CERT_NO_RELOAD=1", "/usr/local/sbin/caddy-edge-certs"])
+        # As the caddy user: proves it can read the bundles, and validate opens the access
+        # logs, which must not end up root-owned.
+        run(["runuser", "-u", "caddy", "--", "env", "HOME=/var/lib/caddy", "/usr/local/bin/caddy", "validate",
+             "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"], capture=True)
+        say("caddy validate (as caddy): ok")
+        run("systemctl daemon-reload")
+        # Already serving (a re-apply after an edge.json change): reload, never drop connections.
+        run("systemctl enable caddy.service >/dev/null 2>&1; "
+            "if systemctl is-active --quiet caddy.service; then systemctl reload caddy.service; else systemctl restart caddy.service; fi")
+        time.sleep(2)
+        run("systemctl is-active --quiet caddy.service")
+        checked, bad = caddy_check(bundle, spec, base)
+        if bad:
+            raise RuntimeError("Caddy answers differently from nginx, before any traffic moved: " + json.dumps(bad))
+        say(f"Caddy on 127.0.0.1:{spec['ports']['caddy']} answers like nginx for {len(checked)} names")
+
+        # ---- the switch: one nginx reload hands :443 from the http servers to the stream.
+        install_files(bundle, ["etc/nginx/stream-enabled/dev2-edge.conf", "etc/nginx/conf.d/00-edge-realip.conf",
+                               "etc/systemd/system/nginx.service.d/dev2-edge.conf"])
+        edit_cloudflare()
+        edit_nginx_conf(spec)
+        out = run(["/usr/local/sbin/nginx-edge-listen"], capture=True).stdout
+        say(f"nginx-edge-listen: {len(out.splitlines())} files moved to 127.0.0.1:{spec['ports']['nginx']}")
+        run("nginx -t -q", capture=True)
+        run("systemctl daemon-reload")
+        elog = "/var/log/nginx/error.log"
+        mark = os.path.getsize(elog) if os.path.exists(elog) else 0
+        run("systemctl reload nginx")
+        time.sleep(3)
+        owners = run(["ss", "-Hltnp", "sport = :443"], capture=True).stdout
+        if "nginx" not in owners or not listening(spec["ports"]["nginx"]):
+            raise RuntimeError("after the reload :443 or :8444 is not nginx's: " + owners)
+        # A reload that cannot bind keeps the old configuration and says so only here.
+        with open(elog, errors="replace") as f:
+            f.seek(mark)
+            new_err = f.read()
+        if "[emerg]" in new_err:
+            raise RuntimeError("nginx reload failed: " + new_err[-800:])
+
+        say("after sweep")
+        after = sweep(bundle, hosts, f"{work}/after.tsv")
+        bad = compare(bundle, base, after)
+        if bad:
+            raise RuntimeError(f"{len(bad)} names changed status: " + json.dumps(bad)[:3000])
+        run("systemctl enable --now " + " ".join(WATCHERS) + " >/dev/null 2>&1")
+        say(f"done: {len(base)} names answer exactly as before; watchers on; backup {tgz}")
+        say(f"sweeps in {work}; rollback: /usr/local/sbin/edge-box rollback {tgz}")
+    except BaseException as e:
+        say(f"FAILED: {e}")
+        say("rolling back")
+        rollback(tgz)
+        sys.exit(1)
+
+
+def reverse_listen(text):
+    """Undo nginx-edge-listen for a file written after the backup."""
+    text = re.sub(r"^([ \t]*)# edge: \[::\]:443 belongs to the stream proxy \(nginx-edge-listen\)[ \t]*(.*)$",
+                  lambda m: m.group(1) + "listen [::]:443 ssl;" + ((" # " + m.group(2)) if m.group(2) else ""), text, flags=re.M)
+    def back(m):
+        params = [p for p in m.group(1).split() if p != "proxy_protocol"]
+        return "listen 443 " + " ".join(params) + ";"
+    return re.sub(r"listen\s+127\.0\.0\.1:8444\s+([^;]*);", back, text)
+
+
+def backup_path(arg=None):
+    """A backup apply made: nginx-<ts>.tgz directly under BACKUPS, nothing else."""
+    if not arg:
+        with open(LAST_BACKUP) as f:
+            arg = f.read().strip()
+    base = os.path.realpath(BACKUPS)
+    p = os.path.realpath(arg)
+    if os.path.dirname(p) != base or not re.fullmatch(r"nginx-\d{8}T\d{6}Z\.tgz", os.path.basename(p)) or not os.path.isfile(p):
+        raise SystemExit(f"edge-box: {arg} is not a backup under {base}")
+    return p
+
+
+def bundle_path(arg):
+    """A bundle dev2-edge shipped: a directory with edge.json and root/."""
+    p = os.path.realpath(arg)
+    if not (os.path.isfile(os.path.join(p, "edge.json")) and os.path.isdir(os.path.join(p, "root"))):
+        raise SystemExit(f"edge-box: {arg} is not a dev2-edge bundle")
+    return p
+
+
+def rollback(tgz=None):
+    tgz = backup_path(tgz)
+    say(f"rollback from {tgz}")
+    run("systemctl disable --now " + " ".join(WATCHERS) + " >/dev/null 2>&1", check=False)
+    for p in (DROPIN,):
+        if os.path.exists(p):
+            os.unlink(p)
+    run("systemctl daemon-reload", check=False)
+    for p in (STREAM_CONF, REALIP_CONF):
+        if os.path.exists(p):
+            os.unlink(p)
+    # Restore what the backup had (certificates pit-proxy-cert copied since stay as they are).
+    with tarfile.open(tgz) as tf:
+        members = [m for m in tf.getmembers() if m.name.startswith("etc/nginx/") and not m.name.startswith("etc/nginx/pit-proxy-certs")]
+        tf.extractall("/", members=members, **({"filter": "fully_trusted"} if hasattr(tarfile, "data_filter") else {}))
+        had = {m.name for m in tf.getmembers()}
+    # A vhost written after the backup was moved behind the edge: move it back.
+    for p in glob.glob("/etc/nginx/sites-enabled/*") + glob.glob("/etc/nginx/conf.d/*.conf"):
+        r = os.path.realpath(p)
+        if not os.path.isfile(r):
+            continue
+        with open(r) as f:
+            t = f.read()
+        if "127.0.0.1:8444" in t:
+            n = reverse_listen(t)
+            with open(r + ".edge-tmp", "w") as f:
+                f.write(n)
+            shutil.copymode(r, r + ".edge-tmp")
+            os.replace(r + ".edge-tmp", r)
+            say(f"listen 443 restored in {r}")
+    if os.path.isdir(STREAM_DIR) and not os.listdir(STREAM_DIR) and "etc/nginx/stream-enabled" not in had:
+        os.rmdir(STREAM_DIR)
+    t = run("nginx -t", check=False, capture=True)
+    if t.returncode != 0:
+        say("nginx -t FAILED after restore, NOT reloading; nginx keeps running its current config:\n" + t.stderr)
+        sys.exit(2)
+    run("systemctl reload nginx")
+    time.sleep(3)
+    run("systemctl disable --now caddy.service >/dev/null 2>&1", check=False)
+    owners = run(["ss", "-Hltnp", "sport = :443"], capture=True).stdout
+    say("rolled back; :443 -> " + ("nginx" if "nginx" in owners else owners.strip()))
+
+
+def route(bundle):
+    put(f"{bundle}/root/etc/nginx/stream-enabled/dev2-edge.conf", STREAM_CONF)
+    run("nginx -t -q", capture=True)
+    run("systemctl reload nginx")
+    time.sleep(2)  # the reload is asynchronous: let the new workers take over before reporting
+    with open(STREAM_CONF) as f:
+        on = sum(1 for l in f if ":8453;" in l)
+    say(f"stream map installed: {on} patterns to Caddy")
+
+
+def status():
+    print("stream map:", "present" if os.path.exists(STREAM_CONF) else "absent")
+    if os.path.exists(STREAM_CONF):
+        for l in open(STREAM_CONF):
+            if re.search(r"127\.0\.0\.1:\d+;", l) and "proxy_pass" not in l:
+                print("  " + l.strip())
+    for u in ["caddy.service"] + WATCHERS:
+        print(f"{u}: {run(['systemctl', 'is-active', u], check=False, capture=True).stdout.strip()}")
+    print("bundles:", len(glob.glob("/etc/caddy/edge-certs/*.pem")))
+    print(run("ss -Hltnp '( sport = :443 or sport = :8444 or sport = :8453 )' | awk '{print $4, $6}' | cut -c1-80", capture=True).stdout)
+    print("nginx-edge-listen --check:", run(["/usr/local/sbin/nginx-edge-listen", "--check"], check=False, capture=True).stdout.strip() or "clean")
+
+
+def main(argv):
+    if not argv:
+        print(__doc__)
+        return 2
+    cmd, rest = argv[0], argv[1:]
+    if cmd == "apply" and rest:
+        apply(bundle_path(rest[0]))
+    elif cmd == "route" and rest:
+        route(bundle_path(rest[0]))
+    elif cmd == "rollback":
+        rollback(rest[0] if rest and rest[0] else None)
+    elif cmd == "status":
+        status()
+    else:
+        print(__doc__)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

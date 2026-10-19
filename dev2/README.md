@@ -223,3 +223,56 @@ deploy-poll.sh --dry-run   what one pass would deploy
 
 Logs: `~/.local/state/deploy-poll/poll.log` and `<site>.log`.
 
+
+## The edge: pit.world on Caddy, everything else on nginx (`dev2-edge`)
+
+Since 2026-10-19 nginx's `stream {}` module owns :443 on dev2 and routes each
+connection by TLS server name (`ssl_preread`; TLS is not terminated there):
+
+| name | goes to |
+| --- | --- |
+| `pit.world`, `www.pit.world`, `*.pit.world` (gateways, `bbs.`/`social.`), the Moshpit names in `edge/edge.json` | Caddy, `127.0.0.1:8453` |
+| everything else (and `live.streaming.pit.world`, see `keep_on_nginx`) | nginx's own https servers, `127.0.0.1:8444` |
+
+Both hops carry a PROXY protocol header, so nginx (`real_ip_header proxy_protocol`,
+`conf.d/00-edge-realip.conf`) and Caddy (`proxy_protocol` listener wrapper) see the
+visitor's address; rate limits, logs and ThreatCrush are unchanged. Port 80 is not
+touched: nginx still answers ACME and http->https for every name. UDP 443 (HTTP/3) is
+out of scope.
+
+```
+dev2-edge render [--out DIR] [--off]  the box files for edge.json (nothing touches dev2)
+dev2-edge apply --yes                 backup, sweep, Caddy up + checked on its own port, nginx switched, sweep again
+dev2-edge route off|on                every name back to nginx (or to Caddy again): one nginx reload
+dev2-edge rollback [TARBALL]          restore /etc/nginx from apply's backup (~anthony/backups/nginx-<ts>.tgz), stop Caddy
+dev2-edge sweep | status
+```
+
+`apply` (via `edge/edge-box` on the box) takes the status of `https://<name>/` (verified
+and `-k`) and `http://<name>/` for every name nginx and Caddy serve, twice (names that
+differ between the two are set aside as flaky), starts Caddy and checks it answers each
+routed name exactly as nginx did before any visitor reaches it, switches nginx with one
+reload (the :443 socket passes from the http servers to the stream without a dropped
+connection), sweeps again, and rolls everything back if any name's status changed.
+
+**Certificates.** Caddy issues nothing (`auto_https off`). `caddy-edge-certs` copies
+what the existing renewals keep current into `/etc/caddy/edge-certs/<host>.pem`
+(root:caddy 0640): certbot for `pit.world`, `pit-proxy-cert` for each `<name>.pit.world`,
+`moshpit-renew` for the Moshpit names. `caddy-edge-certs.path` runs it within a second
+of any change to those directories (daily timer as a backstop) and reloads Caddy only
+when a bundle changed. A new `<name>.pit.world` therefore still costs one Let's Encrypt
+certificate, issued by `pit-proxy-cert` on the name's first plain-http visit, as before.
+
+**`listen 443` is now a bug, and is fixed for you.** With the stream on :443 an http
+server's `listen 443` passes `nginx -t`, but the reload cannot bind, so nginx keeps the
+old configuration without saying so (a restart fails outright). OpenInstall's
+`bin/install.sh`, moshpit-proxy's `setup-origin.sh` (every Moshpit renewal) and
+`certbot --nginx` still write it. `nginx-edge-listen` rewrites such lines to
+`listen 127.0.0.1:8444 ssl proxy_protocol;` (and drops `[::]:443`): it runs before every
+nginx start and reload (`nginx.service.d/dev2-edge.conf`) and whenever a vhost file
+changes (`nginx-edge-listen.path`). `dev2-site vhost` renders the 8444 form itself when
+the edge is on. `nginx-edge-listen --check` lists anything left.
+
+**Cloudflare.** One `real_ip_header` per level: `conf.d/cloudflare-realip.conf`'s
+`CF-Connecting-IP` line is commented out. No dev2 name was proxied by Cloudflare on
+2026-10-19; one that is would log Cloudflare's edge address again.

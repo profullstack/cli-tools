@@ -1,0 +1,7 @@
+# managed by cli-tools/dev2/dev2-edge
+[Unit]
+Description=Move any new nginx `listen 443` behind the edge stream proxy, and reload
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nginx-edge-listen --reload

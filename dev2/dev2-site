@@ -1568,6 +1568,19 @@ def keepalive_upstreams(conf, site_name):
     head, sep, rest = conf.partition("\nserver {")
     return head + "\n" + ups.rstrip("\n") + "\n" + sep + rest
 
+def edge_listen(conf):
+    """With dev2-edge on, nginx's https servers listen behind the :443 stream proxy
+    (127.0.0.1:8444, PROXY protocol): render that form instead of `listen 443`. The
+    rewrite is dev2/edge/nginx-edge-listen's, the same one the box applies to vhosts
+    other tools write, so a re-render never fights it."""
+    if ssh("root", "test -e /etc/nginx/stream-enabled/dev2-edge.conf && echo on", check=False).strip() != "on":
+        return conf
+    import importlib.machinery, importlib.util
+    loader = importlib.machinery.SourceFileLoader("nginx_edge_listen", os.path.join(HERE, "edge", "nginx-edge-listen"))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+    loader.exec_module(mod)
+    return mod.normalize(conf)
+
 def vhost_sites():
     """Registry sites (and sites.d-only entries) whose vhost is enabled on dev2."""
     have = set(ssh("root", "ls -1 /etc/nginx/sites-enabled", check=False).split())
@@ -1589,6 +1602,7 @@ def cmd_vhost(args):
     for name in names:
         s = site(name)
         conf, domains = render_vhost(s)
+        conf = edge_listen(conf)
         f = f"/etc/nginx/sites-available/{s['site']}"
         if getattr(args, "dry_run", False):
             live = ssh("root", f"cat {shlex.quote(f)} 2>/dev/null || true", check=False)

@@ -1,0 +1,77 @@
+#!/bin/sh
+# caddy-edge-certs: hand Caddy the certificates dev2 already keeps current.
+#
+# Installed as /usr/local/sbin/caddy-edge-certs by cli-tools/dev2/dev2-edge; run by
+# caddy-edge-certs.path whenever a source directory changes, and daily by its timer.
+#
+# Caddy does not issue anything on dev2 (auto_https off). The certificates come from
+# the renewals that existed before Caddy did, unchanged:
+#   pit.world + www            certbot (nginx authenticator, port 80 stays on nginx)
+#   <name>.pit.world (+bbs/social)  pit-proxy-cert -> /etc/nginx/pit-proxy-certs
+#   Moshpit names              moshpit-renew(.timer) -> /etc/ssl/moshpit[-riotcoder]
+# Those keys are root-only, so this copies each certificate + key into one bundle
+# (<host>.pem, root:caddy 0640) under $OUT, which the Caddyfile loads with
+# `tls { load ... }`, and reloads Caddy only when a bundle changed.
+#
+# Sources come from $SOURCES, one per line: <dir> [<crt file> <key file> <name>]
+# Without the three extra fields every <x>.crt with a matching <x>.key in <dir> is used.
+set -eu
+
+OUT="${EDGE_CERT_OUT:-/etc/caddy/edge-certs}"
+SOURCES="${EDGE_CERT_SOURCES:-/etc/caddy/edge-cert-sources}"
+GROUP="${EDGE_CERT_GROUP:-caddy}"
+RELOAD="${EDGE_CERT_RELOAD:-systemctl reload caddy}"
+OPENSSL="${OPENSSL:-openssl}"
+
+[ -f "$SOURCES" ] || { echo "caddy-edge-certs: no $SOURCES" >&2; exit 1; }
+umask 027
+parent=$(dirname "$OUT")
+mkdir -p "$parent"
+tmp=$(mktemp -d "$parent/.edge-certs.XXXXXX")
+trap 'rm -rf "$tmp"' EXIT
+
+bad=0
+add() { # <name> <crt> <key>
+  [ -s "$2" ] && [ -s "$3" ] || return 0
+  # A pair that does not match would make Caddy refuse the whole reload: skip it, loudly.
+  c=$($OPENSSL x509 -in "$2" -noout -pubkey 2>/dev/null | $OPENSSL sha256 2>/dev/null) || c=x
+  k=$($OPENSSL pkey -in "$3" -pubout 2>/dev/null | $OPENSSL sha256 2>/dev/null) || k=y
+  if [ "$c" != "$k" ]; then
+    echo "caddy-edge-certs: $2 and $3 do not match, skipped" >&2
+    bad=$((bad + 1))
+    return 0
+  fi
+  { cat "$2"; echo; cat "$3"; } > "$tmp/$1.pem"
+}
+
+while read -r dir crt key name; do
+  case "$dir" in ''|'#'*) continue ;; esac
+  if [ -n "${name:-}" ]; then
+    add "$name" "$dir/$crt" "$dir/$key"
+    continue
+  fi
+  for c in "$dir"/*.crt; do
+    [ -f "$c" ] || continue
+    add "$(basename "$c" .crt)" "$c" "${c%.crt}.key"
+  done
+done < "$SOURCES"
+
+chgrp -R "$GROUP" "$tmp" 2>/dev/null || true
+chmod 0750 "$tmp"
+find "$tmp" -type f -exec chmod 0640 {} +
+
+if [ -d "$OUT" ] && diff -rq "$OUT" "$tmp" >/dev/null 2>&1; then
+  exit 0
+fi
+n=$(find "$tmp" -type f | wc -l | tr -d ' ')
+if [ -d "$OUT" ]; then mv "$OUT" "$OUT.old.$$"; fi
+mv "$tmp" "$OUT"
+rm -rf "$OUT.old.$$"
+trap - EXIT
+if [ "$bad" = 0 ]; then echo "caddy-edge-certs: $n bundles in $OUT"; else echo "caddy-edge-certs: $n bundles in $OUT, $bad skipped"; fi
+if [ -n "$RELOAD" ] && [ "${EDGE_CERT_NO_RELOAD:-0}" != 1 ]; then
+  # Not running yet (first install) is fine; anything else is a real failure.
+  if systemctl is-active --quiet caddy 2>/dev/null || [ "$RELOAD" != "systemctl reload caddy" ]; then
+    $RELOAD
+  fi
+fi

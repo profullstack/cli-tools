@@ -1,0 +1,33 @@
+{
+  "//": "dev2 edge: which TLS names the nginx stream proxy hands to Caddy, and what Caddy does with them. Rendered by dev2/dev2-edge. Every upstream is the one nginx used before the move (2026-10-19). Certificates are NOT issued by Caddy: caddy-edge-certs copies the files the existing renewals (certbot, pit-proxy-cert, moshpit-renew) already keep current, and reloads Caddy when they change.",
+  "ports": { "nginx": 8444, "caddy": 8453, "caddy_http": 8454, "caddy_admin": 2019 },
+  "caddy_version": "2.11.7",
+  "stream_timeout": "24h",
+  "nginx": { "worker_connections": 4096, "worker_rlimit_nofile": 16384 },
+  "cert_sources": [
+    { "dir": "/etc/letsencrypt/live/pit.world", "crt": "fullchain.pem", "key": "privkey.pem", "as": "pit.world" },
+    { "dir": "/etc/nginx/pit-proxy-certs" },
+    { "dir": "/etc/ssl/moshpit" },
+    { "dir": "/etc/ssl/moshpit-riotcoder" }
+  ],
+  "keep_on_nginx": {
+    "//": "Names under a routed pattern that stay on nginx for now, with why.",
+    "live.streaming.pit.world": "per-path routing to two nixamp servers with a 404 fallback (error_page @server2); move after it has its own Caddy rehearsal"
+  },
+  "sites": [
+    { "hosts": ["pit.world"], "proxy": 8787, "max_body": "1MiB" },
+    { "hosts": ["www.pit.world"], "redirect": "https://pit.world{uri}" },
+    { "hosts": ["ad.network.pit.world"], "proxy": 8800, "max_body": "1MiB", "gzip": true },
+    { "hosts": ["*.*.pit.world", "*.*.*.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,
+      "//": "pit-proxy: every <name>.pit.world (+ bbs./social.) relayed by the pit.world app; one Let's Encrypt certificate per name from pit-proxy-cert" },
+    { "hosts": ["built.indie"], "proxy": 8798, "max_body": "1MiB", "moshpit": true },
+    { "hosts": ["family.ancestry", "family.tree"], "proxy": 8792, "max_body": "30MiB", "moshpit": true },
+    { "hosts": ["pay.agent"], "proxy": 8796, "max_body": "64KiB", "moshpit": true },
+    { "hosts": ["search.peptides"], "proxy": 8802, "max_body": "1MiB", "moshpit": true },
+    { "hosts": ["seo.rank"], "proxy": 8790, "max_body": "64KiB", "moshpit": true },
+    { "hosts": ["alt.2600"], "root": "/var/www/alt.2600", "moshpit": true, "access_log": true },
+    { "hosts": ["auto.hacker"], "root": "/var/www/auto.hacker", "moshpit": true, "access_log": true },
+    { "hosts": ["chovy.hacker"], "root": "/var/www/chovy.hacker", "moshpit": true, "access_log": true },
+    { "hosts": ["profullstack.agent"], "root": "/var/www/profullstack.agent", "moshpit": true, "access_log": true }
+  ]
+}

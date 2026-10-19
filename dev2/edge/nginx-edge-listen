@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""
+nginx-edge-listen: keep every nginx `listen 443` on dev2 behind the edge stream proxy.
+
+Installed as /usr/local/sbin/nginx-edge-listen by cli-tools/dev2/dev2-edge.
+
+With the edge on, nginx's `stream {}` block owns :443 and hands each connection, by
+TLS server name, either to Caddy (pit.world, *.pit.world, Moshpit names) or back to
+nginx's own http servers on 127.0.0.1:8444 with a PROXY protocol header. So an http
+server block must say
+
+    listen 127.0.0.1:8444 ssl proxy_protocol;
+
+and never `listen 443` (or `listen [::]:443`): `nginx -t` passes such a block, but the
+reload that follows cannot bind :443 (the stream has it) and nginx keeps running the
+OLD configuration, silently; a restart fails outright and takes every site down.
+
+Several tools still write `listen 443` (OpenInstall bin/install.sh, moshpit-proxy's
+setup-origin.sh on every Moshpit renewal, certbot --nginx). This script rewrites those
+lines in place, and runs before every nginx start and reload (systemd drop-in) and
+whenever a vhost file changes (nginx-edge-listen.path), so they cannot stick.
+
+    nginx-edge-listen            rewrite, print each file changed
+    nginx-edge-listen --check    change nothing; exit 1 if anything would change
+    nginx-edge-listen --reload   rewrite, then `nginx -t && systemctl reload nginx` if anything changed
+    nginx-edge-listen --quiet    no output
+    nginx-edge-listen FILE...    only these files (tests, or one vhost)
+
+Rules, per `listen` directive:
+  listen 443 ...; / listen 0.0.0.0:443 ...; / listen <ipv4>:443 ...; / listen *:443 ...;
+      -> listen 127.0.0.1:8444 <same parameters, `ssl` and `proxy_protocol` added,
+         ipv6only/reuseport/backlog/deferred/fastopen dropped>;
+  listen [::]:443 ...;  -> removed (commented), the stream listens on [::]:443
+  listen ... quic ...;  -> untouched (UDP, not the stream's business)
+Anything else, including ports other than 443, is untouched. Idempotent.
+"""
+import glob
+import os
+import re
+import subprocess
+import sys
+import tempfile
+
+BACKEND = os.environ.get("EDGE_NGINX_BACKEND", "127.0.0.1:8444")
+NGINX = os.environ.get("EDGE_NGINX_DIR", "/etc/nginx")
+MARK = "# edge: [::]:443 belongs to the stream proxy (nginx-edge-listen)"
+# Socket options that may be given only once per address:port; the backend listen
+# is shared by every server block, so none of them can come along.
+SOCKET_OPTS = re.compile(r"^(ipv6only|reuseport|backlog|deferred|fastopen|rcvbuf|sndbuf|accept_filter|so_keepalive|setfib|bind)(=|$)")
+
+LISTEN = re.compile(r"(?P<lead>(?:^|[;{}\s]))listen(?P<sp>\s+)(?P<addr>\S+?)(?P<params>(?:\s+[^;#]*?)?)\s*;")
+V4_443 = re.compile(r"^(?:(?:\d{1,3}\.){3}\d{1,3}:|\*:)?443$")
+V6_443 = re.compile(r"^\[[0-9a-fA-F:]*\]:443$")
+
+
+def _line(line):
+    """Rewrite the listen directives on one line (comments left alone)."""
+    code, hash_, comment = line.partition("#")
+    if not re.search(r"\blisten\b", code):
+        return line
+    out, pos, v6 = [], 0, False
+    for m in LISTEN.finditer(code):
+        addr, params = m.group("addr"), m.group("params").split()
+        if "quic" in params:
+            continue
+        if V6_443.match(addr):
+            out.append(code[pos:m.start()] + m.group("lead"))
+            pos, v6 = m.end(), True
+            continue
+        if not V4_443.match(addr):
+            continue
+        keep = [p for p in params if not SOCKET_OPTS.match(p)]
+        if "ssl" not in keep:
+            keep.insert(0, "ssl")
+        if "proxy_protocol" not in keep:
+            keep.append("proxy_protocol")
+        out.append(code[pos:m.start()] + m.group("lead") + "listen" + m.group("sp") + BACKEND + " " + " ".join(keep) + ";")
+        pos = m.end()
+    if pos == 0:
+        return line
+    new = "".join(out) + code[pos:]
+    if v6 and not new.strip():
+        # The whole line was `listen [::]:443 ...;` (+ maybe a comment): keep a marker.
+        indent = re.match(r"\s*", line).group(0)
+        return indent + MARK + ((" " + comment.strip()) if hash_ else "") + ("\n" if line.endswith("\n") else "")
+    return new + hash_ + comment
+
+
+def normalize(text):
+    """The text with every listen 443 moved behind the edge. Pure; used by dev2-site too."""
+    return "".join(_line(l) for l in text.splitlines(keepends=True))
+
+
+def files():
+    """Real files nginx loads from sites-enabled and conf.d (symlinks resolved once)."""
+    seen, out = set(), []
+    for p in sorted(glob.glob(os.path.join(NGINX, "sites-enabled", "*")) + glob.glob(os.path.join(NGINX, "conf.d", "*.conf"))):
+        r = os.path.realpath(p)
+        if r in seen or not os.path.isfile(r):
+            continue
+        seen.add(r)
+        out.append(r)
+    return out
+
+
+def rewrite(path, check):
+    with open(path, encoding="utf-8", errors="surrogateescape") as f:
+        old = f.read()
+    new = normalize(old)
+    if new == old:
+        return False
+    if check:
+        return True
+    st = os.stat(path)
+    # Temp file + rename in the same directory: never `cmd file > file` (it truncates first).
+    fd, tmp = tempfile.mkstemp(prefix=".edge-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", errors="surrogateescape") as f:
+            f.write(new)
+        os.chmod(tmp, st.st_mode & 0o7777)
+        try:
+            os.chown(tmp, st.st_uid, st.st_gid)
+        except PermissionError:
+            pass
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return True
+
+
+def main(argv):
+    flags = {a for a in argv if a.startswith("--")}
+    paths = [a for a in argv if not a.startswith("--")]
+    unknown = flags - {"--check", "--reload", "--quiet"}
+    if unknown:
+        print(f"nginx-edge-listen: unknown option {sorted(unknown)[0]}", file=sys.stderr)
+        return 2
+    check, quiet = "--check" in flags, "--quiet" in flags
+    changed = []
+    for p in paths or files():
+        try:
+            if rewrite(p, check):
+                changed.append(p)
+        except OSError as e:
+            print(f"nginx-edge-listen: {p}: {e}", file=sys.stderr)
+    for p in changed:
+        if not quiet:
+            print(("would rewrite " if check else "rewrote ") + p)
+    if check:
+        return 1 if changed else 0
+    if changed and "--reload" in flags:
+        t = subprocess.run(["nginx", "-t", "-q"])
+        if t.returncode != 0:
+            print("nginx-edge-listen: nginx -t failed after the rewrite; not reloading", file=sys.stderr)
+            return 1
+        return subprocess.run(["systemctl", "reload", "nginx"]).returncode
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
