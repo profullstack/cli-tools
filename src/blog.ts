@@ -124,7 +124,10 @@ export function tracker(siteId: string | null): string {
 }
 
 /**
- * The sponsored bar that runs at the foot of every page.
+ * The sponsored bar at the top of every post, just under the heading.
+ *
+ * Not at the foot of the page: no ads in footers. A post has no other ad, so
+ * the unit moves up into the content rather than being dropped.
  *
  * `text_link` by default, not a 728x90 or 300x250: it is a 40px full-width
  * strip that carries its own "Sponsored" mark inside the frame, so `ad.js`
@@ -133,21 +136,26 @@ export function tracker(siteId: string | null): string {
  *
  * The slot id is the author's own, so it is configuration rather than a
  * constant: a shared one would bill every installation's impressions to
- * whoever happened to be in the file. `ad.js` loads only when there is a slot
- * for it to fill, and the tracker is emitted here so no page carries it twice.
+ * whoever happened to be in the file.
  */
-export function adUnit(
-  config: Pick<BlogConfig, 'adSlotId' | 'adFormat' | 'trackerSiteId'>,
-): string {
+export function adSlot(config: Pick<BlogConfig, 'adSlotId' | 'adFormat'>): string {
+  if (!config.adSlotId) return '';
+  return (
+    `<aside data-cp-ad data-slot="${esc(config.adSlotId)}"` +
+    ` data-format="${esc(config.adFormat)}"></aside>`
+  );
+}
+
+/**
+ * The CrawlProof scripts, last thing before `</body>` so nothing about the post
+ * waits on a third-party host. `ad.js` loads only when there is a slot for it
+ * to fill, and the tracker is emitted here so no page carries it twice.
+ */
+export function adScripts(config: Pick<BlogConfig, 'adSlotId' | 'trackerSiteId'>): string {
   const tag = tracker(config.trackerSiteId);
   if (!config.adSlotId) return tag;
-
-  const slot =
-    `<aside data-cp-ad data-slot="${esc(config.adSlotId)}"` +
-    ` data-format="${esc(config.adFormat)}"></aside>`;
-
-  return [slot, '', tag, '<script src="https://crawlproof.com/ad.js" async></script>']
-    .filter((line, index, all) => line !== '' || all[index + 1] !== '')
+  return [tag, '<script src="https://crawlproof.com/ad.js" async></script>']
+    .filter(Boolean)
     .join('\n');
 }
 
@@ -194,7 +202,8 @@ export function renderPost(
   const disclosure = config.disclosure
     ? `\n\n<p><small>${typogrify(config.disclosure)}</small></p>`
     : '';
-  const footer = adUnit(config);
+  const slot = adSlot(config);
+  const scripts = adScripts(config);
   // Omitted entirely rather than emitted empty: a canonical pointing nowhere is
   // worse than none.
   const canonicalTag = canonical ? `\n<link rel="canonical" href="${esc(canonical)}">` : '';
@@ -216,7 +225,7 @@ export function renderPost(
 <h1>${heading}</h1>
 
 ${byline}${disclosure}
-
+${slot ? `\n${slot}\n` : ''}
 <nav>
 	<a href="../blog">back to my blog postings</a>
 </nav>
@@ -228,7 +237,7 @@ ${content}
 </nav>
 ${identity(config.links)}
 </article>
-${footer ? `\n${footer}\n` : ''}
+${scripts ? `\n${scripts}\n` : ''}
 </body>
 </html>
 `;
