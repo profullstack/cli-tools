@@ -48,11 +48,12 @@ TypeScript, installed as executables on `PATH`.
 | [`explee`](#explee) | Add more of your own leads to an Explee project from a CSV |
 | [`email-cleaner`](#email-cleaner) | Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses |
 
-One thing here is not a `PATH` command and does not need Node:
+Two things here are not `PATH` commands and do not need Node:
 
 | Script | What it does |
 | --- | --- |
 | [`root-ubuntu.sh`](#root-ubuntush) | Provision an Ubuntu/Debian server: dev environment, accounts, web, TLS |
+| [`root-w3bs-os.sh`](#root-w3bs-ossh) | The same for W3BS OS (Alpine, OpenRC): w3bs CLI packages, Caddy, confinement |
 
 ## Requirements
 
@@ -2828,6 +2829,54 @@ because a public script must not ship somebody's address and a made-up one sends
 a stranger's certificate warnings into a black hole. There is no default ad slot
 for the same shape of reason: a slot id is an account, so shipping one would bill
 every box that ever ran this to whoever owned it.
+
+### `root-w3bs-os.sh`
+
+The same job as [`root-ubuntu.sh`](#root-ubuntush) on **W3BS OS** (Alpine
+Linux: musl, apk, OpenRC, busybox ash). Same flags, same `server.conf`, same
+state directory, same managed-file rule, same subcommands (`groups`, `confine`,
+`mount`/`share`, `sandbox`):
+
+```sh
+# on the server, as root (doas on the ISO)
+curl -fsSL https://raw.githubusercontent.com/profullstack/cli-tools/master/root-w3bs-os.sh \
+  | bash -s -- --refresh
+./root-w3bs-os.sh alice --groups wheel     # downloaded first, to be asked questions
+```
+
+A stock Alpine box has no bash: `sh root-w3bs-os.sh` installs it and re-runs
+itself; piped into `sh` it says so in one sentence instead.
+
+What differs from the Ubuntu script:
+
+- **Packages go through the `w3bs` CLI.** `w3bs dist-upgrade --yes` (or `w3bs os
+  update`, once the CLI has it) upgrades the system and every W3BS package; apk
+  adds the base packages; moshcode, threatcrush, hqterm/hqsh and (with
+  `--with-sh1pt`) sh1pt are `w3bs install <catalog id>` per account, with the
+  publisher's curl installer only as the fallback where w3bs is missing. A daily
+  `/etc/periodic/daily/w3bs-os-update` replaces unattended-upgrades.
+- **Caddy instead of nginx + certbot + acme.sh.** Every page and dev app is a
+  named Caddy site, so each gets its own certificate from Caddy (no wildcard, no
+  DNS-01, no renewal job). One import file per account in `/etc/caddy/users`,
+  regenerated every minute from `~/public_html` and `~/apps`; your own sites go
+  in `/etc/caddy/conf.d`. Admin API on loopback. `WEB_TLS=auto|internal|off`.
+- **OpenRC first, systemd when it is the running init.** Timers become crond
+  jobs; the ssh-agent is one long-lived agent per account on `~/.ssh/agent.sock`;
+  zram is `zram-init`; the per-user resource caps are a cgroup v2 group per
+  confined account (`/sys/fs/cgroup/w3bs.confined/<login>`), kept by a
+  once-a-minute sweep and, where sshd has PAM, a `pam_exec` hook at login.
+- **wheel is the admin group** (doas and the ISO use it); `DEFAULT_GROUPS` is
+  `users` with confinement on and `wheel` with it off.
+- **Key-only accounts get a `*` password, not `!`.** Alpine's sshd is built
+  without PAM, and then a `!` password is a locked account: even a valid key is
+  refused.
+- Refuses to run anywhere but Alpine (Ubuntu/Debian are pointed at
+  `root-ubuntu.sh`); `--force` overrides it.
+
+Not ported: the sponsor ad (nginx SSI), `networkd-dispatcher` (Alpine has no
+systemd-networkd), and the threatcrush enforcing daemon under OpenRC (its
+installer writes a systemd unit). PAM limits are written but only bite where
+sshd runs with PAM (`openssh-server-pam`, `UsePAM yes`); `confine` says which.
 
 ## As a moshcode plugin
 
