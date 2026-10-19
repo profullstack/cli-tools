@@ -25,6 +25,7 @@ import tempfile
 import time
 
 STATE = "/root/dev2-edge"
+LAST_BACKUP = "/root/dev2-edge/last-backup"
 BACKUPS = "/home/anthony/backups"
 NGINX_CONF = "/etc/nginx/nginx.conf"
 STREAM_DIR = "/etc/nginx/stream-enabled"
@@ -131,7 +132,7 @@ def backup(ts):
         os.umask(old_umask)
     os.chmod(tgz, 0o600)
     os.makedirs(STATE, exist_ok=True)
-    with open(f"{STATE}/last-backup", "w") as f:
+    with open(LAST_BACKUP, "w") as f:
         f.write(tgz + "\n")
     say(f"backup: {tgz}")
     return tgz
@@ -332,7 +333,7 @@ def reverse_listen(text):
 def backup_path(arg=None):
     """A backup apply made: nginx-<ts>.tgz directly under BACKUPS, nothing else."""
     if not arg:
-        with open(os.path.join(STATE, "last-backup")) as f:
+        with open(LAST_BACKUP) as f:
             arg = f.read().strip()
     base = os.path.realpath(BACKUPS)
     p = os.path.realpath(arg)
