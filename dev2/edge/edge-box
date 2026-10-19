@@ -25,7 +25,7 @@ import tempfile
 import time
 
 STATE = "/root/dev2-edge"
-BACKUPS = os.environ.get("EDGE_BACKUPS", "/home/anthony/backups")
+BACKUPS = "/home/anthony/backups"
 NGINX_CONF = "/etc/nginx/nginx.conf"
 STREAM_DIR = "/etc/nginx/stream-enabled"
 STREAM_CONF = f"{STREAM_DIR}/dev2-edge.conf"
