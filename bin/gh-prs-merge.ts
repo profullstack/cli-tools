@@ -82,6 +82,11 @@ Fixing (--fix):
                             rebuilds it (lockfile-only, no scripts), pushes a
                             merge commit (never a force push) and parks it.
                             Same-repo PRs only; forks stay FIXME
+    version-line conflict   a package.json whose only conflict is its
+                            "version" line (two PRs each bumped the release):
+                            keeps the head's version if it is ahead of the
+                            base, else bumps the base's patch. Combines with
+                            the lockfile repair above
 
   Never repaired:
     Any other DIRTY PR. update-branch cannot merge over a conflict, so it is

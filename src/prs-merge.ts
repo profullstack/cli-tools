@@ -372,7 +372,7 @@ export async function sweep(
       if (pr.mergeStateStatus === 'DIRTY' && options.resolveLockfiles) {
         // Both sides bumped dependencies and only the lockfile collided. That
         // is not a disagreement: the merged manifests say what both wanted.
-        emit({ kind: 'fixing', url, text: `${reason}; trying a lockfile-only conflict resolution` });
+        emit({ kind: 'fixing', url, text: `${reason}; trying a lockfile/version-line conflict resolution` });
         let outcome: Awaited<ReturnType<LockfileResolver>>;
         try {
           outcome = await options.resolveLockfiles(pr);

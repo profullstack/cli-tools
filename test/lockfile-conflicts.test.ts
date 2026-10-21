@@ -1,7 +1,57 @@
 import { describe, expect, it } from 'vitest';
 import type { RunResult } from '../src/exec.ts';
 import type { PullRequest } from '../src/gh.ts';
-import { isLockfile, resolveLockfileConflicts } from '../src/lockfile-conflicts.ts';
+import {
+  isLockfile,
+  resolveLockfileConflicts,
+  resolveVersionConflict,
+} from '../src/lockfile-conflicts.ts';
+
+/** package.json after `git merge main` into a branch: ours is the head, theirs the base. */
+const conflict = (head: string, base: string, diff3 = false) =>
+  [
+    '{',
+    '  "name": "nixamp",',
+    '<<<<<<< HEAD',
+    `  "version": "${head}",`,
+    ...(diff3 ? ['||||||| abc123', '  "version": "0.52.1",'] : []),
+    '=======',
+    `  "version": "${base}",`,
+    '>>>>>>> FETCH_HEAD',
+    '  "type": "module"',
+    '}',
+    '',
+  ].join('\n');
+
+describe('version-line conflict resolution', () => {
+  it('bumps the base patch when the head is behind it', () => {
+    expect(resolveVersionConflict(conflict('0.52.2', '0.53.3'))).toBe(
+      '{\n  "name": "nixamp",\n  "version": "0.53.4",\n  "type": "module"\n}\n',
+    );
+  });
+
+  it('keeps the head version when it is already ahead', () => {
+    expect(resolveVersionConflict(conflict('1.0.0', '0.53.3'))).toContain('"version": "1.0.0",');
+  });
+
+  it('bumps rather than ties when both sides picked the same next version', () => {
+    expect(resolveVersionConflict(conflict('0.53.4', '0.53.4'))).toContain('"version": "0.53.5",');
+  });
+
+  it('reads diff3 markers', () => {
+    expect(resolveVersionConflict(conflict('0.52.2', '0.53.3', true))).toContain(
+      '"version": "0.53.4",',
+    );
+  });
+
+  it('refuses anything that is not one version line a side', () => {
+    expect(resolveVersionConflict(conflict('0.52.2-beta.1', '0.53.3'))).toBeNull();
+    expect(
+      resolveVersionConflict(conflict('0.52.2', '0.53.3').replace('=======', '  "private": true,\n=======')),
+    ).toBeNull();
+    expect(resolveVersionConflict('{"version": "1.0.0"}\n')).toBeNull();
+  });
+});
 
 const pr: PullRequest = {
   url: 'https://github.com/acme/repo/pull/7',
@@ -93,6 +143,38 @@ describe('lockfile conflict resolution', () => {
     const { exec, calls } = stubExec({ conflicted: ['bun.lock'], head: 'cafe' });
     const outcome = await resolveLockfileConflicts(pr, exec);
     expect(outcome.kind).toBe('manual');
+    expect(calls.some((c) => c.startsWith('git push'))).toBe(false);
+  });
+
+  it('resolves a version-only package.json before rebuilding the lockfile', async () => {
+    const { exec, calls } = stubExec({ conflicted: ['package.json', 'bun.lock'] });
+    const written: Record<string, string> = {};
+    const fs = {
+      read: async () => conflict('0.52.2', '0.53.3'),
+      write: async (path: string, text: string) => {
+        written[path] = text;
+        calls.push(`write ${path.split('/').pop()}`);
+      },
+    };
+    const outcome = await resolveLockfileConflicts(pr, exec, fs);
+
+    expect(outcome).toEqual({ kind: 'resolved', files: ['package.json', 'bun.lock'] });
+    expect(Object.values(written)[0]).toContain('"version": "0.53.4",');
+    expect(calls.indexOf('write package.json')).toBeLessThan(
+      calls.indexOf('bun install --lockfile-only --ignore-scripts'),
+    );
+  });
+
+  it('declines a package.json conflict that is more than the version', async () => {
+    const { exec, calls } = stubExec({ conflicted: ['package.json'] });
+    const fs = {
+      read: async () => conflict('0.52.2', '0.53.3').replace('"version": "0.52.2",', '"version": "0.52.2",\n  "private": true,'),
+      write: async () => {},
+    };
+    expect(await resolveLockfileConflicts(pr, exec, fs)).toEqual({
+      kind: 'manual',
+      reason: 'package.json conflicts beyond its version line',
+    });
     expect(calls.some((c) => c.startsWith('git push'))).toBe(false);
   });
 
