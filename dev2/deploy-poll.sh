@@ -43,9 +43,13 @@ case "${1:-}" in
   *) echo "usage: deploy-poll.sh [--dry-run|--status]" >&2; exit 2 ;;
 esac
 
-# One pass at a time; a slow ls-remote must not stack cron runs.
-exec 9>"$STATE_DIR/.poll.lock"
-flock -n 9 || exit 0
+# One deploying pass at a time; a slow ls-remote must not stack cron runs.
+# --status/--dry-run only read, so they skip the lock: a status loop holding it
+# made every cron pass exit silently and nothing deployed for hours.
+if [ "$mode" = run ]; then
+  exec 9>"$STATE_DIR/.poll.lock"
+  flock -n 9 || exit 0
+fi
 
 log() { printf '%s %s\n' "$(date -u +%FT%TZ)" "$*" >> "$STATE_DIR/poll.log"; }
 
