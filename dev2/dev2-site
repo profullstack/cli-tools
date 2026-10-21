@@ -1189,6 +1189,7 @@ def cmd_provision(args):
         key_alias = f"github.com-{s['repo'].replace('/', '__')}"
         repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
     deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\nIMAGE_ONLY={'1' if image_only else '0'}\n"
+    if s.get("standby_port"): deploy_env += f"STANDBY_PORT={s['standby_port']}\n"
     # Secrets come from the logicsrc team vault on every deploy (deploy-app.sh
     # sync_env_from_vault): sites.d "vault" names it, else <repo name>--prod; "vault": ""
     # turns it off. env_remove keys are never taken from the vault.
@@ -1545,7 +1546,7 @@ def render_vhost(s):
             blk = blk.replace(anchor, p["locations"].rstrip("\n") + "\n\n" + anchor)
         conf += "\n# " + p["host"] + " -> 127.0.0.1:" + str(p["port"]) + "\n" + blk
         conf += "\nserver {\n    listen 80;\n    listen [::]:80;\n    server_name " + p["host"] + ";\n    return 301 https://$host$request_uri;\n}\n"
-    return keepalive_upstreams(conf, s["site"]), domains
+    return keepalive_upstreams(conf, s["site"], {str(s["port"]): s["standby_port"]} if s.get("port") and s.get("standby_port") else {}), domains
 
 # nginx -> app keepalive. Without an upstream block nginx opens a new TCP connection to
 # the app for every request, and the box-wide $connection_upgrade map sends
@@ -1558,13 +1559,21 @@ KEEPALIVE_MAP = "/etc/nginx/conf.d/profullstack-keepalive.conf"
 KEEPALIVE_MAP_BODY = (f"# managed by cli-tools/dev2/dev2-site vhost: see keepalive_upstreams\n"
                       "map $http_upgrade $connection_upgrade_keepalive {\n    default upgrade;\n    ''      '';\n}\n")
 
-def keepalive_upstreams(conf, site_name):
+# A site with "standby_port" in sites.d gets that port as the `backup` server of its
+# app's upstream. deploy-app.sh starts the new build there before it recreates the main
+# container, so while the main one restarts nginx's refused connection goes on to the
+# standby (proxy_next_upstream's default `error` retries even a POST that was never
+# sent) and nobody sees the maintenance page. With no standby running, the backup
+# refuses too and the maintenance page answers as before.
+def keepalive_upstreams(conf, site_name, standby=None):
     key = re.sub(r"[^A-Za-z0-9]", "_", site_name)
     ports = sorted(set(re.findall(r"proxy_pass http://127\.0\.0\.1:(\d+);", conf)), key=int)
     if not ports: return conf
     conf = re.sub(r"proxy_pass http://127\.0\.0\.1:(\d+);", lambda m: f"proxy_pass http://dev2_{key}_{m.group(1)};", conf)
     conf = conf.replace("proxy_set_header Connection $connection_upgrade;", "proxy_set_header Connection $connection_upgrade_keepalive;")
-    ups = "".join(f"upstream dev2_{key}_{p} {{\n    server 127.0.0.1:{p};\n    keepalive 16;\n    keepalive_timeout 4s;\n}}\n\n" for p in ports)
+    standby = standby or {}
+    backup = lambda p: f"    server 127.0.0.1:{standby[p]} backup;\n" if standby.get(p) else ""
+    ups = "".join(f"upstream dev2_{key}_{p} {{\n    server 127.0.0.1:{p};\n{backup(p)}    keepalive 16;\n    keepalive_timeout 4s;\n}}\n\n" for p in ports)
     head, sep, rest = conf.partition("\nserver {")
     return head + "\n" + ups.rstrip("\n") + "\n" + sep + rest
 

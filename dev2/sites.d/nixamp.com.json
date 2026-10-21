@@ -1,4 +1,6 @@
 {
  "mem_limit": "2g",
- "mem_note": "2026-10-01: Bun, 540 MB steady, 690 MB peak"
+ "mem_note": "2026-10-01: Bun, 540 MB steady, 690 MB peak",
+ "standby_port": 13216,
+ "standby_note": "2026-10-21: deploys start the new build here first (nginx backup), so nixamp.com never shows the maintenance page"
 }

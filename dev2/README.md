@@ -134,6 +134,22 @@ icon inlined as a data: URI when it is under 48 KB, else a text wordmark of the
 domain. `sites.d` `"maintenance": {"name": ..., "color": ..., "icon": "/logo.svg" | false}`
 overrides. If the site does not answer at render time an existing page is kept.
 
+The page says the site is down for maintenance, not "coming soon" or "updating".
+
+### No maintenance page at all: a standby port
+
+`sites.d` `"standby_port": <port>` (convention: the app port + 10000) makes deploys
+seamless. `vhost` adds `server 127.0.0.1:<standby> backup;` to the app's upstream and
+`provision` writes `STANDBY_PORT` into `deploy.env`. `deploy-app.sh` then starts the new
+build, app service only, as its own compose project (`<site>-standby`) on that port,
+waits for it to answer, and only then recreates the main container. While the main one
+restarts, nginx's refused connection goes on to the backup (a POST that was never sent
+is retried too). After the main container is healthy it waits 12 s (nginx's 10 s
+`fail_timeout`) and removes the standby. An app that needs its stack's siblings (redis,
+a db service) will not answer there; the deploy then carries on without it, maintenance
+page and all. On by hand for nixamp.com (2026-10-21): 37/37 requests answered 200
+through a full redeploy, none got the page.
+
 ## Per-site overrides
 
 `sites.d/<site>.json` is merged over the registry entry at load time. One

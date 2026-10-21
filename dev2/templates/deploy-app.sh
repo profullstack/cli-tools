@@ -164,10 +164,10 @@ on_err() {
 }
 
 health() {
-  local i
+  local i port=${1:-$APP_PORT}
   for i in $(seq 1 "$((HEALTH_TIMEOUT / 5))"); do
     # Any HTTP answer counts: a 3xx redirect or a 401 from the app is alive.
-    if curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${APP_PORT}${HEALTH_PATH}" | grep -Eq '^[1-4]'; then return 0; fi
+    if curl -sS -m 5 -o /dev/null -w '%{http_code}' "http://127.0.0.1:${port}${HEALTH_PATH}" | grep -Eq '^[1-4]'; then return 0; fi
     sleep 5
   done
   return 1
@@ -270,6 +270,28 @@ if [ -n "$WANT_SUBNET" ] && [ -n "$APP_CID" ]; then
   fi
 fi
 
+# No maintenance page during a deploy (STANDBY_PORT in deploy.env, from sites.d
+# "standby_port"): the new build answers on the standby port first, which nginx has as
+# the `backup` server of the app's upstream, so while the main container is recreated
+# requests go there. Only the app service runs there, in a project of its own; one that
+# needs its stack's siblings (redis, db) will not come up healthy, and the deploy goes
+# on without it, maintenance page and all, as before.
+STANDBY_ON=0
+STANDBY_PROJECT="$(basename "$ROOT" | tr 'A-Z' 'a-z' | tr -c 'a-z0-9\n' '-')-standby"
+standby() { (cd "$ROOT" && APP_PORT="$STANDBY_PORT" docker compose -p "$STANDBY_PROJECT" -f docker-compose.app.yml --env-file "$ROOT/deploy.env" "$@"); }
+standby_down() { [ "$STANDBY_ON" = 1 ] || return 0; STANDBY_ON=0; standby down --remove-orphans >/dev/null 2>&1 || true; log "Standby removed"; }
+if [ -n "${STANDBY_PORT:-}" ] && [ "$RECREATE" = 0 ]; then
+  log "Standby: the new build on 127.0.0.1:$STANDBY_PORT while the main container restarts"
+  standby down --remove-orphans >/dev/null 2>&1 || true
+  if standby up -d --no-build --no-deps app && HEALTH_TIMEOUT=120 health "$STANDBY_PORT"; then
+    STANDBY_ON=1
+    trap standby_down EXIT
+  else
+    log "Standby did not answer; deploying without it"
+    standby down --remove-orphans >/dev/null 2>&1 || true
+  fi
+fi
+
 # From here on the running stack is touched: any failure rolls back to the images
 # it was running.
 snapshot
@@ -306,6 +328,9 @@ if health; then
     echo "DEPLOYED_AT=$(date -u +%FT%TZ)"
   } > "$STATE"
   compose ps
+  # nginx marks a refused server down for fail_timeout (10 s): give it time to come
+  # back to the main container before the standby goes.
+  if [ "$STANDBY_ON" = 1 ]; then sleep 12; standby_down; fi
 else
   trap - ERR
   log "UNHEALTHY after ${HEALTH_TIMEOUT}s - last 60 lines:"
