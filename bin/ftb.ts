@@ -7,6 +7,8 @@
  *   ftb register business --email a@b.c --dry-run
  *   ftb register business --email a@b.c --declare
  *   ftb register personal --email a@b.c --declare
+ *   ftb register llc --entity-id N --year 2024 --amount=0 --email a@b.c --declare
+ *   ftb reissue personal                         log in and ask for a new PIN letter
  *   ftb activate business --pin 1234             after the PIN letter arrives
  *   ftb status
  *
@@ -63,8 +65,9 @@ const DEFAULT_DIR = join(homedir(), 'dottemplates', 'docs', 'taxes', 'years');
 
 const USAGE = `Usage:
   ftb secrets [--dir D] [--json]       the shared secrets each filed CA return supports, best first
-  ftb register <business|personal>     create the MyFTB account in headless Chrome
-  ftb activate <business|personal>     log in and enter the PIN from FTB's letter
+  ftb register <business|personal|llc> create the MyFTB account in headless Chrome
+  ftb reissue <role>                   log in and ask FTB to mail a new PIN letter
+  ftb activate <role>                  log in and enter the PIN from FTB's letter
   ftb status                           which accounts exist, and what each is waiting on
 
 register options:
@@ -73,6 +76,8 @@ register options:
   --dry-run            fill the first form page, print it, submit nothing
   --year YYYY          use this tax year's return instead of the newest
   --line 15|20         business: which 100S line is the net income (default 20)
+  --entity-id N        llc: its entity id (required); llc also needs --year and --amount
+                       (Form 568 line 1, total income), which are not read from the PDFs
   --amount=N           override the amount (a loss is --amount=-12345)
   --phone N            10 digits FTB texts a verification code to (required)
   --call               have FTB phone the code in instead of texting it
@@ -218,7 +223,7 @@ function chooseSecret<T extends BusinessSecret | PersonalSecret>(all: T[], year:
 export async function main(argv: readonly string[]): Promise<number> {
   const args = parseArgs(argv, {
     boolean: ['--help', '-h', '--json', '--declare', '--dry-run', '--headful', '--no-vault', '--call', '--force'],
-    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone'],
+    string: ['--dir', '--email', '--year', '--line', '--amount', '--pin', '--chrome', '--phone', '--entity-id'],
   });
   const [command, roleArg] = args.positional;
   if (args.flags.has('--help') || args.flags.has('-h') || !command) {
@@ -241,13 +246,13 @@ export async function main(argv: readonly string[]): Promise<number> {
     for (const role of ROLES) {
       const a = state.accounts[role];
       if (!a) out(`${role.padEnd(9)} not registered`);
-      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter, activate by ${activationDeadline(a.registeredAt)}`}`);
+      else out(`${role.padEnd(9)} ${a.username}  registered ${a.registeredAt.slice(0, 10)}  ${a.activatedAt ? `active since ${a.activatedAt.slice(0, 10)}` : `waiting on the PIN letter${a.pinRequestedAt ? ` asked for ${a.pinRequestedAt.slice(0, 10)}` : ''}, activate by ${activationDeadline(a.pinRequestedAt ?? a.registeredAt)}`}`);
     }
     return 0;
   }
 
-  if (command !== 'register' && command !== 'activate') throw new UsageError(`unknown command: ${command}`);
-  if (!ROLES.includes(roleArg as Role)) throw new UsageError(`${command} needs business or personal`);
+  if (command !== 'register' && command !== 'activate' && command !== 'reissue') throw new UsageError(`unknown command: ${command}`);
+  if (!ROLES.includes(roleArg as Role)) throw new UsageError(`${command} needs ${ROLES.join(', ')}`);
   const role = roleArg as Role;
   const state = loadState();
   const say = (line: string) => err(line);
@@ -256,23 +261,33 @@ export async function main(argv: readonly string[]): Promise<number> {
   const profile = join(dirname(statePath()), 'ftb-chrome');
   const headless = !args.flags.has('--headful');
 
-  if (command === 'activate') {
+  if (command === 'activate' || command === 'reissue') {
     const account = state.accounts[role];
     if (!account) throw new FtbError(`no ${role} account in ${statePath()}; run \`ftb register ${role}\` first`);
+    if (account.activatedAt) throw new FtbError(`the ${role} account ${account.username} is already active`);
+    const reissue = command === 'reissue';
     const pin = args.values.get('--pin');
-    if (!pin || !/^\w{4,12}$/.test(pin)) throw new UsageError('--pin is the PIN from the letter');
+    if (!reissue && (!pin || !/^\w{4,12}$/.test(pin))) throw new UsageError('--pin is the PIN from the letter');
     const plan: Plan = {
       role, firstName: '', lastName: '', username: account.username, password: account.password, email: account.email,
-      addressNumbers: '', zip: '', year: account.secret.year, amount: account.secret.amount, security: { ...account.security }, declare: false, pin,
+      addressNumbers: '', zip: '', year: account.secret.year, amount: account.secret.amount, security: { ...account.security }, declare: false,
+      ...(pin && !reissue ? { pin } : {}),
     };
-    gate(role, 'activate', args.flags.has('--force'));
+    gate(role, command, args.flags.has('--force'));
     const session = await openSession({ chrome: args.values.get('--chrome'), headless, profile });
     try {
       await goto(session, LOGIN_URL);
-      say(`Activating the ${role} account ${account.username}:`);
+      say(`${reissue ? 'Asking for a new PIN letter for' : 'Activating'} the ${role} account ${account.username}:`);
       const result = await walk(session, { plan, rules: rulesFor(plan), dryRun: false, log, codeFile, interactive: process.stdin.isTTY === true, say });
       noteResult(role, `${result.page.title} ${result.page.text}`);
       if (result.outcome === 'rejected') throw new FtbError(`FTB said: ${result.page.errors.join(' ') || pageMessage(result.page.text)} (${result.page.url})`);
+      if (reissue) {
+        if (result.outcome !== 'registered') throw new FtbError(`FTB did not say a letter is coming: ${pageMessage(result.page.text)} (${result.page.url})`);
+        account.pinRequestedAt = new Date().toISOString();
+        saveState(state);
+        out(`New PIN letter requested for the ${role} account ${account.username}; activate by ${activationDeadline(account.pinRequestedAt)}.`);
+        return 0;
+      }
       account.activatedAt = new Date().toISOString();
       saveState(state);
       out(`${role} MyFTB account ${account.username} is active.`);
@@ -298,9 +313,16 @@ export async function main(argv: readonly string[]): Promise<number> {
   const identity = latestIdentity(rows);
   if (!identity) throw new FtbError(`no Form 540 with a name, SSN and address under ${dir}`);
 
-  const secret = role === 'business' ? chooseSecret(businessSecrets(rows), year, line) : chooseSecret(personalSecrets(rows), year, undefined);
   const amountOverride = args.values.get('--amount');
   if (amountOverride !== undefined && !/^-?\d+$/.test(amountOverride)) throw new UsageError('--amount is whole dollars, e.g. --amount=-12345');
+  const entityId = (args.values.get('--entity-id') ?? '').replace(/\D/g, '');
+  if (role === 'llc' && (!entityId || year === undefined || amountOverride === undefined)) {
+    throw new UsageError('llc needs --entity-id, --year and --amount (Form 568 line 1, total income)');
+  }
+  const secret =
+    role === 'llc'
+      ? { year: year!, form: '568', amount: Number(amountOverride), corpId: entityId, source: '--year/--amount' }
+      : role === 'business' ? chooseSecret(businessSecrets(rows), year, line) : chooseSecret(personalSecrets(rows), year, undefined);
   const amount = amountOverride !== undefined ? Number(amountOverride) : secret.amount;
 
   const plan: Plan = {
@@ -324,8 +346,8 @@ export async function main(argv: readonly string[]): Promise<number> {
   };
 
   say(`Registering a ${role} MyFTB account as ${plan.username} <${email}>`);
-  say(`  shared secret: ${secret.year} Form ${secret.form}${'line' in secret ? ` line ${secret.line}` : ` (${plan.filingStatus})`} = ${formatAmount(amount)}   from ${secret.source}`);
-  say(`  address on file: ${plan.addressNumbers} / ${plan.zip}${plan.corpId ? `   corp ${plan.corpId}` : `   SSN ${maskSsn(plan.ssn!)}`}`);
+  say(`  shared secret: ${secret.year} Form ${secret.form}${'line' in secret ? ` line ${secret.line}` : 'filingStatus' in secret ? ` (${plan.filingStatus})` : ''} = ${formatAmount(amount)}   from ${secret.source}`);
+  say(`  address on file: ${plan.addressNumbers} / ${plan.zip}${plan.corpId ? `   ${role === 'llc' ? 'entity' : 'corp'} ${plan.corpId}` : `   SSN ${maskSsn(plan.ssn!)}`}`);
 
   // A dry run stops before the page that creates anything, so it is not an attempt.
   if (!args.flags.has('--dry-run')) gate(role, 'register', args.flags.has('--force'));

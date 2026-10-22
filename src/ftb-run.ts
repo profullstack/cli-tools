@@ -259,7 +259,7 @@ export async function walk(session: Session, options: WalkOptions): Promise<Walk
     }
     const codeRetry = page.errors.length > 0 && page.errors.every((e) => /code you entered/i.test(e)) && page.fields.some((f) => CODE_LABEL.test(f.label));
     if (codeRetry) say(`  FTB: ${page.errors[0]}`);
-    const outcome = codeRetry ? 'continue' : outcomeOf(`${page.errors.join(' ')} ${page.errors.length ? '' : page.text}`);
+    const outcome = codeRetry ? 'continue' : outcomeOf(`${page.errors.join(' ')} ${page.errors.length ? '' : page.text}`, page.fields);
     if (outcome === 'rejected' || (page.errors.length && step > 0 && !codeRetry)) return { outcome: 'rejected', page };
     if (outcome !== 'continue') return { outcome, page };
 
