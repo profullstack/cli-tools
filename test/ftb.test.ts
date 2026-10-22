@@ -178,6 +178,37 @@ describe('rules', () => {
   });
 });
 
+describe('an LLC (Form 568)', () => {
+  it('picks Limited Liability Company, the entity id, Form 568 and the total income', () => {
+    const rules = rulesFor(plan({ role: 'llc', corpId: '200000000001', amount: 0, year: 2024 }));
+    const company = field({ type: 'select-one', label: 'Type of company', options: [{ value: '', text: '' }, { value: 'L', text: 'Limited Liability Company' }, { value: 'C', text: 'Corporation' }] });
+    expect(decide(rules, company)?.action).toEqual({ kind: 'select', value: 'L' });
+    expect(decide(rules, field({ label: 'Entity ID' }))?.action).toMatchObject({ value: '200000000001' });
+    const form = field({ type: 'select-one', label: 'Tax form type', options: [{ value: '565', text: '565' }, { value: '568', text: '568' }] });
+    expect(decide(rules, form)?.action).toEqual({ kind: 'select', value: '568' });
+    expect(decide(rules, field({ label: 'Total income from Schedule IW' }))?.action).toMatchObject({ value: '0' });
+    expect(decide(rules, field({ type: 'radio', label: 'Business Representative - I am the owner' }))?.action).toEqual({ kind: 'check' });
+    expect(generateUsername('llc', 'jdoe', () => 0)).toBe('jdoelaaaa');
+  });
+});
+
+describe('account activation options', () => {
+  const options = [
+    field({ selector: '#r_RegistrationCriteria0', id: 'r_RegistrationCriteria0', type: 'radio', required: false, label: 'Activate your account now: You will need to provide additional information and answer questions that will be validated by an external credit reporting agency (TransUnion).' }),
+    field({ selector: '#r_RegistrationCriteria1', id: 'r_RegistrationCriteria1', type: 'radio', required: false, label: 'Mail a PIN letter: We will mail you a Personal Identification Number (PIN) letter to activate your account (allow 5-7 business days).' }),
+  ];
+
+  it('asks for the letter, never the credit quiz', () => {
+    const rules = rulesFor(plan({ role: 'personal' }));
+    expect(decide(rules, options[0]!)).toBeNull();
+    expect(decide(rules, options[1]!)?.action).toEqual({ kind: 'check' });
+  });
+
+  it('is a question, not a registration, even though it says "PIN letter"', () => {
+    expect(outcomeOf('Account Activation Options. Mail a PIN letter: We will mail you a PIN letter', options)).toBe('continue');
+  });
+});
+
 describe('what a page says', () => {
   it('reads a rejection, a registration and an activation', () => {
     expect(outcomeOf('There is a problem. Check below. The information you entered does not match our records.')).toBe('rejected');

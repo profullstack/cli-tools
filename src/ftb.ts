@@ -33,8 +33,9 @@ export class FtbError extends Error {
   }
 }
 
-export type Role = 'business' | 'personal';
-export const ROLES: readonly Role[] = ['business', 'personal'];
+/** `llc`: a second business entity, an LLC that files Form 568, registered by its own representative account. */
+export type Role = 'business' | 'personal' | 'llc';
+export const ROLES: readonly Role[] = ['business', 'personal', 'llc'];
 
 export const REGISTER_URL = 'https://webapp.ftb.ca.gov/MyFTBAccess/Registration/NewAccount';
 export const LOGIN_URL = 'https://webapp.ftb.ca.gov/MyFTBAccess/';
@@ -207,7 +208,7 @@ export function generatePassword(random: (max: number) => number = randomInt, le
 /** Letters and digits only, 4–17 characters, one per role (FTB allows one role per account). */
 export function generateUsername(role: Role, base: string, random: (max: number) => number = randomInt): string {
   const stem = base.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 10) || 'ftb';
-  let suffix = role === 'business' ? 'b' : 'p';
+  let suffix = role === 'business' ? 'b' : role === 'llc' ? 'l' : 'p';
   while (suffix.length < 5) suffix += pick(LOWER + DIGIT, random);
   return `${stem}${suffix}`.slice(0, 17);
 }
@@ -270,7 +271,7 @@ export interface Plan {
   zip: string;
   year: number;
   amount: number;
-  /** Business only. */
+  /** Business: the corporation number. LLC: the entity id (SOS file number or FTB's own). */
   corpId?: string | undefined;
   /** Personal only. */
   ssn?: string | undefined;
@@ -359,7 +360,7 @@ export function rulesFor(plan: Plan): Rule[] {
       label: /individual|business representative/i,
       types: ['radio'],
       // By how the option starts: "Tax Professional - ... your individual or business entity client" names both.
-      act: (f) => ((plan.role === 'business' ? /^\s*business representative/i : /^\s*individual\b/i).test(f.label) ? { kind: 'check' } : null),
+      act: (f) => ((plan.role !== 'personal' ? /^\s*business representative/i : /^\s*individual\b/i).test(f.label) ? { kind: 'check' } : null),
     },
 
     // Address on file.
@@ -369,7 +370,7 @@ export function rulesFor(plan: Plan): Rule[] {
     // The shared secret.
     { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['select-one'], act: (f) => option(f, new RegExp(`^\\s*${plan.year}\\s*$`)) },
     { name: 'tax year', label: /year (of|on) the tax return|tax year/i, types: ['text', 'number', 'tel'], act: text(String(plan.year)) },
-    { name: 'net income', label: /net income|income \(loss\)|adjusted gross|\bagi\b/i, types: SUBMIT_TYPES, act: text(formatAmount(plan.amount)) },
+    { name: 'net income', label: /net income|income \(loss\)|total income|adjusted gross|\bagi\b/i, types: SUBMIT_TYPES, act: text(formatAmount(plan.amount)) },
 
     // The penalty-of-perjury statement: only ever the person's own.
     { name: 'declaration', label: /perjury|i declare|under penalty/i, types: ['checkbox'], act: () => ({ kind: 'declare' }) },
@@ -384,6 +385,11 @@ export function rulesFor(plan: Plan): Rule[] {
     { name: 'user name', label: /^user name/i, types: ['text'], act: text(plan.username) },
     { name: 'password', label: /^password/i, types: ['password'], act: text(plan.password, true) },
 
+    // After the code: how to activate. The instant route is a TransUnion credit quiz only the person can
+    // answer, so the letter it is. Missing this left an account registered with no letter ever requested.
+    { name: 'mail a PIN letter', id: /^r_RegistrationCriteria\d$/, types: ['radio'], act: (f) => (/^\s*mail a pin letter/i.test(f.label) ? { kind: 'check' } : null) },
+    { name: 'mail a PIN letter', label: /mail (me )?a pin letter|activate your account now/i, types: ['radio'], act: (f) => (/^\s*mail (me )?a pin letter/i.test(f.label) ? { kind: 'check' } : null) },
+
     // Activation.
     { name: 'pin', label: /\bpin\b|personal identification number/i, types: SUBMIT_TYPES, act: () => (plan.pin ? { kind: 'text', value: plan.pin, secret: true } : null) },
   ];
@@ -393,6 +399,12 @@ export function rulesFor(plan: Plan): Rule[] {
       { name: 'company type', label: /type of company|company type|entity type/i, types: ['select-one'], act: (f) => option(f, /^\s*corporation\s*$/i) ?? option(f, /corporation/i) },
       { name: 'account number', label: /account number|entity id|corporation (id|number)/i, types: SUBMIT_TYPES, act: text(plan.corpId ?? '') },
       { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /100\s*S\b/i) },
+    );
+  } else if (plan.role === 'llc') {
+    rules.push(
+      { name: 'company type', label: /type of company|company type|entity type/i, types: ['select-one'], act: (f) => option(f, /limited liability/i) ?? option(f, /\bllc\b/i) },
+      { name: 'account number', label: /account number|entity id|secretary of state|file number/i, types: SUBMIT_TYPES, act: text(plan.corpId ?? '') },
+      { name: 'form type', label: /form type|type of (tax )?(return|form)/i, types: ['select-one'], act: (f) => option(f, /\b568\b/) },
     );
   } else {
     const digits = (plan.ssn ?? '').replace(/\D/g, '');
@@ -439,9 +451,11 @@ export function decide(rules: readonly Rule[], field: Field): { rule: Rule; acti
 
 export type Outcome = 'registered' | 'activated' | 'rejected' | 'continue';
 
-export function outcomeOf(text: string): Outcome {
+export function outcomeOf(text: string, fields: readonly Field[] = []): Outcome {
   if (/does not match our records|there is a problem|unable to (verify|process) your|account (is|has been) locked|account locked|exceeded the allowed number of attempts/i.test(text)) return 'rejected';
   if (/account (has been )?activated|activation (is )?complete/i.test(text)) return 'activated';
+  // "Mail a PIN letter" is an option on a page still waiting for an answer, not news that one is coming.
+  if (fields.some((f) => f.type === 'radio')) return 'continue';
   if (/registration confirmation|successfully (registered|created)|we will (mail|send) you a (letter|pin)|pin .*(mail|letter)/i.test(text)) return 'registered';
   return 'continue';
 }
@@ -458,6 +472,8 @@ export interface Account {
   security: Record<string, string>;
   secret: { year: number; form: string; amount: number };
   registeredAt: string;
+  /** When `ftb reissue` last asked for a new letter: the 21 days run from here. */
+  pinRequestedAt?: string;
   activatedAt?: string;
 }
 
