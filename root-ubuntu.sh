@@ -4693,12 +4693,16 @@ try "networkd-dispatcher" quiet_networkd_dispatcher
 # refresh, so a slow/dead endpoint can never hang an ssh login.
 install_motd() {
 	local units_changed=0
+	# A cache written by an earlier refresher is 0600: "Permission denied" at every login.
+	[[ -f "$MOTD_CACHE" ]] && chmod 0644 "$MOTD_CACHE"
 	write_if_changed /usr/local/bin/profullstack-motd 0755 <<EOF && note "motd refresher"
 #!/bin/sh
 # refresh the cached motd from ${MOTD_URL}
 umask 022
 tmp="\$(mktemp)" || exit 0
 if curl -fsSL --max-time 10 '${MOTD_URL}' -o "\$tmp" && [ -s "\$tmp" ]; then
+	# mktemp makes the file 0600 whatever the umask; every login shell cats the cache.
+	chmod 0644 "\$tmp"
 	mv "\$tmp" '${MOTD_CACHE}'
 else
 	rm -f "\$tmp"

@@ -186,7 +186,7 @@ set -uo pipefail
 
 # The packaged release (w3bs install profullstack.com/root-w3bs-os). Bump with every
 # change that ships, and tag the commit root-w3bs-os-v<version>.
-ROOT_W3BS_OS_VERSION=0.1.0
+ROOT_W3BS_OS_VERSION=0.1.1
 case "${1:-}" in
 	--version|-V) printf 'root-w3bs-os %s\n' "$ROOT_W3BS_OS_VERSION"; exit 0 ;;
 esac
@@ -5104,12 +5104,16 @@ try "fail2ban" configure_fail2ban
 # through Alpine's /etc/zsh/zprofile.
 install_motd() {
 	local units_changed=0
+	# A cache written by an earlier refresher is 0600: "Permission denied" at every login.
+	[[ -f "$MOTD_CACHE" ]] && chmod 0644 "$MOTD_CACHE"
 	write_if_changed /usr/local/bin/profullstack-motd 0755 <<EOF && note "motd refresher"
 #!/bin/sh
 # refresh the cached motd from ${MOTD_URL}
 umask 022
 tmp="\$(mktemp)" || exit 0
 if curl -fsSL --max-time 10 '${MOTD_URL}' -o "\$tmp" && [ -s "\$tmp" ]; then
+	# mktemp makes the file 0600 whatever the umask; every login shell cats the cache.
+	chmod 0644 "\$tmp"
 	mv "\$tmp" '${MOTD_CACHE}'
 else
 	rm -f "\$tmp"
