@@ -7,8 +7,8 @@
 # The script is fetched from this release's git tag and must match the sha256 below, so
 # the signed release installs exactly what was reviewed. Re-run to update.
 set -eu
-VERSION=0.1.0
-SHA256=de06d5cf0fd62d8f9a9d867a1e2a4eb753601ad7eaa2600a5ad7cf8788e54a76
+VERSION=0.1.1
+SHA256=b0500d02fb9ac589c37733f0d9bb0ef550cf24f44dcf0a984a811dd29923c3d5
 URL="https://raw.githubusercontent.com/profullstack/cli-tools/root-w3bs-os-v$VERSION/root-w3bs-os.sh"
 fail() { printf 'root-w3bs-os: %s\n' "$*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || fail 'curl is required'
