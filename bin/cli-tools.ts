@@ -105,6 +105,7 @@ Keys (config set <key>):
   hproxy      HPROXY_API_KEY      proxy (status, and generated lines); hproxy_proxy_user/_password: traffic
   ngc         NGC_API_KEY         ngc, nim (fallback); ngc_org: NGC_ORG
   nvidia      NVIDIA_API_KEY      nim
+  humble      HUMBLE_SESSION      bookdl humble (the _simpleauth_sess cookie)
 
 Options:
   --force   link: take over a symlink owned by another checkout

@@ -81,6 +81,9 @@ export const KNOWN_KEYS: Record<string, string> = {
   ngc_org: 'NGC_ORG',
   // Read by `nim`: a build.nvidia.com key for the hosted inference API.
   nvidia: 'NVIDIA_API_KEY',
+  // Read by `bookdl humble`: the value of the _simpleauth_sess cookie from a
+  // logged-in humblebundle.com tab. Humble has no API token for buyers.
+  humble: 'HUMBLE_SESSION',
 };
 
 export type Source = 'env' | 'file' | 'unset';
