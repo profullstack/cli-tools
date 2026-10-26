@@ -25,6 +25,7 @@
     { "hosts": ["built.indie"], "proxy": 8798, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["family.ancestry", "family.tree"], "proxy": 8792, "max_body": "30MiB", "moshpit": true },
     { "hosts": ["pay.agent"], "proxy": 8796, "max_body": "64KiB", "moshpit": true },
+    { "hosts": ["offtherecord.podcast", "otr.podcast"], "proxy": 8814, "max_body": "1MiB", "moshpit": true, "//": "Off The Record (moshcoder/offtherecord): pages, podcast feed, mp3 with ranges; the app 301s otr.podcast to offtherecord.podcast.pit.world" },
     { "hosts": ["search.peptides"], "proxy": 8802, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["seo.rank"], "proxy": 8790, "max_body": "64KiB", "moshpit": true },
     { "hosts": ["alt.2600"], "root": "/var/www/alt.2600", "moshpit": true, "access_log": true },
