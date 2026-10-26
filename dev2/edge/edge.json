@@ -28,7 +28,7 @@
     { "hosts": ["search.peptides"], "proxy": 8802, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["seo.rank"], "proxy": 8790, "max_body": "64KiB", "moshpit": true },
     { "hosts": ["alt.2600"], "root": "/var/www/alt.2600", "moshpit": true, "access_log": true },
-    { "hosts": ["auto.hacker"], "root": "/var/www/auto.hacker", "moshpit": true, "access_log": true },
+    { "hosts": ["auto.hacker"], "proxy": 8793, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["chovy.hacker"], "root": "/var/www/chovy.hacker", "moshpit": true, "access_log": true },
     { "hosts": ["profullstack.agent"], "root": "/var/www/profullstack.agent", "moshpit": true, "access_log": true }
   ]
