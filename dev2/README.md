@@ -160,8 +160,11 @@ small file per site, so parallel migrations never edit a shared file:
   "companion_commands": { "genrewatch-worker": "bun run worker" },
   "env_overrides": { "SITE_URL": "https://example.com" },
   "pg_service": "Postgres-iVtY", "max_body": "256m", "branch": "master",
-  "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+  "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"],
+  "subnet_octet": 178 }
 ```
+
+`subnet_octet` replaces the `<port-3200>` in the app network `10.200.<n>.0/24` when another stack already holds that /24 (c0ncerts.com: bittorrented.com was hand-built on its 10.200.78.0/24).
 
 ### Secrets in `env_overrides`
 
