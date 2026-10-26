@@ -685,7 +685,9 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
     # ran out at 34 networks on dev2, and widening them means restarting dockerd
     # under every container. 10.200.<port-3200>.0/24 is deterministic and allowlisted
     # on the data ports.
-    n = s["port"] - FIRST_PORT
+    # `subnet_octet` in sites.d moves a site off a /24 another stack already holds
+    # (bittorrented.com was hand-built on c0ncerts.com's 10.200.78.0/24).
+    n = s.get("subnet_octet", s["port"] - FIRST_PORT)
     y.append(f"networks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
     # Healthchecks chosen by `dev2-site healthchecks` survive a re-render.
     return health_compose("\n".join(y) + "\n", st.get("healthchecks") or {})
