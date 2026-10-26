@@ -37,6 +37,7 @@ const SUMMARIES: Record<string, string> = {
   'cli-tools': 'This dispatcher: list, update and wire up the others',
   codeburn: 'See where your AI spend goes, by task, tool, model and project',
   cronjob: 'Install, list and remove cron jobs without ever installing one twice',
+  bookdl: 'Download DRM-free ebooks (Gutenberg, Standard Ebooks, archive.org, Humble, direct links)',
   dl: 'Download a video, or just its audio, through yt-dlp',
   domainfree: 'Which of these domains can you actually register',
   domainjson: 'whois-style, JSON-first name lookup',

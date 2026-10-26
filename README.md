@@ -71,6 +71,8 @@ Two things here are not `PATH` commands and do not need Node:
   best single stream and says so
 - **[`yt-dlp`](https://github.com/yt-dlp/yt-dlp)** — `dl` only
   (`moshcode install yt-dlp`, `pipx install yt-dlp`, `brew install yt-dlp`)
+- **[Calibre](https://calibre-ebook.com)** (`calibredb`) — `bookdl --calibre`
+  only; `bookdl` itself needs nothing beyond Node
 - **`apt`, and `sudo` unless you are root** — `sysupdate` only, and the one
   command here that is not portable: it updates Debian and Ubuntu boxes and
   refuses anything else. `snap` is optional; without snapd that step is skipped
@@ -1774,6 +1776,57 @@ merge. `dl audio` is `-x`, which *is* ffmpeg, so there it is a hard requirement.
 
 A URL that fails does not stop the ones after it; the exit code still reports
 the failure.
+
+### `bookdl`
+
+yt-dlp for the ebooks you are allowed to keep as files: public-domain
+libraries, your Humble Bundle library, and any DRM-free download link a store
+gives you.
+
+```sh
+bookdl search dracula                                     # Project Gutenberg
+bookdl https://www.gutenberg.org/ebooks/345               # → ~/Books/Bram Stoker - Dracula.epub
+bookdl https://standardebooks.org/ebooks/jane-austen/emma
+bookdl -f pdf https://archive.org/details/prideprejudice00aust
+bookdl info https://archive.org/details/prideprejudice00aust   # formats, nothing downloaded
+bookdl 'https://leanpub.com/…/download.epub'              # any direct DRM-free link
+bookdl humble                                             # your Humble ebooks
+bookdl humble get --all-formats --calibre                 # all of them, into Calibre too
+bookdl check ~/Books/*.epub                               # DRM-free or not
+```
+
+| Source | How |
+|---|---|
+| Project Gutenberg | `gutenberg.org/ebooks/<id>`, metadata from gutendex.com; `bookdl search` |
+| Standard Ebooks | `standardebooks.org/ebooks/<author>/<title>`; epub, azw3, kepub |
+| Internet Archive | `archive.org/details/<id>`, open items only |
+| Humble Bundle | `bookdl humble`, or one order's `humblebundle.com/downloads?key=…` |
+| Direct links | Leanpub, Gumroad, itch.io, Payhip, publisher stores, a Google Play "Export" link, a Kobo DRM-free download |
+
+**Humble login.** Humble has no buyer API token, so `bookdl` uses your browser
+session: in a logged-in humblebundle.com tab, copy the `_simpleauth_sess`
+cookie (DevTools > Application > Cookies) and `cli-tools config set humble`.
+A 401 means it expired; copy it again. The download links themselves are
+signed CDN URLs and each file is checked against Humble's md5.
+
+**A library, not a pile.** Files are named `Author - Title.ext` in `~/Books`
+(`--to` or `$BOOKDL_DIR` to change it) and recorded in
+`~/.local/share/cli-tools/bookdl/archive.txt`, like yt-dlp's
+`--download-archive`: a second `bookdl humble get` fetches only what is new.
+`-f epub,pdf` is a preference order (first one the book has); `--all-formats`
+takes each of them.
+
+**No DRM removal, ever.** Every file is checked after it lands (Adobe ADEPT,
+Readium LCP, Mobipocket, Kindle KFX, an `.acsm` ticket, PDF EBX/APS handlers;
+EPUB font obfuscation is not DRM and passes). A locked file is not saved, and
+the exit code is 3. Removing DRM is circumvention under DMCA §1201, so this
+tool does not do it. A Kindle, Apple Books, Google Play or Kobo store link gets
+an answer instead: what that store does let you export (Kindle highlights at
+`read.amazon.com/notebook`, Google Play's Export link, Kobo's DRM-free titles).
+archive.org lending-library books are borrowed, not owned, and are refused the
+same way.
+
+Exit codes: 0 ok, 1 a download failed, 3 refused (DRM or lending library).
 
 ### `torrent`
 
