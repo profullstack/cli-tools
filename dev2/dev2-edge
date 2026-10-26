@@ -156,7 +156,12 @@ def caddy_site(site, s):
         lines.append("\tencode gzip")
     if site.get("access_log"):
         lines += ["\tlog {", f"\t\toutput file /var/log/caddy/{site['hosts'][0]}.access.log", "\t}"]
-    if "proxy" in site:
+    if "proxy" in site and site.get("retry"):
+        # While the app restarts (a deploy), hold the request and keep dialing instead of
+        # answering 502: webhooks that drive live calls (Telnyx) must not fail mid-call.
+        lines += [f"\treverse_proxy 127.0.0.1:{int(site['proxy'])} {{", "\t\theader_up X-Real-IP {remote_host}",
+                  "\t\tstream_close_delay 1h", f"\t\tlb_try_duration {site['retry']}", "\t\tlb_try_interval 250ms", "\t}"]
+    elif "proxy" in site:
         lines.append(f"\timport edge_proxy {int(site['proxy'])}")
     elif "root" in site:
         lines += [f"\troot * {site['root']}", "\tfile_server"]
