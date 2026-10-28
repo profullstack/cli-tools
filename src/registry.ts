@@ -47,6 +47,7 @@ const SUMMARIES: Record<string, string> = {
   'email-cleaner': 'Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses',
   emoji: 'Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest',
   crawlproof: 'What the fleet costs and what it returns: traffic, ads and the bank behind them',
+  terms: 'An AI lawyer for a site\'s terms and privacy policy: what you agree to, red flags, what to push back on',
   submitfleet: 'Launch products on 339 launch sites and directories, tracked until live (submitfleet.com)',
   'free-names': 'Name ideas nobody has registered yet, in one command',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',
