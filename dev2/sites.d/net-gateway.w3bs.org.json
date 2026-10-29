@@ -2,7 +2,8 @@
   "site": "net-gateway.w3bs.org",
   "nginx_app": false,
   "domains": [
-    "*.whatever.w3bs.org"
+    "*.whatever.w3bs.org",
+    "*.agent.w3bs.org"
   ],
   "port": 3209,
   "max_body": "64m",
@@ -11,7 +12,12 @@
       "host": "*.whatever.w3bs.org",
       "port": 3209,
       "max_body": "64m"
+    },
+    {
+      "host": "*.agent.w3bs.org",
+      "port": 3209,
+      "max_body": "64m"
     }
   ],
-  "notes": "Dedicated W3BS Net Moshpit wildcard vhost. DNS and TLS cover *.whatever.w3bs.org. The W3BS app serves only manually approved names from W3BS_NET_APPROVED_NAMES."
+  "notes": "Dedicated W3BS Net name-routing vhost. DNS and TLS cover *.whatever.w3bs.org and *.agent.w3bs.org; add another suffix here when W3BS Net opts in that namespace. The independent W3BS registry decides active names."
 }
