@@ -1677,7 +1677,6 @@ def cmd_dns(args):
         recs = recs.get("records", recs) if isinstance(recs, dict) else recs
         for d in ds:
             host = "@" if d == zone else d[: -len(zone) - 1]
-            if host.startswith("*"): note(f"{d}: wildcard; set A * manually if needed"); host = "*"
             for r in recs:
                 if r.get("name") == d and r.get("type") in ("ALIAS", "CNAME", "A", "AAAA"):
                     sh(["porkbun", "rm", zone, host, "--type", r["type"], "--yes"], check=False)
