@@ -43,6 +43,19 @@ export class MailError extends Error {
   }
 }
 
+export function assertEmailSenderAllowed(...addresses: string[]): void {
+  const blocked = new Set(
+    (process.env.EMAIL_QUEUE_BLOCKED_SENDERS ?? '')
+      .split(',')
+      .map((address) => address.trim().toLowerCase())
+      .filter(Boolean),
+  );
+  const senders = addresses.map((value) => (/<([^>]+)>/.exec(value)?.[1] ?? value).trim().toLowerCase());
+  if (senders.some((address) => blocked.has(address))) {
+    throw new MailError('Outbound sending from this mailbox is paused for administrator review.');
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Providers
 // ---------------------------------------------------------------------------
@@ -1619,6 +1632,7 @@ export function smtpTransport(account: Account) {
 }
 
 export const sendViaSmtp: SmtpSender = async (account, outgoing) => {
+  assertEmailSenderAllowed(account.email, account.user, outgoing.from);
   const transporter = smtpTransport(account);
   const info = await transporter.sendMail({
     from: outgoing.from,
@@ -1703,6 +1717,7 @@ export async function sendMail(
     isBlocked?: HostBlockCheck;
   } = {},
 ): Promise<SendResult> {
+  assertEmailSenderAllowed(account.email, account.user, outgoing.from);
   const choice = chooseTransport(account, options.resendKey, options.via);
   const smtp = options.smtp ?? sendViaSmtp;
   const resend = options.resend ?? resendSender();
