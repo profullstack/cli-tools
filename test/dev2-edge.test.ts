@@ -135,7 +135,7 @@ describe('dev2-edge render', () => {
     expect(stream).toMatch(/\n\s+chovy\.hacker\s+127\.0\.0\.1:8453;/);
     // an exact name under a routed wildcard can stay on nginx
     expect(stream).toMatch(/\n\s+live\.streaming\.pit\.world\s+127\.0\.0\.1:8444;/);
-    expect(stream).toMatch(/\n\s+otr\.podcast\.pit\.world\s+127\.0\.0\.1:8444;/);
+    expect(stream).toMatch(/\n\s+otr\.podcast\.pit\.world\s+127\.0\.0\.1:8453;/);
     expect(stream).toContain('hostnames;');
   });
 
@@ -154,6 +154,8 @@ describe('dev2-edge render', () => {
     expect(caddy).toContain('protocols h1 h2');
     expect(caddy).not.toMatch(/on_demand|acme_ca|\bemail\b/);
     expect(caddy).toContain('header_up X-Real-IP {remote_host}');
+    const otrAlias = caddy.slice(caddy.indexOf('https://otr.podcast.pit.world {'));
+    expect(otrAlias).toContain('import edge_proxy 8787');
     for (const site of SPEC.sites) {
       const head = site.hosts.map((h: string) => `https://${h}`).join(', ') + ' {';
       expect(caddy).toContain(head);
