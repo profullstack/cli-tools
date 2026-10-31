@@ -12,7 +12,8 @@
   ],
   "keep_on_nginx": {
     "//": "Names under a routed pattern that stay on nginx for now, with why.",
-    "live.streaming.pit.world": "per-path routing to two nixamp servers with a 404 fallback (error_page @server2); move after it has its own Caddy rehearsal"
+    "live.streaming.pit.world": "per-path routing to two nixamp servers with a 404 fallback (error_page @server2); move after it has its own Caddy rehearsal",
+    "otr.podcast.pit.world": "the new OTR Caddy site changes this legacy pit.world alias from 200 to 301; preserve the current nginx response until the alias is rehearsed"
   },
   "sites": [
     { "hosts": ["pit.world"], "proxy": 8787, "max_body": "1MiB" },
