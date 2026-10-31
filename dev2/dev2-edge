@@ -155,7 +155,16 @@ def caddy_site(site, s):
     if site.get("gzip"):
         lines.append("\tencode gzip")
     if site.get("access_log"):
-        lines += ["\tlog {", f"\t\toutput file /var/log/caddy/{site['hosts'][0]}.access.log", "\t}"]
+        lines += ["\tlog {", f"\t\toutput file /var/log/caddy/{site['hosts'][0]}.access.log"]
+        if site.get("sanitize_query"):
+            lines += [
+                "\t\tformat filter {",
+                '\t\t\trequest>uri regexp `\\?.*` ""',
+                "\t\t\trequest>headers delete",
+                "\t\t\tresp_headers delete",
+                "\t\t}",
+            ]
+        lines.append("\t}")
     if "proxy" in site and site.get("retry"):
         # While the app restarts (a deploy), hold the request and keep dialing instead of
         # answering 502: webhooks that drive live calls (Telnyx) must not fail mid-call.
