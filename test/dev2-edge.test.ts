@@ -135,6 +135,7 @@ describe('dev2-edge render', () => {
     expect(stream).toMatch(/\n\s+chovy\.hacker\s+127\.0\.0\.1:8453;/);
     // an exact name under a routed wildcard can stay on nginx
     expect(stream).toMatch(/\n\s+live\.streaming\.pit\.world\s+127\.0\.0\.1:8444;/);
+    expect(stream).toMatch(/\n\s+otr\.podcast\.pit\.world\s+127\.0\.0\.1:8444;/);
     expect(stream).toContain('hostnames;');
   });
 
