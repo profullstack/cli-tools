@@ -18,6 +18,7 @@
     { "hosts": ["pit.world"], "proxy": 8787, "max_body": "1MiB" },
     { "hosts": ["www.pit.world"], "redirect": "https://pit.world{uri}" },
     { "hosts": ["ad.network.pit.world"], "proxy": 8800, "max_body": "1MiB", "gzip": true },
+    { "hosts": ["agent.database.pit.world"], "proxy": 18080, "max_body": "512KiB", "gzip": true, "access_log": true, "sanitize_query": true },
     { "hosts": ["group.call.pit.world"], "proxy": 8810, "max_body": "1MiB", "retry": "20s",
       "//": "group.call (moshcoder/group.call): no gzip, so the room page's server-sent events are not held back; retry holds Telnyx webhooks across a deploy instead of 502" },
     { "hosts": ["*.*.pit.world", "*.*.*.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,

@@ -157,12 +157,18 @@ describe('dev2-edge render', () => {
       const head = site.hosts.map((h: string) => `https://${h}`).join(', ') + ' {';
       expect(caddy).toContain(head);
       const block = caddy.slice(caddy.indexOf(head), caddy.indexOf('\n}\n', caddy.indexOf(head)));
-      if (site.proxy) expect(block).toContain(`import edge_proxy ${site.proxy}`);
+      if (site.proxy && site.retry) expect(block).toContain(`reverse_proxy 127.0.0.1:${site.proxy}`);
+      else if (site.proxy) expect(block).toContain(`import edge_proxy ${site.proxy}`);
       if (site.root) expect(block).toContain(`root * ${site.root}`);
       if (site.redirect) expect(block).toContain(`redir ${site.redirect} 301`);
       if (site.max_body) expect(block).toContain(`max_size ${site.max_body}`);
       expect(block).toContain(site.moshpit ? 'import edge_tls_moshpit' : 'import edge_tls');
     }
+    const agentDb = caddy.slice(caddy.indexOf('https://agent.database.pit.world {'));
+    expect(agentDb).toContain('output file /var/log/caddy/agent.database.pit.world.access.log');
+    expect(agentDb).toContain('request>uri regexp `\\?.*` ""');
+    expect(agentDb).toContain('request>headers delete');
+    expect(agentDb).toContain('resp_headers delete');
     expect(caddy).toMatch(/\(edge_tls_moshpit\) \{\s+tls \{\s+load \/etc\/caddy\/edge-certs\s+protocols tls1\.3/);
   });
 
