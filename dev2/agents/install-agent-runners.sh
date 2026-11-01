@@ -113,12 +113,12 @@ EOF
 
   cat > "/etc/systemd/system/agent-mail-poll-$agent.timer" <<EOF
 [Unit]
-Description=Poll $agent's inbox every five minutes
+Description=Poll $agent's inbox every 30 seconds
 
 [Timer]
-OnCalendar=*-*-* *:0/5:00
-AccuracySec=30s
-Persistent=true
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=1s
 
 [Install]
 WantedBy=timers.target
@@ -130,6 +130,7 @@ done
 systemctl daemon-reload
 for agent in "${ready[@]}"; do
   systemctl enable --now "agent-mail-poll-$agent.timer" >/dev/null
+  systemctl restart "agent-mail-poll-$agent.timer" >/dev/null
 done
 printf 'Installed contact runners for: %s\n' "${ready[*]:-(none)}"
 if [ "${#skipped[@]}" -gt 0 ]; then
