@@ -19,6 +19,11 @@ id "$USER_NAME" >/dev/null
 [ -d "$CLI_DIR/node_modules" ] || { echo "CLI runtime dependencies are missing at $CLI_DIR" >&2; exit 1; }
 [ -f "$USER_HOME/.config/cli-tools/mail.json" ] || { echo "RiotCoder's private mail configuration is missing" >&2; exit 1; }
 
+# The deploy checkout and dependencies are installed by root; grant RiotCoder's
+# own group read/traverse access so the account can execute its CLI tools.
+chgrp -R "$GROUP_NAME" "$CLI_DIR"
+chmod -R g+rX "$CLI_DIR"
+
 install -d -o "$USER_NAME" -g "$GROUP_NAME" -m 0750 \
   "$USER_HOME/.local/bin" "$USER_HOME/.config/agent-identities/riotcoder" "$USER_HOME/.local/state/agent-mail-poll"
 install -o root -g root -m 0755 "$SOURCE_DIR/qc-agent-responder.py" /usr/local/libexec/qc-agent-responder
