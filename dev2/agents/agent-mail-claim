@@ -1,19 +1,28 @@
 #!/bin/sh
-# agent-mail-claim <agent> <message-id>: one email, one agent. Anthony often sends a forward to
-# bot@, cha0spunk@ and riotcoder@ at once, so both mailboxes hold it. The first agent to claim the
-# Message-ID owns it (mkdir is atomic); the other sees who did and leaves it.
+# agent-mail-claim <agent> <message-id>: one email, one agent. When mail is
+# delivered to more than one agent, the shared private claim directory makes
+# the first claim atomic; the other agent sees who owns it and leaves it.
 #   exit 0 + "claimed"            this agent owns it now (or already did)
 #   exit 1 + "taken by <agent>"   the other agent owns it
 set -e
-umask 077
+umask 0007
 agent="$1"; id="$2"
 [ -n "$agent" ] && [ -n "$id" ] || { echo "usage: agent-mail-claim <agent> <message-id>" >&2; exit 2; }
-dir="$HOME/.local/share/agent-mail/claims"
-mkdir -p "$dir"
-chmod 0700 "$dir"
+if [ -n "${AGENT_MAIL_CLAIM_ROOT:-}" ]; then
+  dir="$AGENT_MAIL_CLAIM_ROOT"
+  [ -d "$dir" ] && [ -w "$dir" ] || { echo "shared mail claim directory is unavailable" >&2; exit 1; }
+else
+  dir="$HOME/.local/share/agent-mail/claims"
+  mkdir -p "$dir"
+  chmod 0700 "$dir"
+fi
 key=$(printf '%s' "$id" | sha256sum | cut -c1-32)
 if mkdir "$dir/$key" 2>/dev/null; then
-  printf '%s\n%s\n%s\n' "$agent" "$id" "$(date -u +%FT%TZ)" > "$dir/$key/owner"
+  # The shared directory contains only the handle that won the atomic claim.
+  # Keep message IDs private in each agent's own queue and logs.
+  printf '%s\n' "$agent" > "$dir/$key/owner"
+  chmod 2770 "$dir/$key"
+  chmod 0640 "$dir/$key/owner"
   echo claimed; exit 0
 fi
 owner=$(head -1 "$dir/$key/owner" 2>/dev/null || echo unknown)
