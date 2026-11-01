@@ -17,8 +17,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 AGENTS = ("cha0spunk", "coinpay", "knox", "nora", "quill", "riotcoder", "rootkey")
-AGENT_HANDLE_ALIASES = {"rootkey": ("rootkey_agent",)}
-AGENT_HANDLES = frozenset((*AGENTS, *(handle for aliases in AGENT_HANDLE_ALIASES.values() for handle in aliases)))
 OPERATOR_ID = "4826dea7-225a-45df-a56f-6f380bd74ecf"
 HOME = Path.home()
 AGENT = os.environ.get("QC_AGENT", "")
@@ -109,10 +107,7 @@ def mentioned_handles(text):
     low = (text or "").lower()
     if "all seven" in low or "all six" in low or "all agents" in low or "everyone" in low:
         return list(AGENTS)
-    return [
-        name for name in AGENTS
-        if any(re.search(rf"(?<![a-z0-9_])@?{re.escape(handle)}(?![a-z0-9_])", low) for handle in (name, *AGENT_HANDLE_ALIASES.get(name, ())))
-    ]
+    return [name for name in AGENTS if re.search(rf"(?<![a-z0-9_])@?{re.escape(name)}(?![a-z0-9_])", low)]
 
 
 def route(text, message_id):
@@ -252,7 +247,7 @@ def handle(message, env):
             return
         targets = [AGENT]
     else:
-        if sender in AGENT_HANDLES:
+        if sender in AGENTS:
             targets = mentioned_handles(text)
             if AGENT not in targets:
                 return
