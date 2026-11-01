@@ -130,6 +130,7 @@ done
 systemctl daemon-reload
 for agent in "${ready[@]}"; do
   systemctl enable --now "agent-mail-poll-$agent.timer" >/dev/null
+  systemctl restart "agent-mail-poll-$agent.timer" >/dev/null
 done
 printf 'Installed contact runners for: %s\n' "${ready[*]:-(none)}"
 if [ "${#skipped[@]}" -gt 0 ]; then
