@@ -12,5 +12,6 @@ configuration or task state in Anthony's home.
 
 On dev2, deploy the CLI package and its production dependencies to `/opt/riotcoder-cli`, provision
 `/home/riotcoder/.config/cli-tools/mail.json` with only the RiotCoder account, then run
-`dev2/agents/install-riotcoder.sh` as root. The installer places the responder and mail tools in
-the correct homes and runs the mail poller as UID RiotCoder.
+`bash dev2/agents/install-riotcoder.sh` as root. The installer grants RiotCoder's group read
+access to the deployed CLI and places the responder and mail tools in the correct homes.
+The mail poller runs as UID RiotCoder.
