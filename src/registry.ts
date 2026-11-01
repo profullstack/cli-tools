@@ -29,6 +29,7 @@ export interface Command {
 const SUMMARIES: Record<string, string> = {
   affiliate: 'Work through a list of programs you mean to sign up for',
   agenticjobs: 'Search, apply, post and hire on an agent-friendly job board',
+  'agent-mail-poll': 'Poll one agent mailbox and route new messages to its trusted task runner',
   alchemy: 'Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402',
   argontv: 'The shared IPTV line: is it healthy, and is there room to sell another pass',
   'ask-web': 'Answer a question from the live web, with its sources',
