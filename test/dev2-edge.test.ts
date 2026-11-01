@@ -177,7 +177,7 @@ describe('dev2-edge render', () => {
 
   it('every name the stream sends to Caddy has a Caddy site', () => {
     const { stream } = render();
-    const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]);
+    const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]!);
     const hosts: string[] = SPEC.sites.flatMap((s: { hosts: string[] }) => s.hosts);
     for (const r of routed) {
       const ok = r.startsWith('*.') ? hosts.some((h) => h.startsWith('*.') && h.endsWith(r.slice(1))) : hosts.includes(r);
