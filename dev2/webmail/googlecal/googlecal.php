@@ -119,6 +119,14 @@ class googlecal extends rcube_plugin
             $this->rc->output->redirect($back);
             return;
         }
+        // Google's consent screen shows calendar access as its own checkbox; without it
+        // every CalDAV call is 403 insufficientPermissions. Refuse instead of half-connecting.
+        if (strpos((string) ($r['scope'] ?? ''), 'https://www.googleapis.com/auth/calendar') === false) {
+            $this->post(self::REVOKE_URL, ['token' => $r['refresh_token']]);
+            $this->rc->output->show_message('Google did not grant calendar access. Click Connect again and tick "See, edit, share, and permanently delete all the calendars" on Google\'s screen.', 'error', null, true, 30);
+            $this->rc->output->redirect($back);
+            return;
+        }
         $email = '';
         if (!empty($r['id_token']) && count($parts = explode('.', $r['id_token'])) === 3) {
             $claims = json_decode(base64_decode(strtr($parts[1], '-_', '+/')), true);
