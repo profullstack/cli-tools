@@ -25,6 +25,28 @@ class anyhost extends rcube_plugin
         $this->add_hook('authenticate', [$this, 'authenticate']);
         $this->add_hook('smtp_connect', [$this, 'smtp_connect']);
         $this->add_hook('template_object_loginform', [$this, 'loginform']);
+        // calendar/tasklist load their own config.inc.php in init() (after this plugin) and
+        // pick their driver in startup; our startup hook is registered first, so it wins.
+        $this->add_hook('startup', function ($args) { $this->pick_dav_drivers(); return $args; });
+    }
+
+    /**
+     * Calendar + tasks backend for this session (anyhost loads before calendar/tasklist,
+     * so this runs first): Forward Email users sync with caldav.forwardemail.net; every
+     * other server gets Roundcube's own database calendar (Mailu has no CalDAV).
+     */
+    private function pick_dav_drivers()
+    {
+        $config = rcmail::get_instance()->config;
+        if ((string) ($_SESSION['storage_host'] ?? '') === 'imap.forwardemail.net') {
+            $config->set('calendar_driver', 'caldav');
+            $config->set('calendar_caldav_server', 'https://caldav.forwardemail.net');
+            $config->set('tasklist_driver', 'caldav');
+            $config->set('tasklist_caldav_server', 'https://caldav.forwardemail.net');
+        } else {
+            $config->set('calendar_driver', 'database');
+            $config->set('tasklist_driver', 'database');
+        }
     }
 
     public function loginform($args)
