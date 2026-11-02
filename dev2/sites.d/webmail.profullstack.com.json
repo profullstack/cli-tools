@@ -7,6 +7,7 @@
  "start_command": "apache2-foreground",
  "port_var": "80",
  "domains": [
+  "webmail.profullstack.com",
   "webmail.pit.world"
  ],
  "db": "none",
@@ -51,5 +52,5 @@
   "ROUNDCUBEMAIL_SKIN": "elastic",
   "ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE": "25M"
  },
- "notes": "Not a Railway site: born on dev2 2026-11-02. Public at webmail.pit.world (wildcard *.pit.world already on dev2, cert by HTTP-01); add webmail.profullstack.com to domains once the Porkbun API key is replaced (the vaulted pk1_264d pair is revoked: INVALID_API_KEYS 2026-11-02). Roundcube webmail, stock image, no repo. Login form has a Server field: users sign in to ANY IMAP server (blank = Forward Email, imap.forwardemail.net). The anyhost plugin (cli-tools dev2/webmail/anyhost, copied to volumes/plugin-anyhost) turns a bare hostname into ssl://host:993, derives SMTP (imap.X -> smtp.X, else the same host; 465 then 587) and refuses private/loopback addresses so the form cannot probe dev2. volumes/config/zz-profullstack.inc.php holds des_key (minted on the box, never committed) and the imap_host override. mail.profullstack.com is NOT this site: it is the bbs box's Mailu MTA (PTR, SPF, cert)."
+ "notes": "Not a Railway site: born on dev2 2026-11-02. Primary host webmail.profullstack.com (A -> dev2); webmail.pit.world kept as an alias. Cert by HTTP-01 (both names resolve to dev2). Roundcube webmail, stock image, no repo. Login form has a Server field: users sign in to ANY IMAP server (blank = Forward Email, imap.forwardemail.net). The anyhost plugin (cli-tools dev2/webmail/anyhost, copied to volumes/plugin-anyhost) turns a bare hostname into ssl://host:993, derives SMTP (imap.X -> smtp.X, else the same host; 465 then 587) and refuses private/loopback addresses so the form cannot probe dev2. volumes/config/zz-profullstack.inc.php holds des_key (minted on the box, never committed) and the imap_host override. mail.profullstack.com is NOT this site: it is the bbs box's Mailu MTA (PTR, SPF, cert)."
 }
