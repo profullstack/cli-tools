@@ -3,7 +3,7 @@
  "service": "webmail.profullstack.com",
  "repo": null,
  "branch": null,
- "image": "roundcube/roundcubemail:1.7.5-apache",
+ "image": "profullstack/webmail:1.7.5-cal1",
  "start_command": "apache2-foreground",
  "port_var": "80",
  "domains": [
@@ -48,9 +48,9 @@
   "ROUNDCUBEMAIL_DEFAULT_PORT": "993",
   "ROUNDCUBEMAIL_SMTP_SERVER": "ssl://smtp.forwardemail.net",
   "ROUNDCUBEMAIL_SMTP_PORT": "465",
-  "ROUNDCUBEMAIL_PLUGINS": "anyhost,archive,zipdownload",
+  "ROUNDCUBEMAIL_PLUGINS": "anyhost,archive,zipdownload,libcalendaring,libkolab,calendar,tasklist,carddav",
   "ROUNDCUBEMAIL_SKIN": "elastic",
   "ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE": "25M"
  },
- "notes": "Not a Railway site: born on dev2 2026-11-02. Primary host webmail.profullstack.com (A -> dev2); webmail.pit.world kept as an alias. Cert by HTTP-01 (both names resolve to dev2). Roundcube webmail, stock image, no repo. Login form has a Server field: users sign in to ANY IMAP server (blank = Forward Email, imap.forwardemail.net). The anyhost plugin (cli-tools dev2/webmail/anyhost, copied to volumes/plugin-anyhost) turns a bare hostname into ssl://host:993, derives SMTP (imap.X -> smtp.X, else the same host; 465 then 587) and refuses private/loopback addresses so the form cannot probe dev2. volumes/config/zz-profullstack.inc.php holds des_key (minted on the box, never committed) and the imap_host override. mail.profullstack.com is NOT this site: it is the bbs box's Mailu MTA (PTR, SPF, cert)."
+ "notes": "Not a Railway site: born on dev2 2026-11-02. Primary host webmail.profullstack.com (A -> dev2); webmail.pit.world kept as an alias. Cert by HTTP-01 (both names resolve to dev2). Roundcube webmail, stock image, no repo. Login form has a Server field: users sign in to ANY IMAP server (blank = Forward Email, imap.forwardemail.net). The anyhost plugin (cli-tools dev2/webmail/anyhost, copied to volumes/plugin-anyhost) turns a bare hostname into ssl://host:993, derives SMTP (imap.X -> smtp.X, else the same host; 465 then 587) and refuses private/loopback addresses so the form cannot probe dev2. volumes/config/zz-profullstack.inc.php holds des_key (minted on the box, never committed) and the imap_host override. mail.profullstack.com is NOT this site: it is the bbs box's Mailu MTA (PTR, SPF, cert). Since 2026-11-02 the image is profullstack/webmail:<tag>, built ON dev2 from cli-tools dev2/webmail/Dockerfile (docker build -t profullstack/webmail:<tag> dev2/webmail; not on any registry, deploy pull fails harmlessly): stock 1.7.5 + Kolab calendar/tasklist 3.6.1 + RCMCardDAV 5.1.5. FE sessions sync caldav.forwardemail.net / carddav.forwardemail.net; other servers get database calendars. Plugin schemas loaded once into volumes/db with bin/updatedb.sh."
 }
