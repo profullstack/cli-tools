@@ -631,6 +631,26 @@ describe('sendMail', () => {
     expect(isTransportFailure('550 5.1.1 recipient rejected')).toBe(false);
     expect(isTransportFailure('Resend refused the message: domain is not verified')).toBe(false);
   });
+
+  it('stops a blocked mailbox before SMTP or Resend fallback', async () => {
+    const previous = process.env.EMAIL_QUEUE_BLOCKED_SENDERS;
+    process.env.EMAIL_QUEUE_BLOCKED_SENDERS = 'ettinger@gmail.com';
+    const calls: string[] = [];
+    try {
+      await expect(sendMail(account({ email: 'ettinger@gmail.com', user: 'ettinger@gmail.com' }), {
+        ...outgoing,
+        from: 'Me <ettinger@gmail.com>',
+      }, {
+        resendKey: 'key',
+        smtp: async () => { calls.push('smtp'); return 'must-not-send'; },
+        resend: async () => { calls.push('resend'); return 'must-not-send'; },
+      })).rejects.toThrow(/paused for administrator review/);
+      expect(calls).toEqual([]);
+    } finally {
+      if (previous === undefined) delete process.env.EMAIL_QUEUE_BLOCKED_SENDERS;
+      else process.env.EMAIL_QUEUE_BLOCKED_SENDERS = previous;
+    }
+  });
 });
 
 describe('Resend', () => {

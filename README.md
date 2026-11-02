@@ -1634,7 +1634,7 @@ ftb status
 ```
 
 - **Which form, which line.** `src/ftb-extract.py` (PyMuPDF) reads every PDF
-  under `--dir` (default `~/dottemplates/docs/taxes/years`): Form 100S line 20
+  under `--dir` (default `~/Documents/taxes/years` (override with `FTB_TAX_DIR`)): Form 100S line 20
   "net income for tax purposes" and line 15 for a corporation, Form 540 line 17
   "California AGI" plus filing status, name, SSN and address for a person. Only
   the last five closed years count; newest first, line 20 before 15.

@@ -15,8 +15,8 @@
  * only as a material re-rendering of the owner's own mark, pinned by that mark
  * as the reference: the geometry is never the model's to invent. A style that
  * says nothing — `hq` — keeps the older behaviour, the same logo recoloured to
- * the owner's published colour (Simple Icons' `hex`, or a cited brand page for
- * the few that came from Font Awesome).
+ * the owner's published colour (Simple Icons' `hex`, a cited brand page for
+ * Font Awesome marks, or the first-party service asset).
  *
  * Masters live in <style-dir>/master (1024px, kept out of git); everything
  * else is derived: <style-dir>/png/<size>, <style-dir>/webp/<size>, and
@@ -70,10 +70,9 @@ export interface BrandColor {
 }
 
 /**
- * Every brand's owner colour, from Simple Icons where it carries one and from
- * the cited brand page for the nine that came from Font Awesome. Both the draw
- * pass and the derive pass need this — the draw pass to tell the model what
- * colour the mark is, the derive pass to record it — so it is resolved once.
+ * Brand colours come from Simple Icons, cited brand pages, or first-party
+ * service assets. The draw and derive passes both need them, so they resolve
+ * in one place.
  */
 export async function loadBrandColors(fetchImpl: typeof fetch = fetch): Promise<Map<string, BrandColor>> {
   return brandColorsFrom(await loadSimpleIconsHex(fetchImpl));
@@ -85,6 +84,11 @@ export function brandColorsFrom(siHex: Map<string, string>): Map<string, BrandCo
     if (brand.source === 'simple-icons') {
       const hex = siHex.get(brand.slug);
       if (hex) out.set(brand.key, { hex, source: `simple-icons:${brand.slug}` });
+    } else if (brand.source === 'profullstack-service' && brand.hex) {
+      out.set(brand.key, {
+        hex: brand.hex,
+        source: brand.hexSource ?? `profullstack-service:${brand.slug}`,
+      });
     } else if (FA_BRAND_COLORS[brand.key]) {
       out.set(brand.key, FA_BRAND_COLORS[brand.key]!);
     }

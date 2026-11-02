@@ -3,11 +3,11 @@
  * site or terminal can read.
  *
  * The set is defined in icon-set.ts (drawn here, on a 24x24 stroke grid) and
- * icon-brands.ts (logos fetched from Simple Icons and Font Awesome Free).
+ * icon-brands.ts (external logos) plus icon-service-brands.ts (first-party logos).
  * `build` turns it into the OpenIcon layout:
  *
  *   openicon.json         the descriptor: every icon, its files and its terminal glyphs
- *   svg/<key>.svg         24x24, currentColor
+ *   svg/<key>.svg         24x24; UI icons use currentColor, brands keep source marks
  *   png/<size>/<key>.png  rendered from the SVG
  *   sprite.svg            every icon as a <symbol id="oi-<key>">
  *   index.html            the whole set on one page
@@ -23,6 +23,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { BRANDS, type BrandDef, FONT_AWESOME_VERSION, SIMPLE_ICONS_VERSION } from './icon-brands.ts';
 import { GENERIC, type IconDef } from './icon-set.ts';
@@ -76,6 +77,7 @@ export interface IconEntry {
   brand?: true;
   trademark?: string;
   source?: string;
+  source_url?: string;
   license?: string;
   made_by?: 'human' | 'ai' | 'both';
   svg: string;
@@ -226,8 +228,12 @@ const escapeXml = (s: string) => s.replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '
  * a size larger beside them), centred, filled with currentColor.
  */
 export function brandSvg(source: string, title: string): string {
-  const viewBox = /viewBox="([\d.\s-]+)"/.exec(source)?.[1]?.trim().split(/\s+/).map(Number);
-  const paths = [...source.matchAll(/<path[^>]*\sd="([^"]+)"/g)].map((m) => m[1]!);
+  const image = /<image\b[^>]*\bhref\s*=\s*["'](data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+)["'][^>]*\/?\s*>/i.exec(source)?.[1];
+  if (image) {
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><title>${escapeXml(title)}</title><image href="${image}" x="2" y="2" width="20" height="20" preserveAspectRatio="xMidYMid meet"/></svg>\n`;
+  }
+  const viewBox = /viewBox\s*=\s*["']([\d.,\s-]+)["']/i.exec(source)?.[1]?.trim().split(/[\s,]+/).map(Number);
+  const paths = [...source.matchAll(/<path\b[^>]*\bd\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]!);
   if (!viewBox || viewBox.length !== 4 || paths.length === 0) throw new Error(`cannot read the SVG for ${title}`);
   const [, , w, h] = viewBox as [number, number, number, number];
   const scale = 20 / Math.max(w, h);
@@ -284,8 +290,21 @@ export async function build(options: BuildOptions): Promise<Manifest> {
   options.log(`${generic.length} drawn icons`);
 
   for (const brand of brands) {
-    const url = brand.source === 'simple-icons' ? SOURCES.simpleIcons(brand.slug) : SOURCES.fontAwesome(brand.slug);
-    svgs.set(brand.key, brandSvg(await cached(url, fetchImpl, env), brand.title));
+    let source: string;
+    if (brand.source === 'profullstack-service') {
+      if (!brand.asset) throw new Error(`${brand.key} is missing its first-party logo asset`);
+      const file = fileURLToPath(new URL(`../../openicon/${brand.asset}`, import.meta.url));
+      const bytes = await readFile(file);
+      if (brand.asset.endsWith('.png')) {
+        source = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><image href="data:image/png;base64,${bytes.toString('base64')}" width="256" height="256"/></svg>`;
+      } else {
+        source = bytes.toString('utf8');
+      }
+    } else {
+      const url = brand.source === 'simple-icons' ? SOURCES.simpleIcons(brand.slug) : SOURCES.fontAwesome(brand.slug);
+      source = await cached(url, fetchImpl, env);
+    }
+    svgs.set(brand.key, brandSvg(source, brand.title));
     entries.push(entryFor(brand, 'brand', nerd));
   }
   options.log(`${brands.length} brand logos`);
@@ -326,6 +345,7 @@ export async function build(options: BuildOptions): Promise<Manifest> {
       'nerd-fonts': `Nerd Fonts ${NERD_FONTS_VERSION} glyph names (MIT)`,
       'simple-icons': `Simple Icons ${SIMPLE_ICONS_VERSION} (CC0-1.0)`,
       'font-awesome': `Font Awesome Free ${FONT_AWESOME_VERSION} brands (CC-BY-4.0)`,
+      'profullstack-services': `${BRANDS.filter((brand) => brand.source === 'profullstack-service').length} Profullstack property marks; source URLs are recorded per icon`,
     },
     categories: CATEGORY_NAMES,
     icons: entries,
@@ -361,8 +381,13 @@ function entryFor(icon: IconDef | BrandDef, kind: 'generic' | 'brand', nerd: Ner
     ...(b.aliases?.length ? { aliases: b.aliases } : {}),
     brand: true,
     trademark: `${b.title} and its logo are trademarks of their owner. Use them to refer to ${b.title}, not to imply endorsement.`,
-    source: b.source === 'simple-icons' ? `simple-icons:${b.slug}` : `font-awesome:${b.slug}`,
-    license: b.source === 'simple-icons' ? 'CC0-1.0' : 'CC-BY-4.0',
+    source: b.source === 'simple-icons' ? `simple-icons:${b.slug}`
+      : b.source === 'font-awesome' ? `font-awesome:${b.slug}`
+      : `profullstack-service:${b.slug}`,
+    ...(b.sourceUrl ? { source_url: b.sourceUrl } : {}),
+    license: b.source === 'simple-icons' ? 'CC0-1.0'
+      : b.source === 'font-awesome' ? 'CC-BY-4.0'
+      : 'Profullstack, Inc. service mark',
     made_by: 'human',
     ...base,
   };

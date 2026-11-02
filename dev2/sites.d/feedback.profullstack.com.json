@@ -1,0 +1,5 @@
+{
+ "branch": "master",
+ "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"],
+ "db_sslparams": "sslmode=require"
+}

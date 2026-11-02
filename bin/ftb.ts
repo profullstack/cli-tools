@@ -61,7 +61,7 @@ import { isMain } from '../src/is-main.ts';
 import { pullVault } from '../src/vault.ts';
 import { WcagError } from '../src/wcag.ts';
 
-const DEFAULT_DIR = join(homedir(), 'dottemplates', 'docs', 'taxes', 'years');
+const DEFAULT_DIR = process.env.FTB_TAX_DIR ?? join(homedir(), 'Documents', 'taxes', 'years');
 
 const USAGE = `Usage:
   ftb secrets [--dir D] [--json]       the shared secrets each filed CA return supports, best first
