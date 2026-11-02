@@ -15,6 +15,7 @@ TypeScript, installed as executables on `PATH`.
 | [`free-names`](#free-names) | Name ideas nobody has registered yet, in one command |
 | [`blog-post`](#blog-post) | Publish to a plain-HTML blog without breaking the feed |
 | [`ask-web`](#ask-web) | Answer a question from the live web, with its sources |
+| [`terms`](#terms) | An AI lawyer for a site's terms and privacy policy: what you agree to, red flags, what to push back on |
 | [`websearch`](#websearch) | One query across Perplexity, Serper (Google) and Cloudflare's Ceramic, Exa and Linkup, ranked by our own fusion; `/search` in the pit |
 | [`tts`](#tts) | Read text aloud and keep the audio |
 | [`affiliate`](#affiliate) | Work through a list of programs you mean to sign up for |
@@ -465,6 +466,8 @@ carries the same masked previews, not the values.
 | `openai` | `OPENAI_API_KEY` | `generate-names`, `free-names` |
 | `anthropic` | `ANTHROPIC_API_KEY` | `generate-names`, `free-names` |
 | `perplexity` | `PERPLEXITY_API_KEY` | `ask-web` |
+| `openrouter` | `OPENROUTER_API_KEY` | `terms` (or `openai` / `anthropic`: any one) |
+| `jina` | `JINA_API_KEY` | `terms`, optional: pages only a browser can render |
 | `elevenlabs` | `ELEVENLABS_API_KEY` | `tts` |
 | `porkbun` | `PORKBUN_API_KEY` | `porkbun` |
 | `porkbun_secret` | `PORKBUN_SECRET_API_KEY` | `porkbun` |
@@ -1133,6 +1136,39 @@ What it refuses to do:
 
 `check` reports missing, unparseable and future dates, empty descriptions and a
 missing `<h1>`, and exits non-zero, so it works as a pre-publish gate.
+
+### `terms`
+
+An AI lawyer for a site's terms of service and privacy policy. Give it a
+domain or a link; it finds the terms, the privacy policy and the policies they
+pull in (acceptable use, DPA, cookies, refunds, AI terms), reads every word,
+and prints the verdict and risk score, what you agree to, the key terms
+(liability cap, indemnity, arbitration, termination, auto-renewal, content
+license, AI training), where your data goes, red flags with the clause quoted,
+what to push back on, and what to take from them for our own terms.
+
+```sh
+terms stripe.com
+terms https://example.com/legal/terms --as customer
+terms example.com --context "we will send customer PII through their API"
+terms example.com --provider openrouter --model anthropic/claude-sonnet-5.5
+terms --file agreement.txt          # text you already have; - reads stdin
+terms find vercel.com               # which documents it would read; no model
+terms stripe.com --json | jq .report.red_flags
+```
+
+`--as` is whose side the advice is on: `business` (default: a company putting
+the service in its product), `customer`, `developer` (building on its API) or
+`vendor` (drafting your own terms). It runs on whichever of the `anthropic`,
+`openai` or `openrouter` keys is set (`--provider` picks), defaulting to
+`claude-opus-5-5`, `gpt-5.6-sol` or `anthropic/claude-opus-5.5`; with none, it
+asks https://fineprint.agent.pit.world. A review reads 50-180k characters and
+costs about $0.50 on Opus 5.5.
+
+In moshcode it is `/terms <domain>`. The reading is
+[@profullstack/fineprint](https://github.com/profullstack/fineprint), the same
+code behind fineprint.agent, its own CLI and its MCP server. Not legal advice:
+every claim carries the clause it rests on, so check them.
 
 ### `ask-web`
 

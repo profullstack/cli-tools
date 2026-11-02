@@ -74,7 +74,7 @@ function deploy(env: Record<string, string> = {}) {
   const t = setup();
   const r = spawnSync('bash', [SCRIPT, t.newSha], {
     encoding: 'utf8',
-    env: { ...process.env, PATH: `${t.bin}:${process.env.PATH}`, ROOT: t.root, FAKE: t.fake, ...env },
+    env: { ...process.env, PATH: `${t.bin}:${process.env.PATH}`, ROOT: t.root, FAKE: t.fake, DEPLOY_GATED: '1', ...env },
   });
   const read = (f: string) => readFileSync(join(t.fake, f), 'utf8').trim();
   return { ...t, status: r.status, out: r.stdout + r.stderr, running: read('running'), latest: read('latest'), log: read('log'),

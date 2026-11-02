@@ -261,6 +261,14 @@ def apply(bundle):
         flaky = sorted(n for n in hosts if b1.get(n) != b2.get(n))
         base = {n: v for n, v in b2.items() if n not in flaky}
         say(f"baseline: {len(base)} steady, {len(flaky)} flaky (not judged): {' '.join(flaky)[:600]}")
+        if edge_on:
+            # A site this bundle adds answers differently by design (the relay's 404 becomes
+            # the app's 200), so it is not judged against its old answer.
+            fresh = new_sites(spec)
+            unjudged = sorted(n for n in base if any(n == h or n.endswith("." + h) for h in fresh))
+            if unjudged:
+                say(f"new in this bundle, not judged: {' '.join(unjudged)[:600]}")
+                base = {n: v for n, v in base.items() if n not in unjudged}
 
         if run(["dpkg", "-s", "libnginx-mod-stream"], check=False, capture=True).returncode != 0:
             say("apt-get install libnginx-mod-stream (nginx's own stream module, same version)")
@@ -323,9 +331,39 @@ def apply(bundle):
         say(f"sweeps in {work}; rollback: /usr/local/sbin/edge-box rollback {tgz}")
     except BaseException as e:
         say(f"FAILED: {e}")
-        say("rolling back")
-        rollback(tgz)
+        if edge_on:
+            # The edge was already serving. A full rollback would hand :443 back to an nginx
+            # that no longer has the Caddy-only sites (2026-10-26: every *.pit.world and
+            # Moshpit name went dark for 6 minutes). Put back only what this run changed.
+            say("the edge was already live: restoring the previous Caddyfile and stream map, not rolling back")
+            restore_live(tgz)
+        else:
+            say("rolling back")
+            rollback(tgz)
         sys.exit(1)
+
+
+def new_sites(spec):
+    """Exact hostnames in this bundle that the running Caddyfile does not serve yet."""
+    try:
+        with open("/etc/caddy/Caddyfile") as f:
+            served = set(re.findall(r"https://([a-z0-9.*-]+)", f.read()))
+    except FileNotFoundError:
+        served = set()
+    return {h for site in spec["sites"] for h in site["hosts"] if not h.startswith("*.") and h not in served}
+
+
+def restore_live(tgz):
+    """Undo a failed re-apply on a live edge: the Caddyfile, cert sources and stream map from the backup."""
+    keep = {"etc/caddy/Caddyfile", "etc/caddy/edge-cert-sources", "etc/nginx/stream-enabled/dev2-edge.conf"}
+    with tarfile.open(tgz) as tf:
+        members = [m for m in tf.getmembers() if m.name in keep]
+        tf.extractall("/", members=members, **({"filter": "fully_trusted"} if hasattr(tarfile, "data_filter") else {}))
+    run("nginx -t -q", capture=True)
+    run("systemctl reload nginx")
+    run("if systemctl is-active --quiet caddy.service; then systemctl reload caddy.service; else systemctl restart caddy.service; fi")
+    time.sleep(2)
+    say("restored: " + ", ".join(sorted(m.name for m in members)) + f"; caddy {run(['systemctl', 'is-active', 'caddy'], check=False, capture=True).stdout.strip()}")
 
 
 def reverse_listen(text):

@@ -135,6 +135,7 @@ describe('dev2-edge render', () => {
     expect(stream).toMatch(/\n\s+chovy\.hacker\s+127\.0\.0\.1:8453;/);
     // an exact name under a routed wildcard can stay on nginx
     expect(stream).toMatch(/\n\s+live\.streaming\.pit\.world\s+127\.0\.0\.1:8444;/);
+    expect(stream).toMatch(/\n\s+otr\.podcast\.pit\.world\s+127\.0\.0\.1:8453;/);
     expect(stream).toContain('hostnames;');
   });
 
@@ -153,22 +154,30 @@ describe('dev2-edge render', () => {
     expect(caddy).toContain('protocols h1 h2');
     expect(caddy).not.toMatch(/on_demand|acme_ca|\bemail\b/);
     expect(caddy).toContain('header_up X-Real-IP {remote_host}');
+    const otrAlias = caddy.slice(caddy.indexOf('https://otr.podcast.pit.world {'));
+    expect(otrAlias).toContain('import edge_proxy 8787');
     for (const site of SPEC.sites) {
       const head = site.hosts.map((h: string) => `https://${h}`).join(', ') + ' {';
       expect(caddy).toContain(head);
       const block = caddy.slice(caddy.indexOf(head), caddy.indexOf('\n}\n', caddy.indexOf(head)));
-      if (site.proxy) expect(block).toContain(`import edge_proxy ${site.proxy}`);
+      if (site.proxy && site.retry) expect(block).toContain(`reverse_proxy 127.0.0.1:${site.proxy}`);
+      else if (site.proxy) expect(block).toContain(`import edge_proxy ${site.proxy}`);
       if (site.root) expect(block).toContain(`root * ${site.root}`);
       if (site.redirect) expect(block).toContain(`redir ${site.redirect} 301`);
       if (site.max_body) expect(block).toContain(`max_size ${site.max_body}`);
       expect(block).toContain(site.moshpit ? 'import edge_tls_moshpit' : 'import edge_tls');
     }
+    const agentDb = caddy.slice(caddy.indexOf('https://agent.database.pit.world {'));
+    expect(agentDb).toContain('output file /var/log/caddy/agent.database.pit.world.access.log');
+    expect(agentDb).toContain('request>uri regexp `\\?.*` ""');
+    expect(agentDb).toContain('request>headers delete');
+    expect(agentDb).toContain('resp_headers delete');
     expect(caddy).toMatch(/\(edge_tls_moshpit\) \{\s+tls \{\s+load \/etc\/caddy\/edge-certs\s+protocols tls1\.3/);
   });
 
   it('every name the stream sends to Caddy has a Caddy site', () => {
     const { stream } = render();
-    const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]);
+    const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]!);
     const hosts: string[] = SPEC.sites.flatMap((s: { hosts: string[] }) => s.hosts);
     for (const r of routed) {
       const ok = r.startsWith('*.') ? hosts.some((h) => h.startsWith('*.') && h.endsWith(r.slice(1))) : hosts.includes(r);

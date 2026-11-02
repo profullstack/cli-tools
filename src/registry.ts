@@ -29,6 +29,7 @@ export interface Command {
 const SUMMARIES: Record<string, string> = {
   affiliate: 'Work through a list of programs you mean to sign up for',
   agenticjobs: 'Search, apply, post and hire on an agent-friendly job board',
+  'agent-mail-poll': 'Poll one agent mailbox and route new messages to its trusted task runner',
   alchemy: 'Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402',
   argontv: 'The shared IPTV line: is it healthy, and is there room to sell another pass',
   'ask-web': 'Answer a question from the live web, with its sources',
@@ -47,6 +48,7 @@ const SUMMARIES: Record<string, string> = {
   'email-cleaner': 'Clean a mailing list: drop bad, role, disposable, duplicate and unlikely addresses',
   emoji: 'Every standard emoji, drawn by an image model as one set: PNG, SVG, fonts, OpenEmoji manifest',
   crawlproof: 'What the fleet costs and what it returns: traffic, ads and the bank behind them',
+  terms: 'An AI lawyer for a site\'s terms and privacy policy: what you agree to, red flags, what to push back on',
   submitfleet: 'Launch products on 339 launch sites and directories, tracked until live (submitfleet.com)',
   'free-names': 'Name ideas nobody has registered yet, in one command',
   'generate-names': 'Turn a sentence about a product into a thousand candidate names',

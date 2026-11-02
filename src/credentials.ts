@@ -31,6 +31,11 @@ export const KNOWN_KEYS: Record<string, string> = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   perplexity: 'PERPLEXITY_API_KEY',
+  // Read by `terms` (with openai/anthropic): any one of the three runs the review.
+  openrouter: 'OPENROUTER_API_KEY',
+  // Read by `terms`: the rendered-page fallback, for policy pages a plain fetch
+  // cannot read. Optional; anonymous use is refused from some networks.
+  jina: 'JINA_API_KEY',
   elevenlabs: 'ELEVENLABS_API_KEY',
   porkbun: 'PORKBUN_API_KEY',
   porkbun_secret: 'PORKBUN_SECRET_API_KEY',

@@ -1,12 +1,10 @@
-import { SERVICE_BRANDS } from './icon-service-brands.ts';
-
 /**
  * Brand logos in the OpenIcon set. None is drawn here.
  *
- * External brands come from Simple Icons (CC0), or from Font Awesome Free
- * (CC BY 4.0) when Simple Icons no longer carries the mark. First-party
- * Profullstack service marks are recorded in icon-service-brands.ts and read
- * from the sibling OpenIcon repository at build time.
+ * Simple Icons (CC0) is the source for every brand it carries. Some brands
+ * have asked Simple Icons to remove their logos (Slack, LinkedIn, Microsoft
+ * and others); for those, Font Awesome Free's brand icons (CC BY 4.0) are
+ * used and credited. Both are fetched at build time from pinned releases.
  *
  * Every logo is a trademark of its owner. The set records that on each
  * brand icon (`brand: true`, `trademark`), because a logo's licence covers
@@ -19,18 +17,13 @@ export const FONT_AWESOME_VERSION = '7.3.1';
 export interface BrandDef {
   key: string;
   title: string;
-  source: 'simple-icons' | 'font-awesome' | 'profullstack-service';
+  source: 'simple-icons' | 'font-awesome';
   /** Slug in the source set (Simple Icons slug, or Font Awesome icon name). */
   slug: string;
   unicode: string;
   ascii: string;
   nerd: string[];
   aliases?: string[];
-  /** Path under the Profullstack OpenIcon repository for first-party marks. */
-  asset?: string;
-  hex?: string;
-  hexSource?: string;
-  sourceUrl?: string;
 }
 
 type Row = [key: string, title: string, slug: string, unicode: string, ascii: string, nerd?: string[], aliases?: string[]];
@@ -190,5 +183,4 @@ export const BRANDS: BrandDef[] = [
     ['codepen', 'CodePen', 'codepen', '⬡', 'cpn', ['md-codepen', 'fa-codepen']],
     ['amazon', 'Amazon', 'amazon', 'ⓐ', 'amz', ['md-amazon', 'fa-amazon']],
   ]),
-  ...SERVICE_BRANDS,
 ];
