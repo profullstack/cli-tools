@@ -21,4 +21,18 @@ RUN sed -i 's/^CREATE INDEX ix_contact_type ON kolab_cache_dav_contact/CREATE IN
       /usr/src/roundcubemail/plugins/libkolab/SQL/sqlite.initial.sql \
  && grep -c ix_dav_contact_type /usr/src/roundcubemail/plugins/libkolab/SQL/sqlite.initial.sql
 
+# googlecal: libkolab's DAV client only does basic auth. Send `Bearer <token>` instead
+# when dav_oauth_tokens has one for the request's host (Google CalDAV); every other
+# server (Forward Email) keeps username/password.
+RUN f=/usr/src/roundcubemail/plugins/libkolab/lib/kolab_dav_client.php \
+ && sed -i 's#^            \$request->setAuth(\$this->user, \$this->password);#            $oauth = (array) $rcube->config->get("dav_oauth_tokens", []); $host = parse_url($this->url, PHP_URL_HOST);\n            if (!empty($oauth[$host])) { $request->setHeader("Authorization", "Bearer " . $oauth[$host]); } else { $request->setAuth($this->user, $this->password); }#' $f \
+ && grep -c 'dav_oauth_tokens' $f
+
+# The import dialog's Range defaulted to "1 month back", silently skipping every older
+# event (and recurring series that started earlier). Default to All.
+RUN f=/usr/src/roundcubemail/plugins/calendar/lib/calendar_ui.php \
+ && sed -i "s#html::div('col-sm-8', \$select->show(1))#html::div('col-sm-8', \$select->show(0))#" $f \
+ && grep -c "select->show(0))" $f
+
+COPY --chmod=755 googlecal /usr/src/roundcubemail/plugins/googlecal
 COPY --chmod=644 carddav.config.inc.php /usr/src/roundcubemail/plugins/carddav/config.inc.php
