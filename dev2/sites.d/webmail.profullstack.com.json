@@ -1,0 +1,55 @@
+{
+ "site": "webmail.profullstack.com",
+ "service": "webmail.profullstack.com",
+ "repo": null,
+ "branch": null,
+ "image": "roundcube/roundcubemail:1.7.5-apache",
+ "start_command": "apache2-foreground",
+ "port_var": "80",
+ "domains": [
+  "webmail.pit.world"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [
+  {
+   "name": "db",
+   "mountPath": "/var/roundcube/db"
+  },
+  {
+   "name": "config",
+   "mountPath": "/var/roundcube/config"
+  },
+  {
+   "name": "plugin-anyhost",
+   "mountPath": "/var/www/html/plugins/anyhost"
+  }
+ ],
+ "port_var_note": "Roundcube's Apache listens on 80 inside the container",
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3391,
+ "health_path": "/",
+ "max_body": "32m",
+ "mem_limit": "384m",
+ "mem_note": "Roundcube 1.7 on Apache + mod_php, SQLite; a handful of users",
+ "vault": "",
+ "env_overrides": {
+  "ROUNDCUBEMAIL_DB_TYPE": "sqlite",
+  "ROUNDCUBEMAIL_DB_DIR": "/var/roundcube/db",
+  "ROUNDCUBEMAIL_DEFAULT_HOST": "ssl://imap.forwardemail.net",
+  "ROUNDCUBEMAIL_DEFAULT_PORT": "993",
+  "ROUNDCUBEMAIL_SMTP_SERVER": "ssl://smtp.forwardemail.net",
+  "ROUNDCUBEMAIL_SMTP_PORT": "465",
+  "ROUNDCUBEMAIL_PLUGINS": "anyhost,archive,zipdownload",
+  "ROUNDCUBEMAIL_SKIN": "elastic",
+  "ROUNDCUBEMAIL_UPLOAD_MAX_FILESIZE": "25M"
+ },
+ "notes": "Not a Railway site: born on dev2 2026-11-02. Public at webmail.pit.world (wildcard *.pit.world already on dev2, cert by HTTP-01); add webmail.profullstack.com to domains once the Porkbun API key is replaced (the vaulted pk1_264d pair is revoked: INVALID_API_KEYS 2026-11-02). Roundcube webmail, stock image, no repo. Login form has a Server field: users sign in to ANY IMAP server (blank = Forward Email, imap.forwardemail.net). The anyhost plugin (cli-tools dev2/webmail/anyhost, copied to volumes/plugin-anyhost) turns a bare hostname into ssl://host:993, derives SMTP (imap.X -> smtp.X, else the same host; 465 then 587) and refuses private/loopback addresses so the form cannot probe dev2. volumes/config/zz-profullstack.inc.php holds des_key (minted on the box, never committed) and the imap_host override. mail.profullstack.com is NOT this site: it is the bbs box's Mailu MTA (PTR, SPF, cert)."
+}

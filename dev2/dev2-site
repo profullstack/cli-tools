@@ -184,8 +184,10 @@ def site_variables(s, sid=None, envfile="app.env"):
     dev2 (a retired service has no variables left anywhere else). Values from dev2 are already
     the rendered ones, which is what a re-render should start from."""
     vars_ = {}
-    try: vars_ = rw_variables(s["project_id"], s["environment_id"], sid or s["service_id"])
-    except RuntimeError as e: warn(f"railway variables: {str(e)[:120]}")
+    # A site born on dev2 has no Railway project: never ask Railway (its token may be gone).
+    if s.get("project_id"):
+        try: vars_ = rw_variables(s["project_id"], s["environment_id"], sid or s["service_id"])
+        except RuntimeError as e: warn(f"railway variables: {str(e)[:120]}")
     if vars_: return vars_
     txt = ssh("root", f"cat {WWW}/{shlex.quote(s['site'])}/{shlex.quote(envfile)} 2>/dev/null", check=False)
     if not txt.strip():
@@ -1484,6 +1486,13 @@ def cmd_cert(args):
     domains = site_domains(s)
     if not zone_at_porkbun(s["site"]):
         note(f"{s['site']}'s zone is not at Porkbun (NS: {sh(['dig', '+short', 'NS', '.'.join(s['site'].split('.')[-2:])], check=False).strip().replace(chr(10), ' ')})")
+        return cmd_cert_http(s, domains)
+    # Every name already answers on dev2 (a *.pit.world wildcard, a site born here):
+    # HTTP-01 needs no DNS API at all, so a dead Porkbun key cannot block the cert.
+    # sites.d "cert_mode": "dns-01" forces the old path.
+    if s.get("cert_mode") != "dns-01" and not any(d.startswith("*.") for d in domains) and \
+            all(DEV2_IP in sh(["dig", "+short", d], check=False).split() for d in domains):
+        note(f"{', '.join(domains)} already resolve to dev2; using HTTP-01")
         return cmd_cert_http(s, domains)
     k, sk = porkbun_keys()
     cert_dir = f"/etc/nginx/ssl/{s['site']}"
