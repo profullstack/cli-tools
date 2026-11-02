@@ -71,7 +71,9 @@ class googlecal extends rcube_plugin
             $this->rc->output->redirect(['_task' => 'settings', '_action' => 'edit-prefs', '_section' => 'googlecal']);
             return;
         }
-        $_SESSION['googlecal_state'] = $state = bin2hex(random_bytes(16));
+        // "wm." routes the reply through the registered mynaposter.com relay page
+        // (apps/web/assets/oauth-callback.js) back to this server's callback.
+        $_SESSION['googlecal_state'] = $state = 'wm.' . bin2hex(random_bytes(16));
         $url = self::AUTH_URL . '?' . http_build_query([
             'client_id'              => $this->rc->config->get('googlecal_client_id'),
             'redirect_uri'           => $this->redirect_uri(),
