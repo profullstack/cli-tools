@@ -661,6 +661,10 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
         y.append("    environment:")
         if heap and name not in node_preset: y.append(heap_line(heap, list_style=False))
         y.append(f"      PORT: \"{port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
+        if s.get("email_queue_redis"):
+            # The shared @profullstack/email-queue Redis this stack hosts (quotas,
+            # suppressions and the provider breaker for every sending app).
+            y.append("      EMAIL_QUEUE_REDIS_URL: redis://email-queue-redis:6379")
         if command:
             # A nixpacks image's entrypoint is `/bin/bash -l -c`, and bash -c takes ONE script
             # argument: an argv list would run only the first word (Bun's help text, exit 0,
@@ -670,8 +674,15 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
         if vols:
             y.append("    volumes:")
             for v in vols: y.append(f"      - ./volumes/{v['name']}:{v['mountPath']}")
-        if s["redis"]:
-            y.append("    depends_on:\n      redis:\n        condition: service_started")
+        eq = s.get("email_queue_redis")
+        deps = []
+        if s["redis"]: deps.append("      redis:\n        condition: service_started")
+        if eq: deps.append("      email-queue-redis:\n        condition: service_healthy")
+        if deps: y.append("    depends_on:\n" + "\n".join(deps))
+        nets = s.get("external_networks") or []
+        if nets:
+            y.append("    networks:\n      - default")
+            y.extend(f"      - {n['name']}" for n in nets)
         y.append("    logging:\n      driver: json-file\n      options: { max-size: \"50m\", max-file: \"3\" }")
     service("app", "app.env", command=s.get("start_command"), vols=s["volumes"])
     for c in s["companions"]:
@@ -679,10 +690,30 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
         # loopback so a `proxies` entry can give it its own hostname (an API the web app calls).
         cp = (s.get("companion_ports") or {}).get(c["name"])
         service(c["name"], f"{c['name']}.env", command=(s.get("companion_commands") or {}).get(c["name"]), ports=False, vols=c.get("volumes", []), port_inside=(cp or {}).get("inside"))
-        if cp: y.insert(len(y) - (2 if s["redis"] else 1), f"    ports:\n      - \"127.0.0.1:{cp['host']}:{cp['inside']}\"")
+        if cp:
+            # Insert before what service() appends after ports: depends_on (own redis or
+            # the email-queue redis), the networks list (header + one line each), logging.
+            tail = 1 + (1 if (s["redis"] or s.get("email_queue_redis")) else 0)
+            nets = s.get("external_networks") or []
+            if nets: tail += 1 + len(nets)
+            y.insert(len(y) - tail, f"    ports:\n      - \"127.0.0.1:{cp['host']}:{cp['inside']}\"")
     if s["redis"]:
         y.append("  redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n" + mem_lines(mem_plan(s, "redis", is_redis=True, maxmemory="1gb")[0]) + "\n    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--maxmemory\", \"1gb\", \"--maxmemory-policy\", \"noeviction\"]\n    volumes:\n      - redisdata:/data\n    logging:\n      driver: json-file\n      options: { max-size: \"20m\", max-file: \"2\" }")
-        y.append("volumes:\n  redisdata:")
+    eq = s.get("email_queue_redis")
+    if eq:
+        # sites.d "email_queue_redis": {"host_port": 6395, "volume": "mynaposter-email-queue-data"}
+        # The fleet's one @profullstack/email-queue Redis. Other sending apps reach it by
+        # joining this stack's default network (their sites.d "external_networks").
+        # AOF + RDB: suppressions and receipts must survive a restart.
+        y.append("  email-queue-redis:\n    image: redis:8-alpine\n    restart: unless-stopped\n    mem_limit: 256m\n"
+                 "    command: [\"redis-server\", \"--appendonly\", \"yes\", \"--save\", \"60\", \"1\"]")
+        if eq.get("host_port"): y.append(f"    ports:\n      - \"127.0.0.1:{int(eq['host_port'])}:6379\"")
+        y.append("    volumes:\n      - email-queue-data:/data\n    healthcheck:\n      test: [\"CMD\", \"redis-cli\", \"ping\"]\n"
+                 "      interval: 5s\n      timeout: 3s\n      retries: 20")
+    vols = []
+    if s["redis"]: vols.append("  redisdata:")
+    if eq: vols.append(f"  email-queue-data:\n    name: {eq.get('volume') or s['site'].replace('.', '-') + '-email-queue-data'}")
+    if vols: y.append("volumes:\n" + "\n".join(vols))
     # An explicit subnet per site: Docker's default address pools (15 x /16 + 16 x /20)
     # ran out at 34 networks on dev2, and widening them means restarting dockerd
     # under every container. 10.200.<port-3200>.0/24 is deterministic and allowlisted
@@ -690,7 +721,11 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
     # `subnet_octet` in sites.d moves a site off a /24 another stack already holds
     # (bittorrented.com was hand-built on c0ncerts.com's 10.200.78.0/24).
     n = s.get("subnet_octet", s["port"] - FIRST_PORT)
-    y.append(f"networks:\n  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
+    nets = s.get("external_networks") or []
+    # sites.d "external_networks": [{"name": "emailqueue", "network": "mynapostercom_default"}]
+    # joins another stack's network, e.g. to reach the shared email-queue-redis.
+    ext = "".join(f"  {e['name']}:\n    external: true\n    name: {e['network']}\n" for e in nets)
+    y.append(f"networks:\n{ext}  default:\n    ipam:\n      config:\n        - subnet: 10.200.{n}.0/24")
     # Healthchecks chosen by `dev2-site healthchecks` survive a re-render.
     return health_compose("\n".join(y) + "\n", st.get("healthchecks") or {})
 

@@ -28,5 +28,9 @@
  "companion_commands": {
   "mynaposter-api": "bun apps/api/src/server.ts"
  },
- "node_version": "22"
+ "node_version": "22",
+ "email_queue_redis": {
+  "host_port": 6395,
+  "volume": "mynaposter-email-queue-data"
+ }
 }
