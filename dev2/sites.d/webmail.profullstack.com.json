@@ -3,7 +3,7 @@
  "service": "webmail.profullstack.com",
  "repo": null,
  "branch": null,
- "image": "profullstack/webmail:1.7.5-cal3",
+ "image": "profullstack/webmail:1.7.5-cal5",
  "start_command": "apache2-foreground",
  "port_var": "80",
  "domains": [

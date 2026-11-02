@@ -34,5 +34,9 @@ RUN f=/usr/src/roundcubemail/plugins/calendar/lib/calendar_ui.php \
  && sed -i "s#html::div('col-sm-8', \$select->show(1))#html::div('col-sm-8', \$select->show(0))#" $f \
  && grep -c "select->show(0))" $f
 
+# Exact-match source patches (fail the build if upstream moves): see patches.php.
+COPY patches.php /tmp/patches.php
+RUN php /tmp/patches.php && php -l /usr/src/roundcubemail/plugins/libcalendaring/lib/libcalendaring_recurrence.php && rm /tmp/patches.php
+
 COPY --chmod=755 googlecal /usr/src/roundcubemail/plugins/googlecal
 COPY --chmod=644 carddav.config.inc.php /usr/src/roundcubemail/plugins/carddav/config.inc.php
