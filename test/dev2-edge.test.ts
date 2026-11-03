@@ -175,6 +175,15 @@ describe('dev2-edge render', () => {
     expect(caddy).toMatch(/\(edge_tls_moshpit\) \{\s+tls \{\s+load \/etc\/caddy\/edge-certs\s+protocols tls1\.3/);
   });
 
+  it('routes both Art Auctions House hosts through the pit.world app', () => {
+    const { stream, caddy } = render();
+    expect(stream).toMatch(/\n\s+auctions\.pit\.world\s+127\.0\.0\.1:8453;/);
+    expect(stream).toMatch(/\n\s+art\.auctions\.pit\.world\s+127\.0\.0\.1:8453;/);
+    const route = caddy.slice(caddy.indexOf('https://auctions.pit.world, https://art.auctions.pit.world {'));
+    expect(route).toContain('request_body {\n\t\tmax_size 30MiB\n\t}');
+    expect(route).toContain('import edge_proxy 8787');
+  });
+
   it('every name the stream sends to Caddy has a Caddy site', () => {
     const { stream } = render();
     const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]!);
