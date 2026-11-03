@@ -22,6 +22,8 @@
     { "hosts": ["agent.database.pit.world"], "proxy": 18080, "max_body": "512KiB", "gzip": true, "access_log": true, "sanitize_query": true },
     { "hosts": ["otr.podcast.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,
       "//": "preserve the legacy pit.world alias route while the exact OTR host uses port 8814" },
+    { "hosts": ["auctions.pit.world", "art.auctions.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,
+      "//": "Art Auctions House: exact root and nested hosts served by pit.world" },
     { "hosts": ["group.call.pit.world"], "proxy": 8810, "max_body": "1MiB", "retry": "20s",
       "//": "group.call (moshcoder/group.call): no gzip, so the room page's server-sent events are not held back; retry holds Telnyx webhooks across a deploy instead of 502" },
     { "hosts": ["*.*.pit.world", "*.*.*.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,
