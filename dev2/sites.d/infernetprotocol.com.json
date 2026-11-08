@@ -15,5 +15,11 @@
  },
  "keep_services": [
   "realtime"
+ ],
+ "vault": "doppler-infernetprotocol--prd",
+ "env_remove": [
+  "DOPPLER_CONFIG",
+  "DOPPLER_ENVIRONMENT",
+  "DOPPLER_PROJECT"
  ]
 }
