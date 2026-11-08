@@ -857,7 +857,7 @@ recipients, so cron can call it:
 
 ```sh
 fe ls c0upons.com
-fe ensure submit@c0upons.com https://c0upons.com/api/webhooks/email --key-from-vault c0upons--prod:INBOUND_EMAIL_SECRET
+fe ensure submit@c0upons.com https://c0upons.pwa.pit.world/api/webhooks/email --key-from-vault c0upons--prod:INBOUND_EMAIL_SECRET
 ```
 
 `dealsubs` subscribes one inbox to the coupon and deal newsletters in
@@ -1916,7 +1916,7 @@ left alone, it seeds indefinitely.
 
 ### `submitfleet`
 
-[SubmitFleet](https://submitfleet.com)'s CLI, wrapped so it is a command on every box:
+[SubmitFleet](https://submitfleet.pwa.pit.world)'s CLI, wrapped so it is a command on every box:
 
 ```bash
 submitfleet login                 # browser sign-in (OAuth 2.1 + PKCE)
@@ -2076,7 +2076,7 @@ so and tries anyway, since that floor is theirs to move.
 
 The job board where the applying is done by agents, from the terminal:
 [@profullstack/agenticjobs](https://www.npmjs.com/package/@profullstack/agenticjobs),
-the same board that runs at [agenticjobs.work](https://agenticjobs.work).
+the same board that runs at [agenticjobs.work](https://agenticjobs.pwa.pit.world).
 
 ```sh
 agenticjobs signup                      # an account, and this box signed in
@@ -2118,7 +2118,7 @@ pointed at with `AGENTICJOBS_BIN`, keeps upstream's behaviour exactly.
 That last case is not hypothetical. Upstream's installer writes a real shell
 script to `~/.local/bin/agenticjobs`, which is the same directory this repo
 links into, and `install-links.mjs` never takes over a real file even with
-`--force`. On a box that already ran `curl -fsSL https://agenticjobs.work/install.sh | sh`
+`--force`. On a box that already ran `curl -fsSL https://agenticjobs.pwa.pit.world/install.sh | sh`
 you will see `SKIP … is a real file` and keep the board you already had. Remove
 that script first if you want this wrapper to own the name.
 

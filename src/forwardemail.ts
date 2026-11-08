@@ -76,7 +76,7 @@ export function client(token: string, doFetch: Fetch = fetch, base = API_BASE): 
   };
 }
 
-/** "submit@c0upons.com" -> { name: "submit", domain: "c0upons.com" }. */
+/** "submit@c0upons.com" -> { name: "submit", domain: "c0upons.pwa.pit.world" }. */
 export function splitAddress(address: string): { name: string; domain: string } {
   const m = /^([^@\s]+)@([a-z0-9.-]+\.[a-z]{2,})$/i.exec(address.trim());
   if (!m) throw new ForwardEmailError(`not an email address: ${JSON.stringify(address)}`);
