@@ -28,6 +28,8 @@
 set -uo pipefail
 
 APPLY=0; [ "${1:-}" = --apply ] && APPLY=1
+# Cron's PATH has no node; diskpush needs node 24 (mise).
+export PATH="/home/anthony/.local/share/mise/shims:/home/anthony/.local/bin:$PATH"
 IDLE_DAYS=${IDLE_DAYS:-3}
 H=/home/anthony
 STATE=$H/.local/state/disk-clean; mkdir -p "$STATE"
@@ -36,7 +38,9 @@ WORK=$(mktemp -d "$STATE/run.XXXXXX"); trap 'rm -rf "$WORK"' EXIT
 log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
 gb() { df --output=avail -B1G / | tail -1 | tr -d ' '; }
 del() { # path, reason
-  if [ $APPLY = 1 ]; then rm -rf -- "$1" && log "deleted $1 ($2)"; else log "would delete $1 ($2)"; fi
+  if [ $APPLY = 0 ]; then log "would delete $1 ($2)"; return; fi
+  # Files a container build left owned by root cannot go; the rest does.
+  if rm -rf -- "$1" 2>/dev/null; then log "deleted $1 ($2)"; else log "partly deleted $1 ($2): $(find "$1" 2>/dev/null | wc -l) entries not ours to remove"; fi
 }
 before=$(gb)
 log "start ($([ $APPLY = 1 ] && echo apply || echo dry run)), ${before}G free"
