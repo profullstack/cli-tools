@@ -164,7 +164,7 @@ describe('credential probes', () => {
   it('sees a saved sign-in from submitfleet login', () => {
     const dir = mkdtempSync(join(tmpdir(), 'sf-cfg-'));
     const file = join(dir, 'auth.json');
-    writeFileSync(file, '{"url":"https://submitfleet.com","access_token":"x"}');
+    writeFileSync(file, '{"url":"https://submitfleet.pwa.pit.world","access_token":"x"}');
     try {
       expect(hasToken({ SUBMITFLEET_AUTH_FILE: file })).toBe(true);
       expect(hasToken({ XDG_CONFIG_HOME: join(dir, 'nope'), HOME: dir })).toBe(false);

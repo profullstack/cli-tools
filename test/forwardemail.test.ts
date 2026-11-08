@@ -33,19 +33,19 @@ function fakeApi(initial: Array<Record<string, unknown>>) {
 
 describe('forwardemail', () => {
   it('splits an address and refuses a non-address', () => {
-    expect(splitAddress('Submit@C0upons.com')).toEqual({ name: 'submit', domain: 'c0upons.com' });
+    expect(splitAddress('Submit@C0upons.com')).toEqual({ name: 'submit', domain: 'c0upons.pwa.pit.world' });
     expect(() => splitAddress('submit')).toThrow(ForwardEmailError);
   });
 
   it('sends the token as the Basic-auth username with an empty password', async () => {
     const { api, calls } = fakeApi([]);
-    await ensureAlias(api, 'submit@c0upons.com', ['https://c0upons.com/api/webhooks/email?key=s3cret']);
+    await ensureAlias(api, 'submit@c0upons.com', ['https://c0upons.pwa.pit.world/api/webhooks/email?key=s3cret']);
     expect(calls[0]!.auth).toBe(`Basic ${Buffer.from('tok:').toString('base64')}`);
   });
 
   it('creates a missing alias, then leaves it alone', async () => {
     const { api, calls } = fakeApi([]);
-    const hook = 'https://c0upons.com/api/webhooks/email?key=s3cret';
+    const hook = 'https://c0upons.pwa.pit.world/api/webhooks/email?key=s3cret';
     expect((await ensureAlias(api, 'submit@c0upons.com', [hook])).outcome).toBe('created');
     expect((await ensureAlias(api, 'submit@c0upons.com', [hook])).outcome).toBe('unchanged');
     expect(calls.filter((c) => c.method !== 'GET')).toHaveLength(1);
@@ -53,9 +53,9 @@ describe('forwardemail', () => {
 
   it('adds a recipient without removing the ones already there', async () => {
     const { api, aliases } = fakeApi([{ id: 'a1', name: 'submit', recipients: ['anthony@profullstack.com'], is_enabled: true }]);
-    const r = await ensureAlias(api, 'submit@c0upons.com', ['https://c0upons.com/api/webhooks/email?key=k']);
+    const r = await ensureAlias(api, 'submit@c0upons.com', ['https://c0upons.pwa.pit.world/api/webhooks/email?key=k']);
     expect(r.outcome).toBe('updated');
-    expect(aliases[0]!.recipients).toEqual(['anthony@profullstack.com', 'https://c0upons.com/api/webhooks/email?key=k']);
+    expect(aliases[0]!.recipients).toEqual(['anthony@profullstack.com', 'https://c0upons.pwa.pit.world/api/webhooks/email?key=k']);
   });
 
   it('re-enables a disabled alias', async () => {
@@ -69,6 +69,6 @@ describe('forwardemail', () => {
   });
 
   it('masks webhook keys when printing', () => {
-    expect(maskRecipient('https://c0upons.com/api/webhooks/email?key=s3cret&x=1')).toBe('https://c0upons.com/api/webhooks/email?key=…&x=1');
+    expect(maskRecipient('https://c0upons.pwa.pit.world/api/webhooks/email?key=s3cret&x=1')).toBe('https://c0upons.pwa.pit.world/api/webhooks/email?key=…&x=1');
   });
 });

@@ -3,7 +3,7 @@
  * fe — Forward Email aliases without the dashboard.
  *
  *   fe ls c0upons.com
- *   fe ensure submit@c0upons.com https://c0upons.com/api/webhooks/email \
+ *   fe ensure submit@c0upons.com https://c0upons.pwa.pit.world/api/webhooks/email \
  *       --key-from-vault c0upons--prod:INBOUND_EMAIL_SECRET
  *   fe rm old@c0upons.com --yes
  *

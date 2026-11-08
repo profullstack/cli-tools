@@ -18,7 +18,7 @@ export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:/usr/local/bin:/usr/
 
 INBOX=${INBOX:-submit@c0upons.com}
 EXTRA=${EXTRA_ALIASES:-coupons@profullstack.com}
-HOOK=https://c0upons.com/api/webhooks/email
+HOOK=https://c0upons.pwa.pit.world/api/webhooks/email
 KEYSPEC=c0upons--prod:INBOUND_EMAIL_SECRET
 STATE="${XDG_DATA_HOME:-$HOME/.local/share}/cli-tools/dealsubs"
 VERIFIED="$STATE/inbox-verified"
