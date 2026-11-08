@@ -21,8 +21,8 @@
 #  3. Backups: `diskpush dbbackup prune` (each database's saved retention; diskpush always
 #     keeps the newest dump), and *.partial dumps under ~/Backups older than 24 h that no
 #     process has open (a backup that died mid-write, e.g. when the disk filled).
-#  4. Docker: build cache unused for 72 h and dangling (untagged) images. NEVER containers
-#     or volumes: stopped dev2 containers are stopped on purpose.
+#  Docker caches are the hourly ~/.local/bin/disk-cleanup's job, not this one. Neither
+#  touches containers or volumes: stopped dev2 containers are stopped on purpose.
 #
 # Never touched: ~/www (deploys), database data, any volume, a repo's source or .git.
 set -uo pipefail
@@ -95,12 +95,7 @@ find $H/Backups -xdev -type f -name '*.partial' -mmin +1440 2>/dev/null | while 
   if fuser -s "$f" 2>/dev/null; then log "kept $f (still open)"; else del "$f" "dead partial backup, 24h+ old"; fi
 done
 
-# 4. Docker caches only.
-if [ $APPLY = 1 ]; then
-  log "docker build cache: $(docker builder prune -f --filter until=72h 2>&1 | tail -1)"
-  log "docker dangling images: $(docker image prune -f 2>&1 | tail -1)"
-else
-  log "would prune docker build cache unused 72h and dangling images"
-fi
+# Docker build cache and images: ~/.local/bin/disk-cleanup does that hourly (on this box's
+# buildx, filtered prunes free 0 B, so it prunes unfiltered).
 
 log "done, ${before}G -> $(gb)G free"
