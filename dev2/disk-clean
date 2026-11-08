@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# dev2 nightly disk clean. Dry run by default; --apply deletes. Cron (anthony):
+#   30 4 * * * flock -n /tmp/disk-clean.lock disk-clean --apply >> ~/.local/state/disk-clean/cron.log 2>&1
+#
+# Why (2026-11-08): dev2's / (1.8T) hit 99-100% with 4.5-20G free; the shared
+# supabase-db logged "PANIC: No space left on device". One manual sweep freed 73G,
+# mostly build output in finished checkouts. This runs that sweep every night.
+#
+# It deletes ONLY things that are regenerable or provably dead, and refuses on any doubt:
+#  1. Build output (node_modules, target, .next, .turbo, .svelte-kit) under ~/src,
+#     ~/worktrees, ~/scratch, when ALL hold:
+#       - it is a real build dir: node_modules/.next/.turbo/.svelte-kit next to a
+#         package.json, target next to a Cargo.toml or holding CACHEDIR.TAG; not a symlink;
+#       - its whole git repo (or project dir) has no file changed in IDLE_DAYS (default 3),
+#         build dirs and .git aside;
+#       - no running process has its cwd or binary in that repo;
+#       - the repo is not used by a linked CLI (symlinks in ~/.local/bin, ~/.bun, npm/pnpm
+#         globals, /usr/local/bin), a crontab or cron.d line, or a systemd unit.
+#  2. Dead Claude job dirs ~/.claude/jobs/<id>: no state.json, nothing changed in
+#     IDLE_DAYS, and no running process names the job in its environment.
+#  3. Backups: `diskpush dbbackup prune` (each database's saved retention; diskpush always
+#     keeps the newest dump), and *.partial dumps under ~/Backups older than 24 h that no
+#     process has open (a backup that died mid-write, e.g. when the disk filled).
+#  4. Docker: build cache unused for 72 h and dangling (untagged) images. NEVER containers
+#     or volumes: stopped dev2 containers are stopped on purpose.
+#
+# Never touched: ~/www (deploys), database data, any volume, a repo's source or .git.
+set -uo pipefail
+
+APPLY=0; [ "${1:-}" = --apply ] && APPLY=1
+IDLE_DAYS=${IDLE_DAYS:-3}
+H=/home/anthony
+STATE=$H/.local/state/disk-clean; mkdir -p "$STATE"
+LOG=$STATE/$(date -u +%F).log
+WORK=$(mktemp -d "$STATE/run.XXXXXX"); trap 'rm -rf "$WORK"' EXIT
+log() { echo "$(date -u +%FT%TZ) $*" | tee -a "$LOG"; }
+gb() { df --output=avail -B1G / | tail -1 | tr -d ' '; }
+del() { # path, reason
+  if [ $APPLY = 1 ]; then rm -rf -- "$1" && log "deleted $1 ($2)"; else log "would delete $1 ($2)"; fi
+}
+before=$(gb)
+log "start ($([ $APPLY = 1 ] && echo apply || echo dry run)), ${before}G free"
+
+# What is in use right now, and what is wired to a repo.
+for p in /proc/[0-9]*; do readlink "$p/cwd" 2>/dev/null; readlink "$p/exe" 2>/dev/null; done | sort -u > "$WORK/live"
+{
+  for d in $H/.local/bin $H/.bun/bin $H/.bun/install/global/node_modules $H/.bun/install/global/node_modules/@* \
+           /usr/local/bin $H/.npm-global/bin $H/.npm-global/lib/node_modules $H/.local/share/pnpm/global/5/node_modules; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do [ -L "$f" ] && readlink -f "$f"; done
+  done
+  crontab -l 2>/dev/null; cat /etc/cron.d/* 2>/dev/null; cat /etc/systemd/system/*.service $H/.config/systemd/user/*.service 2>/dev/null
+} | grep -oE "$H/(src|worktrees|scratch)/[^ ;\"')]+" | sort -u > "$WORK/linked-paths"
+while read -r p; do d=$p; [ -d "$d" ] || d=$(dirname "$p"); git -C "$d" rev-parse --show-toplevel 2>/dev/null || echo "$d"; done < "$WORK/linked-paths" | sort -u > "$WORK/linked"
+
+# 1. Build output.
+declare -A verdict
+find $H/src $H/worktrees $H/scratch -xdev -type d \( -name node_modules -o -name target -o -name .next -o -name .turbo -o -name .svelte-kit \) -prune -print 2>/dev/null \
+  | grep -v '/node_modules/.*/node_modules' > "$WORK/arts"
+while read -r art; do
+  [ -L "$art" ] && continue
+  dir=$(dirname "$art"); name=$(basename "$art")
+  case "$name" in
+    target) [ -f "$dir/Cargo.toml" ] || [ -f "$art/CACHEDIR.TAG" ] || continue ;;
+    *) [ -f "$dir/package.json" ] || continue ;;
+  esac
+  root=$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || echo "$dir")
+  if [ -z "${verdict[$root]+x}" ]; then
+    v=idle
+    if grep -qF "$root" "$WORK/live"; then v="in use by a running process"
+    elif grep -qxF "$root" "$WORK/linked" || grep -qF "$root/" "$WORK/linked-paths"; then v="linked CLI, cron or service"
+    elif [ -n "$(find "$root" -xdev \( -name node_modules -o -name target -o -name .next -o -name .turbo -o -name .svelte-kit -o -name .git \) -prune -o -type f -newermt "-$IDLE_DAYS days" -print -quit 2>/dev/null)" ]; then v="changed in the last $IDLE_DAYS days"
+    fi
+    verdict[$root]=$v
+  fi
+  [ "${verdict[$root]}" = idle ] && del "$art" "build output, repo idle $IDLE_DAYS+ days"
+done < "$WORK/arts"
+
+# 2. Dead Claude job dirs.
+cat /proc/[0-9]*/environ 2>/dev/null | tr '\0' '\n' | grep -oE "$H/.claude/jobs/[0-9a-f]+" | sort -u > "$WORK/livejobs"
+for j in $H/.claude/jobs/*/; do
+  j=${j%/}
+  [ -f "$j/state.json" ] && continue
+  grep -qxF "$j" "$WORK/livejobs" && continue
+  [ -n "$(find "$j" -newermt "-$IDLE_DAYS days" -print -quit 2>/dev/null)" ] && continue
+  del "$j" "finished Claude job, no state.json"
+done
+
+# 3. Backups.
+if command -v diskpush >/dev/null; then
+  if [ $APPLY = 1 ]; then diskpush dbbackup prune 2>&1 | tail -3 | while read -r l; do log "diskpush: $l"; done
+  else diskpush dbbackup prune --dry-run 2>&1 | tail -3 | while read -r l; do log "diskpush (dry run): $l"; done; fi
+fi
+find $H/Backups -xdev -type f -name '*.partial' -mmin +1440 2>/dev/null | while read -r f; do
+  if fuser -s "$f" 2>/dev/null; then log "kept $f (still open)"; else del "$f" "dead partial backup, 24h+ old"; fi
+done
+
+# 4. Docker caches only.
+if [ $APPLY = 1 ]; then
+  log "docker build cache: $(docker builder prune -f --filter until=72h 2>&1 | tail -1)"
+  log "docker dangling images: $(docker image prune -f 2>&1 | tail -1)"
+else
+  log "would prune docker build cache unused 72h and dangling images"
+fi
+
+log "done, ${before}G -> $(gb)G free"
