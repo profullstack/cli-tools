@@ -19,5 +19,8 @@
   "PORT",
   "REDIS_URL",
   "RESEND_FROM_EMAIL"
- ]
+ ],
+ "env_overrides": {
+  "APP_URL": "https://ringhuman.pwa.pit.world"
+ }
 }
