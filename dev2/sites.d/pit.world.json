@@ -1,0 +1,31 @@
+{
+ "site": "pit.world",
+ "service": "pit.world",
+ "repo": "moshcoder/pit.world",
+ "image": null,
+ "domains": [
+  "pit.world"
+ ],
+ "db": "supabase",
+ "db_kinds": [
+  "supabase"
+ ],
+ "redis": false,
+ "volumes": [],
+ "companions": [],
+ "infra": [],
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3301,
+ "app_host": "dev2, deployed by its own scripts: the web app (pit-world) and pitbot (~/www/pit-crawler, compose project pit-crawler, */5 poll.sh); NOT by the kit",
+ "notes": "Not a Railway site: only its Supabase stack is the kit's (pit-world-supabase, 2026-11-08). It holds pitbot's site frontier (sites known, parked, recrawl schedule), moved out of Redis to grow to 100M sites. pitbot reaches the db over the docker network pit-world-supabase_default. Never provision/deploy/dns/cutover this site with the kit.",
+ "proxies": [
+  {
+   "host": "supabase.pit.world",
+   "port": 8301,
+   "max_body": "512m"
+  }
+ ]
+}
