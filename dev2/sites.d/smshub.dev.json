@@ -19,5 +19,10 @@
  "notes": "api.smshub.dev was the Railway-hosted Supabase gateway name; kept as an alias of supabase.smshub.dev so old clients keep working.",
  "keep_services": [
   "realtime"
+ ],
+ "vault_skip": [
+  "EXPO_TOKEN",
+  "SMSHUB_ALERT_API_KEY",
+  "SUPABASE_DB_PASSWORD"
  ]
 }

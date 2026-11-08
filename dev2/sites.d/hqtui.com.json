@@ -1,1 +1,13 @@
-{ "branch": "main", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+{
+ "branch": "main",
+ "env_remove": [
+  "TURSO_DATABASE_URL",
+  "TURSO_AUTH_TOKEN"
+ ],
+ "vault_skip": [
+  "NPM_SCOPE",
+  "RAILWAY_PROJECT_ID",
+  "RAILWAY_SERVICE",
+  "RESEND_API_KEY"
+ ]
+}

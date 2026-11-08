@@ -7,5 +7,17 @@
  "redirect_to": {
   "default": "https://ringhuman.pwa.pit.world"
  },
- "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
+ "vault_skip": [
+  "API_URL",
+  "APP_URL",
+  "GOOSE_DBSTRING",
+  "GOOSE_DRIVER",
+  "GOOSE_MIGRATION_DIR",
+  "MODEL_PROVIDER",
+  "NODE_ENV",
+  "PORT",
+  "REDIS_URL",
+  "RESEND_FROM_EMAIL"
+ ]
 }

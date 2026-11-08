@@ -21,5 +21,8 @@
   "DOPPLER_CONFIG",
   "DOPPLER_ENVIRONMENT",
   "DOPPLER_PROJECT"
+ ],
+ "vault_skip": [
+  "DID_PRIVATE_KEY_BASE64"
  ]
 }

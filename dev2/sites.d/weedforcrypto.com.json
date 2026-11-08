@@ -18,5 +18,8 @@
   "default": "https://weedforcrypto.pwa.pit.world",
   "supabase.weedforcrypto.com": "https://weedforcrypto-supabase.pwa.pit.world"
  },
- "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
+ "vault_skip": [
+  "ADMIN_EMAILS"
+ ]
 }

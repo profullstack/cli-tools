@@ -28,5 +28,11 @@
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY"
  },
  "mem_limit": "2g",
- "mem_note": "2026-10-01: next + tor, 420 MB steady, 570 MB peak"
+ "mem_note": "2026-10-01: next + tor, 420 MB steady, 570 MB peak",
+ "vault_skip": [
+  "DOPPLER_CONFIG",
+  "DOPPLER_ENVIRONMENT",
+  "DOPPLER_PROJECT",
+  "REPUTATION_SIGNING_SECRET"
+ ]
 }

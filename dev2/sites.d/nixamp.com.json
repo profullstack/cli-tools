@@ -2,5 +2,12 @@
  "mem_limit": "2g",
  "mem_note": "2026-10-01: Bun, 540 MB steady, 690 MB peak",
  "standby_port": 13216,
- "standby_note": "2026-10-21: deploys start the new build here first (nginx backup), so nixamp.com never shows the maintenance page"
+ "standby_note": "2026-10-21: deploys start the new build here first (nginx backup), so nixamp.com never shows the maintenance page",
+ "vault_skip": [
+  "FAL_KEY",
+  "NICHEDB_LYRICS_KEY",
+  "NIXAMP_OPENAI_MODEL",
+  "NIXAMP_OPENAI_URL",
+  "NIXAMP_WORKERS_AI_TOKEN"
+ ]
 }

@@ -1232,10 +1232,18 @@ def cmd_provision(args):
     # Secrets come from the logicsrc team vault on every deploy (deploy-app.sh
     # sync_env_from_vault): sites.d "vault" names it, else <repo name>--prod; "vault": ""
     # turns it off. env_remove keys are never taken from the vault.
-    vault = s.get("vault", f"{s['repo'].split('/')[-1]}--prod" if s.get("repo") else "")
+    # logicsrc vault names are lowercase letters, digits and dashes: a repo like
+    # c0ncerts.com becomes c0ncerts-com--prod (a dotted name is refused, and the
+    # deploy then silently pulls nothing).
+    default_vault = (re.sub(r"[^a-z0-9-]+", "-", s["repo"].split("/")[-1].lower()).strip("-") + "--prod") if s.get("repo") else ""
+    vault = s.get("vault", default_vault)
     if vault:
         deploy_env += f"VAULT={vault}\nVAULT_TEAM={s.get('vault_team', 'profullstack')}\n"
-        deploy_env += f"VAULT_SKIP=\"{' '.join(s.get('env_remove') or [])}\"\n"
+        # vault_skip: keys never taken from the vault but kept in app.env (signing
+        # keys logicsrc refuses to store, values the vault cannot round-trip,
+        # vault-only keys the site does not use). env_remove keys are skipped too.
+        skip = sorted(set(s.get("env_remove") or []) | set(s.get("vault_skip") or []))
+        deploy_env += f"VAULT_SKIP=\"{' '.join(skip)}\"\n"
     ssh("root", f"install -d -m 2755 -o {DEPLOY_USER} -g {DEPLOY_USER} {root} {root}/volumes")
     for v in s["volumes"] + [v for c in s["companions"] for v in c.get("volumes", [])]:
         ssh("root", f"install -d -m 0777 {root}/volumes/{shlex.quote(v['name'])}")

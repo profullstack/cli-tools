@@ -17,5 +17,8 @@
  },
  "keep_services": [
   "realtime"
+ ],
+ "vault_skip": [
+  "RIOTCODER_QC_PASSPHRASE"
  ]
 }
