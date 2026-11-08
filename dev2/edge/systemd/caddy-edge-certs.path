@@ -8,6 +8,7 @@ Description=Watch dev2's certificate directories for Caddy
 PathChanged=/etc/nginx/pit-proxy-certs
 PathChanged=/etc/ssl/moshpit
 PathChanged=/etc/ssl/moshpit-riotcoder
+PathChanged=/etc/ssl/pwa-pit-world
 PathChanged=/etc/letsencrypt/live/pit.world
 Unit=caddy-edge-certs.service
 

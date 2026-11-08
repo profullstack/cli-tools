@@ -184,6 +184,18 @@ describe('dev2-edge render', () => {
     expect(route).toContain('import edge_proxy 8787');
   });
 
+  it('serves retired-domain apps as <name>.pwa.pit.world from their existing containers', () => {
+    const { stream, caddy } = render();
+    expect(stream).toMatch(/\n\s+advis0r\.pwa\.pit\.world\s+127\.0\.0\.1:8453;/);
+    expect(stream).toMatch(/\n\s+saasrow-supabase\.pwa\.pit\.world\s+127\.0\.0\.1:8453;/);
+    const route = caddy.slice(caddy.indexOf('https://saasrow.pwa.pit.world {'));
+    expect(route).toContain('import edge_proxy 3276');
+    // One single-label wildcard certificate covers every pwa host, so no host may nest deeper.
+    const hosts = [...caddy.matchAll(/^https:\/\/(\S+\.pwa\.pit\.world) \{/gm)].map((m) => m[1]!);
+    expect(hosts.length).toBeGreaterThan(20);
+    for (const h of hosts) expect(h.split('.').length).toBe(4);
+  });
+
   it('every name the stream sends to Caddy has a Caddy site', () => {
     const { stream } = render();
     const routed = [...stream.matchAll(/^\s+(\S+)\s+127\.0\.0\.1:8453;/gm)].map((m) => m[1]!);
