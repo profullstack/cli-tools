@@ -15,5 +15,8 @@
   "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.qaaas.dev"
  },
  "node_heap_mb": 384,
- "mem_note": "next + worker + redis in one 1g container"
+ "mem_note": "next + worker + redis in one 1g container",
+ "vault_skip": [
+  "GITHUB_APP_PRIVATE_KEY"
+ ]
 }

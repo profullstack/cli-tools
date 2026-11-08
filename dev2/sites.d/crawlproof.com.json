@@ -3,5 +3,13 @@
   "app": "3g"
  },
  "node_heap_mb": 1024,
- "mem_note": "predates the kit; next-server + tsx audit worker in one container, 730 MB steady"
+ "mem_note": "predates the kit; next-server + tsx audit worker in one container, 730 MB steady",
+ "vault": "crawlproof-com--prod",
+ "vault_skip": [
+  "BACKEND_AI_OPENAI_MODEL",
+  "BACKEND_AI_PROVIDER",
+  "CRAWLPROOF_DEV_BOX_TOKEN",
+  "GITHUB_APP_PRIVATE_KEY",
+  "X402_PRIVATE_KEY"
+ ]
 }

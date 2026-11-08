@@ -18,5 +18,8 @@
   "default": "https://brisk.pwa.pit.world",
   "supabase.brisk.news": "https://brisk-supabase.pwa.pit.world"
  },
- "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
+ "vault_skip": [
+  "X402_PRIVATE_KEY"
+ ]
 }

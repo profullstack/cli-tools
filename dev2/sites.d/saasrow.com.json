@@ -24,5 +24,15 @@
   "default": "https://saasrow.pwa.pit.world",
   "supabase.saasrow.com": "https://saasrow-supabase.pwa.pit.world"
  },
- "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
+ "vault_skip": [
+  "ADMIN_EMAIL",
+  "GETSCREENSHOT_API_KEY",
+  "OPENAI_API_KEY",
+  "RESEND_API_KEY",
+  "RESEND_DOMAIN",
+  "SITE_URL",
+  "STRIPE_SECRET_KEY",
+  "STRIPE_WEBHOOK_SECRET"
+ ]
 }

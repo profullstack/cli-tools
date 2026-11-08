@@ -8,5 +8,22 @@
    "name": "emailqueue",
    "network": "mynapostercom_default"
   }
+ ],
+ "vault": "outreachgraph-com--prod",
+ "vault_skip": [
+  "ANTHROPIC_API_KEY",
+  "APP_VERSION",
+  "EMAIL_FROM",
+  "GEMINI_API_KEY",
+  "GITHUB_TOKEN",
+  "OPENAI_API_KEY",
+  "REDIS_URL",
+  "RESEND_API_KEY",
+  "SECRET_ENCRYPTION_KEY",
+  "SEORANK_API_KEY",
+  "TURSO_DATABASE_URL",
+  "VALUESERP_API_KEY",
+  "WORKERS_AI_TOKEN",
+  "WORKER_TICK_MS"
  ]
 }

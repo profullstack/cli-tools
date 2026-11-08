@@ -1,4 +1,8 @@
 {
  "node_heap_mb": 512,
- "mem_note": "next + tsx worker in one container"
+ "mem_note": "next + tsx worker in one container",
+ "vault_skip": [
+  "CRAWLPROOF_WEBHOOK_SECRET",
+  "GITHUB_APP_PRIVATE_KEY"
+ ]
 }

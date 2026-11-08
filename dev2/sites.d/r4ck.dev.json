@@ -4,5 +4,8 @@
  "redis": true,
  "env_overrides": {
   "REDIS_URL": "redis://redis:6379"
- }
+ },
+ "vault_skip": [
+  "NICHEDB_URL"
+ ]
 }

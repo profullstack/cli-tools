@@ -18,5 +18,16 @@
  },
  "keep_services": [
   "realtime"
+ ],
+ "vault_skip": [
+  "AUR_SSH_KEY",
+  "EXTELLA_AGENT_ID",
+  "EXTELLA_API_TOKEN",
+  "EXTELLA_EMAIL",
+  "EXTELLA_PASSWORD",
+  "EXTELLA_PIN",
+  "EXTELLA_USER_ID",
+  "GPG_PRIVATE_KEY",
+  "PAIRUX_PARTNERS"
  ]
 }

@@ -1,1 +1,10 @@
-{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+{
+ "branch": "master",
+ "env_remove": [
+  "TURSO_DATABASE_URL",
+  "TURSO_AUTH_TOKEN"
+ ],
+ "vault_skip": [
+  "DATA_DIR"
+ ]
+}
