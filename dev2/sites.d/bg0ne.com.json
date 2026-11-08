@@ -1,4 +1,8 @@
 {
  "mem_limit": "3g",
- "mem_note": "2026-10-01: rembg model loads peak at 1.25 GB"
+ "mem_note": "2026-10-01: rembg model loads peak at 1.25 GB",
+ "redirect_to": {
+  "default": "https://bg0ne.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

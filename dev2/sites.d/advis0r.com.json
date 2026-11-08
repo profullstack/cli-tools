@@ -1,1 +1,10 @@
-{ "branch": "main", "env_remove": ["DATABASE_AUTH_TOKEN"] }
+{
+ "branch": "main",
+ "env_remove": [
+  "DATABASE_AUTH_TOKEN"
+ ],
+ "redirect_to": {
+  "default": "https://advis0r.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+}

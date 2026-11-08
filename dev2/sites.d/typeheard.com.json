@@ -33,10 +33,14 @@
  "mem_limit": "3g",
  "mem_note": "whisper.cpp base model ~400 MB per transcription, CONCURRENCY=2",
  "env_overrides": {
-  "SITE_URL": "https://typeheard.com",
+  "SITE_URL": "https://typeheard.pwa.pit.world",
   "DATA_DIR": "/data",
   "CONCURRENCY": "2",
   "NODE_ENV": "production"
  },
- "notes": "Not a Railway site: born on dev2 2026-10-06. Transcription SaaS (whisper.cpp in the image). Database via db-create; uploads wait in volumes/data until transcribed. Domain not registered yet (Porkbun credit $0), so cert/vhost/dns wait for it."
+ "notes": "Not a Railway site: born on dev2 2026-10-06. Transcription SaaS (whisper.cpp in the image). Database via db-create; uploads wait in volumes/data until transcribed. Domain not registered yet (Porkbun credit $0), so cert/vhost/dns wait for it.",
+ "redirect_to": {
+  "default": "https://typeheard.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

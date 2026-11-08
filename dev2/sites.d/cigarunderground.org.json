@@ -1,4 +1,8 @@
 {
  "health_path": "/healthz",
- "db_sslparams": "sslmode=require"
+ "db_sslparams": "sslmode=require",
+ "redirect_to": {
+  "default": "https://cigarunderground.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }
