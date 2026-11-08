@@ -1,1 +1,10 @@
-{ "env_remove": ["TSBB_DATABASE_AUTH_TOKEN"], "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/tsbb#28); TSBB_DATABASE_URL is rewritten to the cluster URL by provision" }
+{
+ "env_remove": [
+  "TSBB_DATABASE_AUTH_TOKEN"
+ ],
+ "notes": "Turso -> shared Postgres 2026-09-25 (profullstack/tsbb#28); TSBB_DATABASE_URL is rewritten to the cluster URL by provision",
+ "redirect_to": {
+  "default": "https://tsbb.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+}

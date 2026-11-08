@@ -30,5 +30,9 @@
  "max_body": "8m",
  "mem_limit": "384m",
  "mem_note": "Node 24, Hono API + MCP + dashboard + worker in one process, SQLite file in volumes/data",
- "notes": "Not a Railway site: born on dev2 2026-10-14. SubmitFleet engine (launch/directory submissions). SQLite at /data/submitfleet.db (volumes/data). SUBMITFLEET_SECRET_KEY from vault submitfleet--prod. Deploys on push to main."
+ "notes": "Not a Railway site: born on dev2 2026-10-14. SubmitFleet engine (launch/directory submissions). SQLite at /data/submitfleet.db (volumes/data). SUBMITFLEET_SECRET_KEY from vault submitfleet--prod. Deploys on push to main.",
+ "redirect_to": {
+  "default": "https://submitfleet.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

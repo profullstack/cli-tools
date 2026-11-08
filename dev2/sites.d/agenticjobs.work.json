@@ -2,5 +2,9 @@
  "env_overrides": {
   "OBSCURA_MCP_URL": "",
   "PGSSLMODE": "require"
- }
+ },
+ "redirect_to": {
+  "default": "https://agenticjobs.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

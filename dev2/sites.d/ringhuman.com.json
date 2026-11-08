@@ -1,1 +1,11 @@
-{ "branch": "master", "env_remove": ["TURSO_DATABASE_URL", "TURSO_AUTH_TOKEN"] }
+{
+ "branch": "master",
+ "env_remove": [
+  "TURSO_DATABASE_URL",
+  "TURSO_AUTH_TOKEN"
+ ],
+ "redirect_to": {
+  "default": "https://ringhuman.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+}

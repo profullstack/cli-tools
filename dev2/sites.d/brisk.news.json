@@ -9,9 +9,14 @@
  "env_overrides": {
   "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
-  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.brisk.news"
+  "NEXT_PUBLIC_SUPABASE_URL": "https://brisk-supabase.pwa.pit.world"
  },
  "mem_limit": "3g",
  "node_heap_mb": 1536,
- "mem_note": "2026-10-01: ~1 GB steady (apps/notify ~900 MB) beside next-server"
+ "mem_note": "2026-10-01: ~1 GB steady (apps/notify ~900 MB) beside next-server",
+ "redirect_to": {
+  "default": "https://brisk.pwa.pit.world",
+  "supabase.brisk.news": "https://brisk-supabase.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

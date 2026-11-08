@@ -1,1 +1,8 @@
-{"repo": "profullstack/media2markdown", "notes": "deployed to Railway with `railway up`, so the registry saw no repo; the GitHub repo is private"}
+{
+ "repo": "profullstack/media2markdown",
+ "notes": "deployed to Railway with `railway up`, so the registry saw no repo; the GitHub repo is private",
+ "redirect_to": {
+  "default": "https://media2markdown.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
+}

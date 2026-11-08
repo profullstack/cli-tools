@@ -8,9 +8,14 @@
  ],
  "env_overrides": {
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
-  "SUPABASE_URL": "https://supabase.icemap.app"
+  "SUPABASE_URL": "https://icemap-supabase.pwa.pit.world"
  },
  "extensions": [
   "postgis"
- ]
+ ],
+ "redirect_to": {
+  "default": "https://icemap.pwa.pit.world",
+  "supabase.icemap.app": "https://icemap-supabase.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

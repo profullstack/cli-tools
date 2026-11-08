@@ -28,9 +28,13 @@
  "mem_limit": "512m",
  "mem_note": "Bun + Hono web and API; no workers yet",
  "env_overrides": {
-  "SITE_URL": "https://tleehealth.com",
+  "SITE_URL": "https://tleehealth.pwa.pit.world",
   "NODE_ENV": "production"
  },
  "notes": "Not a Railway site: born on dev2 2026-10-06. Telehealth + practice management. Database via db-create (migrations run on app boot). Secrets in vault tleehealth--prod. Deploys on push to master.",
- "vault": "tleehealth--prod"
+ "vault": "tleehealth--prod",
+ "redirect_to": {
+  "default": "https://tleehealth.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

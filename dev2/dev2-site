@@ -1569,7 +1569,59 @@ def proxy_tuned(text, p):
     mb = p.get("max_body", "512m")
     return text.replace("__MAX_BODY__", mb).replace("proxy_read_timeout 300s;", "proxy_read_timeout 3600s;\n        proxy_send_timeout 3600s;").replace("client_max_body_size " + mb + ";", "client_max_body_size " + mb + ";\n    large_client_header_buffers 8 64k;")
 
+def render_redirect_vhost(s, redirect_to):
+    """A retired site (sites.d "redirect_to"): every host 308s to its new home, path and query kept.
+    redirect_to maps a host to its target origin, with "default" for the rest; "redirect_paths"
+    sends a path prefix elsewhere (c0upons.com/bbs). 308 keeps POST a POST (forms, webhooks).
+    Port 80 keeps the ACME location so the old certificate renews while the domain lasts."""
+    if "default" not in redirect_to: die(f"{s['site']}: redirect_to needs a \"default\" target")
+    hosts = site_domains(s) + [p["host"] for p in (s.get("proxies") or []) if p["host"] not in site_domains(s)]
+    groups = {}
+    for h in hosts:
+        groups.setdefault(redirect_to.get(h, redirect_to["default"]).rstrip("/"), []).append(h)
+    paths = "".join(f"    location ^~ {pre.rstrip('/')} {{\n        return 308 {to.rstrip('/')}$request_uri;\n    }}\n"
+                    for pre, to in (s.get("redirect_paths") or {}).items())
+    conf = (f"# {s['site']}: managed by cli-tools/dev2/dev2-site vhost. Do not hand-edit; re-run\n"
+            f"# `dev2-site vhost {s['site']}` after changing sites.d/{s['site']}.json.\n"
+            f"# Retired: the app lives on elsewhere; this domain only redirects (redirect_to).\n")
+    for to, hs in groups.items():
+        names = " ".join(hs)
+        conf += f"""
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {names};
+
+    location ^~ /.well-known/acme-challenge/ {{
+        root /var/www/acme;
+        default_type "text/plain";
+    }}
+{paths}    location / {{
+        return 308 {to}$request_uri;
+    }}
+}}
+
+server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name {names};
+
+    ssl_certificate     /etc/nginx/ssl/{s['site']}/fullchain.pem;
+    ssl_certificate_key /etc/nginx/ssl/{s['site']}/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+{paths}    location / {{
+        return 308 {to}$request_uri;
+    }}
+}}
+"""
+    return conf, hosts
+
 def render_vhost(s):
+    if s.get("redirect_to"):
+        return render_redirect_vhost(s, s["redirect_to"])
     proxies = s.get("proxies") or []
     domains = [d for d in site_domains(s) if d not in {p["host"] for p in proxies}]
     if s.get("nginx_app") is False:  # the app runs elsewhere (bittorrented.com); only its proxies live here

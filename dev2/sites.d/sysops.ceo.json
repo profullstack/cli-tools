@@ -25,5 +25,9 @@
  "max_body": "1m",
  "mem_limit": "64m",
  "mem_note": "nginx:alpine-slim serving one static index.html",
- "notes": "Not a Railway site: born on dev2 2026-10-07. Placeholder page (index.html with <h1>sysops.ceo</h1>) served by nginx in the container. No database, no secrets. Not a node app: skip `healthchecks`. Deploys on push to main."
+ "notes": "Not a Railway site: born on dev2 2026-10-07. Placeholder page (index.html with <h1>sysops.ceo</h1>) served by nginx in the container. No database, no secrets. Not a node app: skip `healthchecks`. Deploys on push to main.",
+ "redirect_to": {
+  "default": "https://sysops.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }

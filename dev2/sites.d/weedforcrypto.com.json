@@ -12,6 +12,11 @@
   "SUPABASE_SECRET_KEY": "secret:SUPABASE_SECRET_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
   "SUPABASE_DB_PASSWORD": "secret:SUPABASE_DB_PASSWORD",
-  "NEXT_PUBLIC_SUPABASE_URL": "https://supabase.weedforcrypto.com"
- }
+  "NEXT_PUBLIC_SUPABASE_URL": "https://weedforcrypto-supabase.pwa.pit.world"
+ },
+ "redirect_to": {
+  "default": "https://weedforcrypto.pwa.pit.world",
+  "supabase.weedforcrypto.com": "https://weedforcrypto-supabase.pwa.pit.world"
+ },
+ "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses."
 }
