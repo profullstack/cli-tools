@@ -9,7 +9,11 @@
  "env_overrides": {
   "NEXT_PUBLIC_SUPABASE_ANON_KEY": "secret:NEXT_PUBLIC_SUPABASE_ANON_KEY",
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
-  "NEXT_PUBLIC_SUPABASE_URL": "https://brisk-supabase.pwa.pit.world"
+  "NEXT_PUBLIC_SUPABASE_URL": "https://brisk-supabase.pwa.pit.world",
+  "C0MPUTE_SPEECH_URL": "http://c0mpute-speech-gateway:8787",
+  "C0MPUTE_MODELS": "qwen2.5:7b,qwen3:4b,huihui_ai/qwen3.5-abliterated:9b",
+  "C0MPUTE_TIMEOUT_MS": "540000",
+  "C0MPUTE_STALL_MS": "240000"
  },
  "external_networks": [
   {
@@ -28,5 +32,6 @@
  "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
  "vault_skip": [
   "X402_PRIVATE_KEY"
- ]
+ ],
+ "env_overrides_note": "2026-11-09: c0mpute tuning for CPU-only nodes (the abliterated 9B is skipped by nodes with uncensored house models off). C0MPUTE_SPEECH_TOKEN lives only in app.env (copied from crawlproof)."
 }
