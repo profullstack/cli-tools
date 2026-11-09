@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# c0mpute-gateway-watchdog: keep dev2's c0mpute gateway (:7777, = gateway.c0mpute.com,
+# the gateway every Moshpit name on c0mpute is served through) answering.
+#
+# Probes /healthz on a Fibonacci schedule (1 1 2 3 5 s between tries). Only when every
+# try fails does it act: if c0mpute-worker.service is not running it starts it; if it
+# runs but does not answer it restarts it. Then it waits for /healthz on the same
+# schedule (8 13 21 s more) and exits nonzero if the gateway is still down, so the
+# failure shows in `systemctl --failed` and the journal. Run by a 1-minute timer.
+#
+# Why: 2026-11-09 the worker was stopped by hand for a config edit, relaunched in a
+# session's shell, and died with that session. :7777 stayed dark and every Moshpit
+# name on c0mpute (cloud.killer, alt.2600) answered 502 until a person noticed.
+set -u
+URL="${C0MPUTE_GATEWAY_HEALTH:-http://127.0.0.1:7777/healthz}"
+UNIT="${C0MPUTE_GATEWAY_UNIT:-c0mpute-worker.service}"
+log() { echo "c0mpute-gateway-watchdog: $*"; }
+ok() { curl -fsS -m 4 -o /dev/null "$URL"; }
+
+for wait in 0 1 1 2 3 5; do
+  sleep "$wait"
+  ok && exit 0
+done
+
+# Someone may be running a worker by hand on :7777 (a session relaunch). It is not
+# answering either, so the unit is the one to bring back.
+if systemctl is-active --quiet "$UNIT"; then
+  log "$URL failed 6 tries over 12 s; restarting $UNIT"
+  systemctl restart "$UNIT"
+else
+  log "$URL failed 6 tries over 12 s and $UNIT is $(systemctl is-active "$UNIT"); starting it"
+  systemctl reset-failed "$UNIT" 2>/dev/null || true
+  systemctl start "$UNIT"
+fi
+
+for wait in 3 5 8 13 21; do
+  sleep "$wait"
+  if ok; then log "$URL back after the (re)start"; exit 0; fi
+done
+log "$URL still down 50 s after the (re)start; see journalctl -u $UNIT"
+exit 1

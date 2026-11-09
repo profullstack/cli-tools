@@ -1,0 +1,10 @@
+[Unit]
+Description=Every minute: is dev2's c0mpute gateway answering?
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=60s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

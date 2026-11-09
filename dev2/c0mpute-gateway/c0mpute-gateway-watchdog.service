@@ -1,0 +1,8 @@
+[Unit]
+Description=Check dev2's c0mpute gateway (:7777) and bring c0mpute-worker back if it is down
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/c0mpute-gateway-watchdog
+TimeoutStartSec=150
