@@ -139,6 +139,32 @@ describe('dev2-edge render', () => {
     expect(stream).toContain('hostnames;');
   });
 
+  it('sends Moshpit names nobody else routes to the c0mpute edge, real TLDs to nginx', () => {
+    const { d, stream } = render();
+    const f = (p: string) => readFileSync(join(d, 'root', p), 'utf8');
+    const edge = SPEC.c0mpute_edge;
+    // the catch-all is a regex, so exact names (Caddy's Moshpit names) still win
+    expect(stream).toContain(`"~^[a-z0-9-]+\\.[a-z0-9-]+$" 127.0.0.1:${edge.tls};`);
+    expect(stream).toContain('include /etc/nginx/dev2-edge/iana-tlds.stream.map;');
+    expect(stream).toContain('map_hash_max_size 4096;');
+    const tlds = f('etc/nginx/dev2-edge/iana-tlds.stream.map');
+    // a wildcard beats a regex in a hostnames map: every real TLD stays on nginx
+    for (const t of ['com', 'sh', 'world', 'io']) expect(tlds).toContain(`\n.${t} 127.0.0.1:8444;`);
+    expect(tlds).not.toContain('.2600 ');
+    expect(tlds.split('\n').filter((l) => l.startsWith('.')).length).toBeGreaterThan(1000);
+    const http = f('etc/nginx/conf.d/c0mpute-edge-http.conf');
+    expect(http).toContain(`proxy_pass http://127.0.0.1:${edge.http};`);
+    expect(http).toContain('error_page 421 = @parked;');
+    expect(http).toContain('if ($moshpit_parked = 0) { return 301 https://$host$request_uri; }');
+    expect(http).toContain('location ^~ /.well-known/acme-challenge/');
+  });
+
+  it('--off drops the c0mpute route too', () => {
+    const { stream } = render(true);
+    expect(stream).not.toContain('iana-tlds');
+    expect(stream).not.toContain(`127.0.0.1:${SPEC.c0mpute_edge.tls}`);
+  });
+
   it('--off routes every name to nginx (the fast way back)', () => {
     const { stream } = render(true);
     expect(stream).not.toContain(':8453');
