@@ -11,7 +11,7 @@
   "SUPABASE_SERVICE_ROLE_KEY": "secret:SUPABASE_SERVICE_ROLE_KEY",
   "NEXT_PUBLIC_SUPABASE_URL": "https://brisk-supabase.pwa.pit.world",
   "C0MPUTE_SPEECH_URL": "http://c0mpute-speech-gateway:8787",
-  "C0MPUTE_MODELS": "qwen2.5:7b,qwen3:4b,huihui_ai/qwen3.5-abliterated:9b",
+  "C0MPUTE_MODELS": "huihui_ai/qwen3.5-abliterated:9b,qwen2.5:7b,qwen3:4b",
   "C0MPUTE_TIMEOUT_MS": "540000",
   "C0MPUTE_STALL_MS": "240000"
  },
