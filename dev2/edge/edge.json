@@ -1,6 +1,8 @@
 {
   "//": "dev2 edge: which TLS names the nginx stream proxy hands to Caddy, and what Caddy does with them. Rendered by dev2/dev2-edge. Every upstream is the one nginx used before the move (2026-10-19). Certificates are NOT issued by Caddy: caddy-edge-certs copies the files the existing renewals (certbot, pit-proxy-cert, moshpit-renew) already keep current, and reloads Caddy when they change.",
   "ports": { "nginx": 8444, "caddy": 8453, "caddy_http": 8454, "caddy_admin": 2019 },
+  "c0mpute_edge": { "tls": 8456, "http": 8457,
+    "//": "moshpit-proxy's c0mpute edge (systemd moshpit-c0mpute-edge, EDGE_PROXY_PROTOCOL=1, EDGE_FALLBACK=127.0.0.1:8444): every Moshpit-shaped name not listed here goes to it; it serves the c0mpute sites (edge.c0mpute.com is MOSHPIT_C0MPUTE_EDGE on the registry) and splices the rest back to nginx. iana-tlds.txt is what counts as not Moshpit." },
   "caddy_version": "2.11.7",
   "stream_timeout": "24h",
   "nginx": { "worker_connections": 4096, "worker_rlimit_nofile": 16384 },
@@ -69,7 +71,6 @@
     { "hosts": ["offtherecord.podcast", "otr.podcast"], "proxy": 8814, "max_body": "1MiB", "moshpit": true, "//": "Off The Record (moshcoder/offtherecord): pages, podcast feed, mp3 with ranges; the app 301s otr.podcast to offtherecord.podcast.pit.world" },
     { "hosts": ["search.peptides"], "proxy": 8802, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["seo.rank"], "proxy": 8790, "max_body": "64KiB", "moshpit": true },
-    { "hosts": ["alt.2600"], "root": "/var/www/alt.2600", "moshpit": true, "access_log": true },
     { "hosts": ["auto.hacker"], "proxy": 8793, "max_body": "1MiB", "moshpit": true },
     { "hosts": ["chovy.hacker"], "root": "/var/www/chovy.hacker", "moshpit": true, "access_log": true },
     { "hosts": ["profullstack.agent"], "root": "/var/www/profullstack.agent", "moshpit": true, "access_log": true }

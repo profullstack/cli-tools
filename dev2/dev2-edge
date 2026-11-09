@@ -16,9 +16,14 @@ How it works (agreed with Anthony 2026-10-19, "pit.world first"):
   visitor :443 -> nginx stream {} (ssl_preread, SNI only, TLS not terminated)
       pit.world, *.pit.world, Moshpit names in edge.json -> 127.0.0.1:8453 Caddy
       everything else                                     -> 127.0.0.1:8444 nginx http
-  both hops carry a PROXY protocol header, so nginx ($remote_addr via real_ip_header
+      other Moshpit-shaped names (label.ending, ending not an IANA TLD)
+          -> c0mpute_edge.tls (moshpit-proxy's c0mpute edge), which terminates the
+             names the registry says are c0mpute sites and splices every other
+             connection, PROXY header included, back to 127.0.0.1:8444
+  every hop carries a PROXY protocol header, so nginx ($remote_addr via real_ip_header
   proxy_protocol) and Caddy (proxy_protocol listener wrapper) see the visitor's address.
-  Port 80 is untouched: nginx keeps answering ACME and http->https for every name.
+  Port 80 stays on nginx (ACME, http->https). The one addition: Moshpit-shaped names
+  with no :80 vhost of their own are proxied to the c0mpute edge's plain http port.
 
 Certificates are never issued by Caddy (auto_https off). caddy-edge-certs copies what
 certbot, pit-proxy-cert and moshpit-renew already keep current into bundles Caddy
@@ -38,6 +43,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -86,6 +92,32 @@ def stream_pattern(host):
     return host
 
 
+TLDS = os.path.join(EDGE, "iana-tlds.txt")
+
+
+def iana_tlds(path=TLDS):
+    """Every top-level domain IANA delegates (data.iana.org/TLD/tlds-alpha-by-domain.txt)."""
+    with open(path) as f:
+        tlds = [l.strip().lower() for l in f if l.strip() and not l.startswith("#")]
+    if len(tlds) < 1000:
+        die(f"{path}: only {len(tlds)} TLDs, refusing to treat the rest of the namespace as Moshpit")
+    return tlds
+
+
+# Moshpit names are label.ending; an ending is never a real TLD. nginx cannot hold a
+# negative-lookahead over 1,400 TLDs in one token (4 KiB limit), so the real TLDs are
+# map entries (`.com` covers com and *.com, and a wildcard beats any regex) and a short
+# regex catches the two-label names left over.
+MOSHPIT_NAME_RE = r"~^[a-z0-9-]+\.[a-z0-9-]+$"
+TLD_MAP_DIR = "etc/nginx/dev2-edge"
+
+
+def render_tld_map(value):
+    rows = [HEADER.rstrip("\n"), f"# every IANA TLD ({len(iana_tlds())}), from dev2/edge/iana-tlds.txt: never a Moshpit name"]
+    rows += [f".{t} {value};" for t in iana_tlds()]
+    return "\n".join(rows) + "\n"
+
+
 def render_stream(s, on=True):
     p = s["ports"]
     caddy, nginx = f"127.0.0.1:{p['caddy']}", f"127.0.0.1:{p['nginx']}"
@@ -102,13 +134,23 @@ def render_stream(s, on=True):
             if h.startswith("//"):
                 continue
             rows.append(f"        {h:<32} {nginx};  # {why[:90]}")
+        ce = s.get("c0mpute_edge")
+        if ce:
+            # Last, and a regex: nginx tries exact names and wildcards first, so every
+            # name listed above (Caddy's Moshpit names included) keeps its route.
+            rows.append(f"        include /{TLD_MAP_DIR}/iana-tlds.stream.map;  # real TLDs stay on nginx")
+            rows.append("        # every other Moshpit name: the c0mpute edge (it splices non-c0mpute names back to nginx)")
+            rows.append(f'        "{MOSHPIT_NAME_RE}" 127.0.0.1:{ce["tls"]};')
     state = "on: the names below go to Caddy" if on else "off: every name goes to nginx (dev2-edge route off)"
     return HEADER + f"""# The edge ({state}).
 # nginx's stream module owns :443. It reads the TLS server name (ssl_preread; the TLS
 # itself is not terminated here) and passes the connection on, with a PROXY protocol
 # header carrying the visitor's address, to Caddy or to nginx's own https servers.
 stream {{
-    map $ssl_preread_server_name $dev2_edge_backend {{
+""" + ("""    # ~1,500 keys with the real-TLD map: more than the default 2048/64 hash holds.
+    map_hash_max_size 4096;
+    map_hash_bucket_size 128;
+""" if on and s.get("c0mpute_edge") else "") + f"""    map $ssl_preread_server_name $dev2_edge_backend {{
         hostnames;
         default                          {nginx};
 """ + "\n".join(rows) + ("\n" if rows else "") + f"""    }}
@@ -123,6 +165,44 @@ stream {{
         proxy_connect_timeout 5s;
         # Never stricter than the longest proxy_read_timeout behind it (86400s).
         proxy_timeout {s.get('stream_timeout', '24h')};
+    }}
+}}
+"""
+
+
+def render_c0mpute_http(s):
+    ce = s.get("c0mpute_edge")
+    if not ce:
+        return None
+    return HEADER + f"""# Plain http for Moshpit names pointed at c0mpute sites: the c0mpute edge serves them on
+# 127.0.0.1:{ce['http']}. A regex server_name, so every name with its own :80 vhost (an
+# exact or wildcard server_name) keeps it. Everything else this regex catches gets what
+# the port-80 catch-all in userdirs.conf (cli-tools/root-ubuntu.sh) gave it: ACME
+# challenges, an https upgrade for a real domain, and parking for a Moshpit name the edge
+# says is not a c0mpute site (its 421). $moshpit_parked comes from that tool's
+# conf.d/moshpit-parking.conf; without it `nginx -t` fails and apply changes nothing.
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name "{MOSHPIT_NAME_RE}";
+
+    location ^~ /.well-known/acme-challenge/ {{
+        root {ce.get('acme_webroot', '/var/www/acme')};
+        default_type "text/plain";
+    }}
+
+    location / {{
+        if ($moshpit_parked = 0) {{ return 301 https://$host$request_uri; }}
+        proxy_pass http://127.0.0.1:{ce['http']};
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_http_version 1.1;
+        proxy_intercept_errors on;
+        error_page 421 = @parked;
+    }}
+
+    location @parked {{
+        return 302 {ce.get('parking', 'https://pit.moshcode.sh/n/')}$host;
     }}
 }}
 """
@@ -242,6 +322,10 @@ def render(out, s, on=True):
         "etc/caddy/Caddyfile": render_caddyfile(s),
         "etc/caddy/edge-cert-sources": render_cert_sources(s),
     }
+    c0http = render_c0mpute_http(s)
+    if c0http:
+        files["etc/nginx/conf.d/c0mpute-edge-http.conf"] = c0http
+        files[f"{TLD_MAP_DIR}/iana-tlds.stream.map"] = render_tld_map(f"127.0.0.1:{s['ports']['nginx']}")
     for u in UNITS:
         with open(os.path.join(EDGE, "systemd", u)) as f:
             files[f"etc/systemd/system/{u}"] = f.read()

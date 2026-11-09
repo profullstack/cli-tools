@@ -30,6 +30,9 @@ BACKUPS = "/home/anthony/backups"
 NGINX_CONF = "/etc/nginx/nginx.conf"
 STREAM_DIR = "/etc/nginx/stream-enabled"
 STREAM_CONF = f"{STREAM_DIR}/dev2-edge.conf"
+C0MPUTE_HTTP = "etc/nginx/conf.d/c0mpute-edge-http.conf"
+# The real-TLD map the stream map includes, then the :80 server: installed before the stream map.
+C0MPUTE_FILES = ["etc/nginx/dev2-edge/iana-tlds.stream.map", C0MPUTE_HTTP]
 REALIP_CONF = "/etc/nginx/conf.d/00-edge-realip.conf"
 CF_CONF = "/etc/nginx/conf.d/cloudflare-realip.conf"
 DROPIN = "/etc/systemd/system/nginx.service.d/dev2-edge.conf"
@@ -299,8 +302,9 @@ def apply(bundle):
         say(f"Caddy on 127.0.0.1:{spec['ports']['caddy']} answers like nginx for {len(checked)} names")
 
         # ---- the switch: one nginx reload hands :443 from the http servers to the stream.
-        install_files(bundle, ["etc/nginx/stream-enabled/dev2-edge.conf", "etc/nginx/conf.d/00-edge-realip.conf",
-                               "etc/systemd/system/nginx.service.d/dev2-edge.conf"])
+        install_files(bundle, [f for f in C0MPUTE_FILES if os.path.exists(f"{bundle}/root/{f}")]
+                      + ["etc/nginx/stream-enabled/dev2-edge.conf", "etc/nginx/conf.d/00-edge-realip.conf",
+                         "etc/systemd/system/nginx.service.d/dev2-edge.conf"])
         edit_cloudflare()
         edit_nginx_conf(spec)
         out = run(["/usr/local/sbin/nginx-edge-listen"], capture=True).stdout
@@ -355,9 +359,12 @@ def new_sites(spec):
 
 def restore_live(tgz):
     """Undo a failed re-apply on a live edge: the Caddyfile, cert sources and stream map from the backup."""
-    keep = {"etc/caddy/Caddyfile", "etc/caddy/edge-cert-sources", "etc/nginx/stream-enabled/dev2-edge.conf"}
+    keep = {"etc/caddy/Caddyfile", "etc/caddy/edge-cert-sources", "etc/nginx/stream-enabled/dev2-edge.conf", C0MPUTE_HTTP}
     with tarfile.open(tgz) as tf:
         members = [m for m in tf.getmembers() if m.name in keep]
+    # Not in the backup means this run added it: take it away again.
+    if C0MPUTE_HTTP not in {m.name for m in members} and os.path.exists("/" + C0MPUTE_HTTP):
+        os.remove("/" + C0MPUTE_HTTP)
         tf.extractall("/", members=members, **({"filter": "fully_trusted"} if hasattr(tarfile, "data_filter") else {}))
     run("nginx -t -q", capture=True)
     run("systemctl reload nginx")
@@ -440,6 +447,9 @@ def rollback(tgz=None):
 
 
 def route(bundle):
+    for f in C0MPUTE_FILES[:1]:  # the stream map includes the real-TLD map
+        if os.path.exists(f"{bundle}/root/{f}"):
+            put(f"{bundle}/root/{f}", "/" + f)
     put(f"{bundle}/root/etc/nginx/stream-enabled/dev2-edge.conf", STREAM_CONF)
     run("nginx -t -q", capture=True)
     run("systemctl reload nginx")
