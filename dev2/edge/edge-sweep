@@ -25,7 +25,6 @@ if [ "${1:-}" = "--names" ]; then
   exit 0
 fi
 
-[ -f "${1:-}" ] || { echo "usage: edge-sweep NAMES_FILE | --names" >&2; exit 2; }
 probe() {
   n="$1"
   # Verified first; only when that fails (000: no answer, or a certificate this box
@@ -39,6 +38,8 @@ probe() {
   h=$(curl -s -o /dev/null -m "$TIMEOUT" -w '%{http_code}' --resolve "$n:80:$IP" "$plain://$n/" 2>/dev/null) || true
   printf '%s\t%s\t%s\t%s\n' "$n" "${v:-000}" "${k:-000}" "${h:-000}"
 }
-# POSIX sh has no `export -f`: xargs re-enters this script once per name.
-if [ "${EDGE_SWEEP_ONE:-}" ]; then probe "$EDGE_SWEEP_ONE"; exit 0; fi
+# POSIX sh has no `export -f`: xargs re-enters this script once per name (and
+# edge-box's re-probe calls it the same way, with /dev/null, which is not a file).
+[ -z "${EDGE_SWEEP_ONE:-}" ] || { probe "$EDGE_SWEEP_ONE"; exit 0; }
+[ -f "${1:-}" ] || { echo "usage: edge-sweep NAMES_FILE | --names" >&2; exit 2; }
 grep -v '^[[:space:]]*$' "$1" | xargs -P "$JOBS" -I{} env EDGE_SWEEP_ONE={} sh "$0" "$1" | sort

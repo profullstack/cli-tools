@@ -362,10 +362,10 @@ def restore_live(tgz):
     keep = {"etc/caddy/Caddyfile", "etc/caddy/edge-cert-sources", "etc/nginx/stream-enabled/dev2-edge.conf", C0MPUTE_HTTP}
     with tarfile.open(tgz) as tf:
         members = [m for m in tf.getmembers() if m.name in keep]
+        tf.extractall("/", members=members, **({"filter": "fully_trusted"} if hasattr(tarfile, "data_filter") else {}))
     # Not in the backup means this run added it: take it away again.
     if C0MPUTE_HTTP not in {m.name for m in members} and os.path.exists("/" + C0MPUTE_HTTP):
         os.remove("/" + C0MPUTE_HTTP)
-        tf.extractall("/", members=members, **({"filter": "fully_trusted"} if hasattr(tarfile, "data_filter") else {}))
     run("nginx -t -q", capture=True)
     run("systemctl reload nginx")
     run("if systemctl is-active --quiet caddy.service; then systemctl reload caddy.service; else systemctl restart caddy.service; fi")
