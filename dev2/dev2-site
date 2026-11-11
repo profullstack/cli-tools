@@ -1229,6 +1229,12 @@ def cmd_provision(args):
         repo_url = f"git@{key_alias}:{s['repo']}.git" if private else f"https://github.com/{s['repo']}.git"
     deploy_env = f"SITE={s['site']}\nREPO={repo_url}\nBRANCH={branch}\nAPP_PORT={s['port']}\nBUILD_SERVICES=\"{build_services}\"\nHEALTH_PATH={hp}\nIMAGE_ONLY={'1' if image_only else '0'}\n"
     if s.get("standby_port"): deploy_env += f"STANDBY_PORT={s['standby_port']}\n"
+    # sites.d "remote_build": "c0mpute" builds the image on a c0mpute builder (deploy-app.sh
+    # remote_build), "remote_builders" names them (peer ids), "remote_build_fallback": "local"
+    # builds here when the remote build fails.
+    if s.get("remote_build"): deploy_env += f"REMOTE_BUILD={s['remote_build']}\n"
+    if s.get("remote_builders"): deploy_env += f"C0MPUTE_BUILDERS={','.join(s['remote_builders'])}\n"
+    if s.get("remote_build_fallback"): deploy_env += f"REMOTE_BUILD_FALLBACK={s['remote_build_fallback']}\n"
     # Secrets come from the logicsrc team vault on every deploy (deploy-app.sh
     # sync_env_from_vault): sites.d "vault" names it, else <repo name>--prod; "vault": ""
     # turns it off. env_remove keys are never taken from the vault.

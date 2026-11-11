@@ -173,6 +173,55 @@ health() {
   return 1
 }
 
+# REMOTE_BUILD=c0mpute (deploy.env, from sites.d "remote_build"): build each service's
+# image on a c0mpute builder instead of on this box, whose disk the build scratch (Rust
+# target/, Next caches, BuildKit cache) keeps filling. The builder gets a plain tarball of
+# the revision (git archive of the service's build context), the Dockerfile and target
+# compose names, and the build args compose resolved (the public NEXT_PUBLIC_*-style values
+# exported below, never app.env secrets). `c0mpute build --load -t <image>` loads the
+# result and tags it as the compose image; the rest of the deploy (standby, `up`, health,
+# rollback) is unchanged. Builders: C0MPUTE_BUILDERS (deploy.env, sites.d
+# "remote_builders": peer ids of our own nodes), else [containers] builders in the
+# deploy user's c0mpute config. A failed remote build stops the deploy before anything
+# running is touched, unless REMOTE_BUILD_FALLBACK=local builds here instead.
+remote_build() {
+  local c0 cfg svc ctx sub df target image tgz rc kv
+  local -a bargs
+  c0=$(command -v c0mpute || true)
+  [ -n "$c0" ] || c0=/usr/local/bin/c0mpute
+  [ -x "$c0" ] || { log "REMOTE_BUILD=c0mpute but no c0mpute CLI on this box"; return 1; }
+  command -v jq >/dev/null || { log "REMOTE_BUILD=c0mpute needs jq"; return 1; }
+  [ -z "${C0MPUTE_BUILDERS:-}" ] || export C0MPUTE_BUILDERS
+  cfg=$(compose config --format json) || return 1
+  for svc in $BUILD_SERVICES; do
+    ctx=$(jq -r --arg s "$svc" '.services[$s].build.context // empty' <<<"$cfg")
+    df=$(jq -r --arg s "$svc" '.services[$s].build.dockerfile // "Dockerfile"' <<<"$cfg")
+    target=$(jq -r --arg s "$svc" '.services[$s].build.target // empty' <<<"$cfg")
+    image=$(jq -r --arg s "$svc" '.services[$s].image // empty' <<<"$cfg")
+    if [ -z "$ctx" ] || [ -z "$image" ]; then
+      log "Service $svc has no build context or image name; cannot build it remotely"; return 1
+    fi
+    case $ctx in
+      "$APP_DIR") sub="" ;;
+      "$APP_DIR"/*) sub=${ctx#"$APP_DIR"/} ;;
+      *) log "Service $svc builds from $ctx, outside the checkout; cannot build it remotely"; return 1 ;;
+    esac
+    case $df in "$ctx"/*) df=${df#"$ctx"/} ;; esac
+    bargs=()
+    while IFS= read -r kv; do
+      [ -n "$kv" ] && bargs+=(--build-arg "$kv")
+    done < <(jq -r --arg s "$svc" '.services[$s].build.args // {} | to_entries[] | select(.value != null) | "\(.key)=\(.value)"' <<<"$cfg")
+    tgz=$(mktemp "$ROOT/.remote-ctx.XXXXXX")
+    git -C "$APP_DIR" archive --format=tar.gz -o "$tgz" "$SHA${sub:+:$sub}" || { rm -f "$tgz"; return 1; }
+    log "Remote build of $svc on c0mpute ($(du -h "$tgz" | cut -f1) context, $df${target:+, target $target}, ${#bargs[@]} build-arg flags)"
+    rc=0
+    "$c0" build "$tgz" -f "$df" ${target:+--target "$target"} "${bargs[@]}" \
+      --timeout-secs "${REMOTE_BUILD_TIMEOUT:-3600}" --load -t "$image" || rc=$?
+    rm -f "$tgz"
+    [ "$rc" = 0 ] || { log "Remote build of $svc failed (exit $rc)"; return 1; }
+  done
+}
+
 case "${1:-}" in
   --status)
     compose ps
@@ -251,8 +300,17 @@ while IFS= read -r line || [ -n "$line" ]; do
 done < "$ROOT/app.env"
 # A failed build exits here (set -e) before anything running is touched: `compose
 # build` only moves the :latest tags when it succeeds.
-# shellcheck disable=SC2086
-compose build $BUILD_SERVICES || die "build of $SHA failed; the running stack was not touched"
+if [ "${REMOTE_BUILD:-}" = c0mpute ]; then
+  if ! remote_build; then
+    [ "${REMOTE_BUILD_FALLBACK:-}" = local ] || die "remote build of $SHA failed; the running stack was not touched"
+    log "Remote build failed; REMOTE_BUILD_FALLBACK=local, building here"
+    # shellcheck disable=SC2086
+    compose build $BUILD_SERVICES || die "build of $SHA failed; the running stack was not touched"
+  fi
+else
+  # shellcheck disable=SC2086
+  compose build $BUILD_SERVICES || die "build of $SHA failed; the running stack was not touched"
+fi
 
 # If the compose network's subnet changed (the kit moved sites to explicit
 # 10.200.x.0/24 subnets), `up -d` recreates the network in place and Docker's

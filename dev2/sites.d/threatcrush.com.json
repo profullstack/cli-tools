@@ -26,5 +26,9 @@
   "STOPFORUMSPAM_PASSWORD",
   "STOPFORUMSPAM_USERNAME",
   "THREATCRUSH_AGENT_KEY"
+ ],
+ "remote_build": "c0mpute",
+ "remote_builders": [
+  "12D3KooWK9tFibPXoRih5r66qatAQL59vj5SWD53PJTLAmaKBdpB"
  ]
 }
