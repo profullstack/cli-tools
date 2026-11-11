@@ -1,0 +1,7 @@
+{
+ "remote_build": "c0mpute",
+ "remote_builders": [
+  "12D3KooWK9tFibPXoRih5r66qatAQL59vj5SWD53PJTLAmaKBdpB"
+ ],
+ "remote_note": "image built on vienna (c0mpute container.run, DIP 0033), not on dev2"
+}
