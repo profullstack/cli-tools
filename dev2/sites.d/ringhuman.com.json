@@ -22,5 +22,12 @@
  ],
  "env_overrides": {
   "APP_URL": "https://ringhuman.pwa.pit.world"
- }
+ },
+ "external_networks": [
+  {
+   "name": "infernet",
+   "network": "infernetprotocolcom_default"
+  }
+ ],
+ "external_networks_note": "2026-11-11: c0mpute speech gateway (c0mpute-speech-gateway:8787) for the Kokoro call voice"
 }
