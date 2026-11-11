@@ -58,10 +58,11 @@ export function isRateLimited(stderr: string): boolean {
  * When the quota that ran out comes back, from `gh api rate_limit`.
  *
  * That endpoint is free: it does not count against any quota, so it still
- * answers while everything else is refused. A secondary limit leaves every
- * bucket with quota remaining and documents no reset, so it gets a minute.
+ * answers while everything else is refused. `undefined` means no bucket is
+ * empty (or the endpoint did not answer), which is what a secondary (abuse)
+ * limit looks like: it documents no reset, so the caller backs off instead.
  */
-export function parseRateLimitReset(raw: unknown, now: number): Date {
+export function parseRateLimitReset(raw: unknown, now: number): Date | undefined {
   const resources = (raw as { resources?: Record<string, { remaining?: unknown; reset?: unknown }> })
     ?.resources;
   let latest = 0;
@@ -70,7 +71,15 @@ export function parseRateLimitReset(raw: unknown, now: number): Date {
       latest = Math.max(latest, bucket.reset * 1000);
     }
   }
-  return new Date(latest > now ? latest : now + 60_000);
+  return latest > now ? new Date(latest) : undefined;
+}
+
+/** First secondary-limit back-off; each further refusal in a row doubles it. */
+export const SECONDARY_BACKOFF_MS = 60_000;
+
+/** `45s` under a minute and a half, `3m` past it: "(in 2m)" for 65 s misleads. */
+export function formatWait(ms: number): string {
+  return ms < 90_000 ? `${Math.max(1, Math.ceil(ms / 1000))}s` : `${Math.ceil(ms / 60_000)}m`;
 }
 
 /** Values GitHub documents for `mergeable`, plus the honest fallback. */
@@ -268,6 +277,8 @@ export class Gh {
   private readonly sleep: typeof sleep;
   private readonly rateWaitMs: number;
   private readonly onRateLimit: (text: string) => void;
+  /** Secondary-limit refusals in a row, across calls; next back-off is 1m × 2^this. */
+  private secondaryStreak = 0;
 
   constructor(options: GhOptions = {}) {
     this.exec = options.exec ?? run;
@@ -284,17 +295,46 @@ export class Gh {
 
     for (;;) {
       const result = await this.exec('gh', args, { env });
-      if (result.code === 0 || !isRateLimited(result.stderr)) return result;
+      if (result.code === 0 || !isRateLimited(result.stderr)) {
+        this.secondaryStreak = 0;
+        return result;
+      }
 
       const resetAt = await this.rateLimitReset(env);
+      const budget = `${Math.round(this.rateWaitMs / 60_000)}m --rate-wait budget`;
+
+      if (!resetAt) {
+        // Secondary limit: every bucket still has quota and GitHub names no
+        // reset. Retrying on a fixed minute keeps the penalty alive (each
+        // refused call extends it), so double the pause on every refusal in
+        // a row, across calls, and give up once it outgrows the budget.
+        const waitMs = SECONDARY_BACKOFF_MS * 2 ** this.secondaryStreak;
+        if (waitMs > this.rateWaitMs) {
+          this.secondaryStreak = 0;
+          throw new RateLimitError(
+            `GitHub secondary rate limit still refusing; the next back-off ` +
+              `(${formatWait(waitMs)}) is past the ${budget} — ${result.stderr.trim()}`,
+            new Date(Date.now() + waitMs),
+            result,
+          );
+        }
+        this.secondaryStreak += 1;
+        this.onRateLimit(
+          `GitHub secondary rate limit (no quota bucket is empty); backing off ` +
+            `${formatWait(waitMs)} (refusal ${this.secondaryStreak} in a row)`,
+        );
+        await this.sleep(waitMs);
+        continue;
+      }
+
       // A few seconds past the reset: GitHub's clock and ours are not one clock.
       const waitMs = resetAt.getTime() - Date.now() + 5_000;
-      const when = `${resetAt.toLocaleTimeString()} (in ${Math.ceil(waitMs / 60_000)}m)`;
+      const when = `${resetAt.toLocaleTimeString()} (in ${formatWait(waitMs)})`;
 
       if (waitMs > this.rateWaitMs) {
         throw new RateLimitError(
           `GitHub API rate limit exhausted; it resets at ${when}, past the ` +
-            `${Math.round(this.rateWaitMs / 60_000)}m --rate-wait budget — ${result.stderr.trim()}`,
+            `${budget} — ${result.stderr.trim()}`,
           resetAt,
           result,
         );
@@ -305,7 +345,7 @@ export class Gh {
     }
   }
 
-  private async rateLimitReset(env: NodeJS.ProcessEnv): Promise<Date> {
+  private async rateLimitReset(env: NodeJS.ProcessEnv): Promise<Date | undefined> {
     const result = await this.exec('gh', ['api', 'rate_limit'], { env });
     let raw: unknown;
     try {

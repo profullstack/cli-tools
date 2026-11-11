@@ -7,6 +7,7 @@ import {
   parseRunsAwaitingApproval,
   parsePullRequestUrl,
   parseRateLimitReset,
+  formatWait,
   isRateLimited,
   GhError,
 } from '../src/gh.ts';
@@ -758,8 +759,68 @@ describe('rate limit', () => {
       },
       now,
     );
-    expect(reset.getTime()).toBe(now + 120_000);
-    expect(parseRateLimitReset(undefined, now).getTime()).toBe(now + 60_000);
+    expect(reset?.getTime()).toBe(now + 120_000);
+    expect(parseRateLimitReset(undefined, now)).toBeUndefined();
+    expect(
+      parseRateLimitReset({ resources: { core: { remaining: 4747, reset: now / 1000 + 60 } } }, now),
+    ).toBeUndefined();
+  });
+
+  it('formats short waits in seconds, not a rounded-up "2m"', () => {
+    expect(formatWait(65_000)).toBe('65s');
+    expect(formatWait(200)).toBe('1s');
+    expect(formatWait(5 * 60_000 + 1)).toBe('6m');
+  });
+
+  /** Every bucket has quota: refused `failures` times with a secondary-limit message. */
+  function secondaryGh(failures: number, rateWaitMs: number) {
+    const waits: number[] = [];
+    const notices: string[] = [];
+    const gh = new Gh({
+      rateWaitMs,
+      sleep: async (ms) => {
+        waits.push(ms);
+      },
+      onRateLimit: (text) => notices.push(text),
+      exec: async (_f, args) => {
+        if (args[0] === 'api' && args[1] === 'rate_limit') {
+          const reset = Math.floor(Date.now() / 1000) + 600;
+          return {
+            code: 0,
+            stdout: JSON.stringify({
+              resources: { core: { remaining: 4747, reset }, graphql: { remaining: 3758, reset } },
+            }),
+            stderr: '',
+          };
+        }
+        if (args[0] === 'search' && failures > 0) {
+          failures -= 1;
+          return { code: 1, stdout: '', stderr: 'You have exceeded a secondary rate limit.' };
+        }
+        return { code: 0, stdout: '[]', stderr: '' };
+      },
+    });
+    return { gh, waits, notices };
+  }
+
+  it('backs off a secondary limit exponentially instead of every 65 s', async () => {
+    const { gh, waits, notices } = secondaryGh(3, 15 * 60_000);
+    const { summary } = await runSweep(gh, baseOptions());
+
+    expect(waits).toEqual([60_000, 120_000, 240_000]);
+    expect(notices[0]).toContain('secondary rate limit');
+    expect(notices[0]).not.toContain('exhausted');
+    expect(summary.failed).toBe(0);
+  });
+
+  it('gives up on a secondary limit once the back-off outgrows the budget', async () => {
+    const { gh, waits } = secondaryGh(99, 15 * 60_000);
+    const { summary, text } = await runSweep(gh, baseOptions({ orgs: ['acme'], users: [] }));
+
+    // 1 + 2 + 4 + 8 = 15 minutes; the 16 m step is past the budget.
+    expect(waits).toEqual([60_000, 120_000, 240_000, 480_000]);
+    expect(text).toContain('FAILED org:acme — GitHub secondary rate limit still refusing');
+    expect(summary.failed).toBe(1);
   });
 
   it('waits out a reset inside the budget, then sweeps', async () => {
