@@ -9,6 +9,10 @@ install -m 0644 c0mpute-gateway-watchdog.service c0mpute-gateway-watchdog.timer 
 install -d /etc/systemd/system/c0mpute-worker.service.d /etc/systemd/system/moshpit-c0mpute-edge.service.d
 install -m 0644 c0mpute-worker.service.d-resilient.conf /etc/systemd/system/c0mpute-worker.service.d/resilient.conf
 install -m 0644 moshpit-c0mpute-edge.service.d-perms.conf /etc/systemd/system/moshpit-c0mpute-edge.service.d/perms.conf
+# The worker's fixed p2p port (46350) is inside ip_local_port_range: reserve it so an
+# outbound socket (nginx upstream keepalive) can never squat it across a restart.
+install -m 0644 sysctl-60-c0mpute-p2p-port.conf /etc/sysctl.d/60-c0mpute-p2p-port.conf
+sysctl -q -p /etc/sysctl.d/60-c0mpute-p2p-port.conf
 install -m 0644 nginx-gateway.c0mpute.com.conf /etc/nginx/sites-available/gateway.c0mpute.com
 ln -sf /etc/nginx/sites-available/gateway.c0mpute.com /etc/nginx/sites-enabled/gateway.c0mpute.com
 nginx -t && systemctl reload nginx
