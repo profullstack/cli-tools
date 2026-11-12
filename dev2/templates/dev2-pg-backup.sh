@@ -44,11 +44,41 @@ BACKUP_WARN_GB=${BACKUP_WARN_GB:-450}
 # A database with no policy that is bigger than this gets flagged rather than
 # silently dumped in full every four hours.
 UNPOLICIED_WARN_GB=${UNPOLICIED_WARN_GB:-5}
+# A full dump is written before the old one ages out, so each bulk database
+# briefly needs room for two copies. nichedb's full is ~58 GB: on 2026-11-11 and
+# 11-12 the 05:20 run took dev2's / from ~38 GB free to 0, which failed the
+# rssamplifier full, every write on the box, and the databases themselves.
+# Before each full, require room for the last full of that database plus this
+# floor; make it by dropping that database's older fulls (never the newest), and
+# skip the dump if that is still not enough.
+FULL_MIN_FREE_GB=${FULL_MIN_FREE_GB:-40}
 
 mkdir -p "$OUT"
 stamp=$(date -u +%Y%m%d-%H%M%S)
 say() { echo "$(date -u '+%F %T') [$MODE] $*" >> "$LOG"; }
 alert() { logger -t dev2-pg-backup -p daemon.err "$*"; say "ALERT $*"; }
+
+# make_room_for_full <name> <db size GB>: ensure a new full of <name> fits.
+make_room_for_full() {
+  local name=$1 est=${2:-0} newest need avail old
+  newest=$(ls -1t "$OUT/${name}-full-"*.dump 2>/dev/null | head -1)
+  # The last full is the best size estimate; with none, the live database size
+  # (always larger than a compressed dump) is a safe upper bound.
+  [ -n "$newest" ] && est=$(du --block-size=1G "$newest" | cut -f1)
+  need=$(( ${est:-0} + FULL_MIN_FREE_GB ))
+  avail=$(df --block-size=1G --output=avail "$OUT" | tail -1 | tr -d ' ')
+  if [ "$avail" -lt "$need" ]; then
+    while IFS= read -r old; do
+      [ -n "$old" ] || continue
+      say "headroom: ${avail}GB free, need ${need}GB for $name; removing older full $(basename "$old")"
+      rm -f "$old"
+    done < <(ls -1t "$OUT/${name}-full-"*.dump 2>/dev/null | tail -n +2)
+    avail=$(df --block-size=1G --output=avail "$OUT" | tail -1 | tr -d ' ')
+  fi
+  [ "$avail" -ge "$need" ] && return 0
+  alert "skipping full dump of $name: ${avail}GB free on $OUT, need ${need}GB (last full ${est}GB + ${FULL_MIN_FREE_GB}GB floor); kept ${newest:-no previous full}"
+  return 1
+}
 
 psql_q() { docker exec -i supabase-db psql -U postgres -h localhost -d postgres -X -At -c "$1" 2>/dev/null; }
 
@@ -78,6 +108,7 @@ for db in $dbs; do
     # The daily job only exists to capture the bulk tables the frequent job
     # skips. Databases with no exclusions are already complete every 4 hours.
     is_bulk "$db" || continue
+    make_room_for_full "$db" "$size_gb" || { rc=1; continue; }
     f="$OUT/${db}-full-${stamp}.dump"
     args=()
   else
@@ -116,6 +147,7 @@ for c in $(docker ps --format '{{.Names}}' | grep -E -- '-supabase-db$' | sort);
   size_gb=$(docker exec -i "$c" psql -U supabase_admin -h localhost -d postgres -X -At -c "select (pg_database_size('postgres')/1024/1024/1024)::int" 2>/dev/null)
   if [ "$MODE" = full ]; then
     [ "${size_gb:-0}" -ge "$UNPOLICIED_WARN_GB" ] || continue
+    make_room_for_full "$name" "$size_gb" || { rc=1; continue; }
     f="$OUT/${name}-full-${stamp}.dump"
   else
     if [ "${size_gb:-0}" -ge "$UNPOLICIED_WARN_GB" ]; then say "skip $name (${size_gb}GB, daily full only)"; continue; fi
@@ -149,8 +181,9 @@ if [ "$MODE" = full ]; then
   done
 fi
 
-# Retention: both classes roll on age, 7 days each by default.
-find "$OUT" -name '*-[0-9]*.dump' ! -name '*-full-*' -mtime +"$KEEP_FREQUENT_DAYS" -delete 2>/dev/null
+# Retention: both classes roll on age. -mmin, not -mtime: `-mtime +2` matches
+# only files 3+ whole days old, so "keep 2 days" kept three 58 GB nichedb fulls.
+find "$OUT" -name '*-[0-9]*.dump' ! -name '*-full-*' -mmin +"$(( KEEP_FREQUENT_DAYS * 1440 ))" -delete 2>/dev/null
 
 # Fulls also roll on age, but never delete the newest one for a database. If
 # the daily job were broken for a fortnight, pure age-based expiry would
@@ -162,7 +195,7 @@ for db in $dbs $stack_names; do
     [ -n "$old" ] || continue
     [ "$old" = "$newest" ] && continue
     rm -f "$old"
-  done < <(find "$OUT" -name "${db}-full-*.dump" -mtime +"$KEEP_FULL_DAYS" 2>/dev/null)
+  done < <(find "$OUT" -name "${db}-full-*.dump" -mmin +"$(( KEEP_FULL_DAYS * 1440 ))" 2>/dev/null)
 done
 
 total=$(du -sh "$OUT" 2>/dev/null | cut -f1)
