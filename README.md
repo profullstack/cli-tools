@@ -33,6 +33,7 @@ TypeScript, installed as executables on `PATH`.
 | [`dl`](#dl) | Download a video, or just its audio, through yt-dlp |
 | [`torrent`](#torrent) | Make a torrent out of a directory, and get it seeded |
 | [`codeburn`](#codeburn) | See where your AI spend goes, by task, tool, model and project |
+| [`rea`](#rea) | Reverse engineer anything with agents (REA): apps, web bundles, APKs, native binaries; CLI + MCP |
 | [`agenticjobs`](#agenticjobs) | Search, apply, post and hire on an agent-friendly job board |
 | [`alchemy`](#alchemy) | Alchemy onchain data from the terminal: balances, gas, transactions, apps, wallets, x402 |
 | [`ngc`](#ngc) | NVIDIA's NGC CLI: the model and container catalog, installed and verified on first use |
@@ -97,6 +98,8 @@ Two things here are not `PATH` commands and do not need Node:
 - **Node 22.13+ and `pnpm` or `npm`** — `codeburn` only: it is somebody else's
   npm package, installed on first use, and upstream's engine floor is higher
   than this repo's
+- **Node ^22.23.4, ^24.22.1 or 26.12.1+** — `rea` only: upstream's engine range
+  (Node 23 and 25 are excluded); it warns and tries anyway outside it
 - **[`logicsrc`](https://logicsrc.com)**, logged in to the team — `users-dump`
   only, which reads database locations out of the team vaults
 - **[TronBrowser](https://tronbrowser.dev) with `browser_upload`** — `jobhunt apply`
@@ -2071,6 +2074,30 @@ Installed rather than `pnpm dlx`-ed each time because dlx checks the registry
 before every launch, which is fine for a one-shot and wrong for a dashboard you
 open twenty times a day. Upstream wants **Node 22.13+**; on an older one it says
 so and tries anyway, since that floor is theirs to move.
+
+### `rea`
+
+[REA](https://rea.tools) ([morluto/rea](https://github.com/morluto/rea), MIT):
+reverse engineer anything with agents, from app behaviour (browser, Electron,
+Android over adb) down to native binaries through Hopper, Ghidra, Rizin or GDB.
+One CLI, and the same commands as an MCP server.
+
+```sh
+rea setup                 # agents, skills and optional providers (Hopper etc.)
+rea doctor                # what is ready and what is missing
+rea analyze ./SomeApp     # an overview of an app
+rea mcp add               # register REA as an MCP server for your agent
+rea --help                # it is upstream's CLI: upstream's flags
+rea --self-update         # ours: reinstall rea-agents@latest
+rea --self-where          # ours: which copy runs, and from where
+```
+
+The `codeburn` shape: upstream's one-liner
+(`curl -fsSL https://raw.githubusercontent.com/morluto/rea/main/install.sh | bash`)
+is replaced by an install of `rea-agents@latest` on first use into
+`~/.local/share/cli-tools/vendor/rea`, so the `rea` on `PATH` is this launcher.
+If upstream's installer already put a `rea` in `~/.local/bin`, the linker leaves
+it there and the launcher hands through to it. `REA_BIN` points at another copy.
 
 ### `agenticjobs`
 
