@@ -30,6 +30,10 @@ Options:
   --limit N              Maximum PRs per owner; default 1000
   --apply                Actually squash-merge eligible PRs
   --allow-no-checks      Also merge clean PRs that have no CI checks
+  --trust-forks-from U1,U2
+                         Fork authors whose PRs may be auto-merged. Every
+                         other fork PR is REVIEW: never readied, CI never
+                         approved, never merged
   --no-ready-drafts      Ignore draft PRs instead of marking them ready
   --fix                  Repair mechanical blockers, then re-evaluate
   --fix-wait SECONDS     How long --fix waits on running checks; default 600
@@ -38,6 +42,9 @@ Options:
   -h, --help             Show this help
 
 Eligibility:
+  - PR's head branch is in the repo itself, not a fork (unless the author is
+    in --trust-forks-from). Green CI is not review: 2026-11-18 a fork PR that
+    POSTed process.env to webhook.site passed CI and was merged by this tool
   - PR is open, and not a draft (or was successfully marked ready)
   - mergeable is MERGEABLE
   - at least one CI check exists, unless --allow-no-checks
@@ -54,8 +61,9 @@ Eligibility:
 Fork CI awaiting approval:
   GitHub holds workflow runs on a first-time contributor's fork PR at
   "action_required" until a maintainer approves them, and until then the PR
-  reports no checks at all. Such a PR is not a repo without CI. With --apply
-  its held pull_request runs are approved (from a fork they get a read-only
+  reports no checks at all. Such a PR is not a repo without CI. This only
+  applies to forks in --trust-forks-from; every other fork PR is REVIEW and
+  its runs are left held. With --apply its held pull_request runs are approved (from a fork they get a read-only
   token and no secrets) and the PR is parked until they finish, within the
   --fix-wait budget; a dry run only names them. Held runs on any other event
   are reported as FIXME and left for a human.
@@ -99,7 +107,7 @@ Fixing (--fix):
 async function main(argv: string[]): Promise<number> {
   const parsed = parseArgs(argv, {
     boolean: ['--apply', '--allow-no-checks', '--ready-drafts', '--no-ready-drafts', '--fix', '--no-fix', '-h', '--help'],
-    string: ['--orgs', '--users', '--limit', '--fix-wait', '--rate-wait'],
+    string: ['--orgs', '--users', '--trust-forks-from', '--limit', '--fix-wait', '--rate-wait'],
   });
 
   if (parsed.flags.has('-h') || parsed.flags.has('--help')) {
@@ -113,6 +121,7 @@ async function main(argv: string[]): Promise<number> {
     limit: integer(parsed.values, '--limit', defaults.limit, { min: 1, max: 1000 }),
     apply: parsed.flags.has('--apply'),
     allowNoChecks: parsed.flags.has('--allow-no-checks'),
+    trustForksFrom: csv(parsed.values, '--trust-forks-from'),
     readyDrafts: !parsed.flags.has('--no-ready-drafts'),
     fix: parsed.flags.has('--fix') && !parsed.flags.has('--no-fix'),
     fixWaitMs:

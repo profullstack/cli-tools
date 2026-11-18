@@ -61,6 +61,8 @@ const pr: PullRequest = {
   mergeable: 'CONFLICTING',
   mergeStateStatus: 'DIRTY',
   headRefOid: 'deadbeef',
+  isCrossRepository: false,
+  authorLogin: 'ralyodio',
 };
 
 /** A scripted gh/git/bun; `conflicted` is what `git diff --diff-filter=U` reports. */

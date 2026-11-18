@@ -8,6 +8,11 @@ export interface MergeOptions {
   limit: number;
   apply: boolean;
   allowNoChecks: boolean;
+  /**
+   * Fork authors whose PRs may be auto-merged. Everyone else's fork PR is
+   * reported for human review and never merged, nor has its CI approved.
+   */
+  trustForksFrom?: string[];
   readyDrafts: boolean;
   fix: boolean;
   fixWaitMs: number;
@@ -39,6 +44,7 @@ export type Line =
   | { kind: 'waiting'; parked: number; secondsLeft: number }
   | { kind: 'fixme'; url: string; text: string; title: string }
   | { kind: 'skip'; url: string; reason: string; title: string }
+  | { kind: 'review'; url: string; author: string; title: string }
   | { kind: 'failed'; url: string; reason: string }
   | { kind: 'warn'; text: string };
 
@@ -79,12 +85,28 @@ const MERGE_STATE_OK: ReadonlySet<MergeState> = new Set<MergeState>([
  * unhappy, the name of the red check is the useful sentence and
  * `mergeStateStatus=UNSTABLE` is the useless one.
  */
+/**
+ * A PR from a fork by someone outside the trust list. Green CI says nothing
+ * about intent: 2026-11-18 a fork PR that POSTed the whole process.env to
+ * webhook.site passed CI and was squash-merged by this tool, which had just
+ * approved its held CI run itself. A fork PR needs a human to read it.
+ */
+export function isUntrustedFork(pr: PullRequest, trustForksFrom: readonly string[] = []): boolean {
+  if (!pr.isCrossRepository) return false;
+  const login = pr.authorLogin.toLowerCase();
+  return !(login && trustForksFrom.some((t) => t.toLowerCase() === login));
+}
+
 export function reasonNotMergeable(
   pr: PullRequest,
   checks: Check[],
   allowNoChecks: boolean,
+  trustForksFrom: readonly string[] = [],
 ): string {
   if (pr.state !== 'OPEN') return `state=${pr.state}`;
+  if (isUntrustedFork(pr, trustForksFrom)) {
+    return `external fork PR by ${pr.authorLogin || 'unknown author'}; never auto-merged, review by hand`;
+  }
   if (pr.isDraft) return 'draft';
   if (pr.mergeable !== 'MERGEABLE') return `mergeable=${pr.mergeable}`;
   if (checks.length === 0 && !allowNoChecks) return 'no CI checks found';
@@ -221,7 +243,7 @@ export async function sweep(
 
   /** Judge a PR believed to be settled, and merge it when it is eligible. */
   const judgeAndMerge = async (pr: PullRequest, checks: Check[]): Promise<void> => {
-    let reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+    let reason = reasonNotMergeable(pr, checks, options.allowNoChecks, options.trustForksFrom);
 
     if (reason && checks.some((c) => c.bucket === 'fail')) {
       const refused = await gh.refusedToStart(pr.url, checks);
@@ -273,6 +295,14 @@ export async function sweep(
         }`,
         title: '',
       });
+      summary.skipped += 1;
+      continue;
+    }
+
+    // Before anything that writes: an untrusted fork PR is not readied, its CI
+    // is not approved, and it is never merged. It is named for a human.
+    if (pr.state === 'OPEN' && isUntrustedFork(pr, options.trustForksFrom)) {
+      emit({ kind: 'review', url, author: pr.authorLogin || 'unknown author', title: pr.title });
       summary.skipped += 1;
       continue;
     }
@@ -329,7 +359,7 @@ export async function sweep(
       }
     }
 
-    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks);
+    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks, options.trustForksFrom);
 
     // Repair is for open PRs. A PR that was merged or closed between the search
     // and this read is not a blocker to clear — it is finished — and every
@@ -617,6 +647,9 @@ export function render(line: Line): string {
       return `FIXME ${line.url} — ${line.text} — ${line.title}`;
     case 'skip':
       return `SKIP  ${line.url} — ${line.reason} — ${line.title}`;
+    case 'review':
+      return `REVIEW ${line.url} — external fork PR by ${line.author}; never auto-merged, ` +
+        `read the diff by hand — ${line.title}`;
     case 'failed':
       return `FAILED ${line.url} — ${line.reason}`;
     case 'warn':
