@@ -3,7 +3,11 @@
 Stops our rented Vast.ai GPU node while nobody needs it and starts it again when the
 network has a job for its model. It is the general `c0mpute autoscale` feature
 (c0mpute repo, `node/crates/c0mpute-cli/src/autoscale.rs`, docs at c0mpute.com/docs#autoscale);
-this directory is only our own configuration of it. Approved by Anthony 2026-11-18.
+this directory is only our own configuration of it.
+
+**Our 3060 is `dry_run = true`** (Anthony 2026-11-18: keep it up 24/7). The unit only logs what
+it would do (`[dry-run] ... would: Stop(...)`), so the idle hours it would have saved are on
+record. Set `dry_run = false` to let it act; the policy below then applies.
 
 | | |
 |---|---|

@@ -10,6 +10,9 @@ provider = "vast"
 instance = "61205210"                      # "c0mpute-gpu-3060 profullstack"
 node = "sdNT3kCN"
 models = ["eriktonon/qwen3.8-uncensored:9b"]
+# Anthony 2026-11-18: this GPU stays up 24/7. Watch only: log what autoscale WOULD do
+# (stop on idle / start on demand), never stop, start or rent anything.
+dry_run = true
 api_key_file = "~/.config/c0mpute/autoscale/vast.key"   # logicsrc profullstack/vast--prod VAST_API_KEY
 idle_minutes = 20
 min_run_minutes = 15
