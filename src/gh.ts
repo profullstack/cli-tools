@@ -110,6 +110,14 @@ export interface PullRequest {
   mergeable: Mergeable;
   mergeStateStatus: MergeState;
   headRefOid: string;
+  /**
+   * The head branch lives in a fork, not in the base repository. Pushing a
+   * branch to the repo itself needs write access; opening a fork PR needs
+   * nothing, so this is the line between "one of us" and "anyone at all".
+   */
+  isCrossRepository: boolean;
+  /** Login of the PR author; empty when GitHub did not say. */
+  authorLogin: string;
 }
 
 export interface Check {
@@ -164,6 +172,14 @@ export function parsePullRequest(raw: unknown, where = 'gh pr view'): PullReques
       where,
     ),
     headRefOid: asString(record.headRefOid, 'headRefOid', where),
+    // Fail closed: a PR whose origin GitHub did not report is treated as a
+    // fork, which is never auto-merged.
+    isCrossRepository: record.isCrossRepository !== false,
+    authorLogin:
+      typeof record.author === 'object' && record.author !== null &&
+      typeof (record.author as Record<string, unknown>).login === 'string'
+        ? ((record.author as Record<string, unknown>).login as string)
+        : '',
   };
 }
 
@@ -412,7 +428,7 @@ export class Gh {
             'view',
             url,
             '--json',
-            'state,isDraft,mergeable,mergeStateStatus,headRefOid,title,url',
+            'state,isDraft,mergeable,mergeStateStatus,headRefOid,title,url,isCrossRepository,author',
           ],
           (raw) => parsePullRequest(raw),
         );

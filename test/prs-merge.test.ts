@@ -15,6 +15,7 @@ import type { RunResult } from '../src/exec.ts';
 import {
   defaults,
   isRepairable,
+  isUntrustedFork,
   isUpdatable,
   reasonNotMergeable,
   render,
@@ -40,6 +41,7 @@ interface StubStep {
  * first look sees a pending suite, the second sees it green" — which is the
  * behaviour --fix exists for and the one a single-shot stub cannot express.
  */
+const stubGhBase = (o: Parameters<typeof stubGh>[0]) => stubGh(o);
 function stubGh(options: {
   steps: StubStep[];
   updateBranchFails?: boolean;
@@ -53,6 +55,8 @@ function stubGh(options: {
   approveFails?: boolean;
   /** Annotation messages on every check run. */
   annotations?: string[];
+  /** The PR comes from a fork opened by this login. */
+  fork?: string;
 }) {
   const calls: string[] = [];
   let viewIndex = 0;
@@ -82,6 +86,8 @@ function stubGh(options: {
           mergeable: current.mergeable ?? 'MERGEABLE',
           mergeStateStatus: current.mergeStateStatus ?? 'CLEAN',
           headRefOid: 'deadbeef',
+          isCrossRepository: options.fork !== undefined,
+          author: { login: options.fork ?? 'ralyodio' },
         }),
       );
     }
@@ -203,6 +209,8 @@ function stubFleet(prs: { url: string; createdAt: string; steps: StubStep[] }[])
           mergeable: current.mergeable ?? 'MERGEABLE',
           mergeStateStatus: current.mergeStateStatus ?? 'CLEAN',
           headRefOid: 'deadbeef',
+          isCrossRepository: false,
+          author: { login: 'ralyodio' },
         }),
       );
     }
@@ -232,6 +240,7 @@ function stubFleet(prs: { url: string; createdAt: string; steps: StubStep[] }[])
   return { gh: new Gh({ exec }), calls };
 }
 
+const baseOptionsBase = (o: Partial<MergeOptions> = {}): MergeOptions => baseOptions(o);
 function baseOptions(overrides: Partial<MergeOptions> = {}): MergeOptions {
   return {
     orgs: ['acme'],
@@ -262,7 +271,27 @@ describe('eligibility rules', () => {
     mergeable: 'MERGEABLE',
     mergeStateStatus: 'CLEAN',
     headRefOid: 'abc',
+    isCrossRepository: false,
+    authorLogin: 'ralyodio',
   } as const;
+
+  it('never accepts a fork PR from outside the trust list, green or not', () => {
+    const fork = { ...pr, isCrossRepository: true, authorLogin: 'stranger' };
+    expect(reasonNotMergeable(fork, [{ name: 'test', bucket: 'pass' }], false)).toMatch(
+      /external fork PR by stranger; never auto-merged/,
+    );
+    expect(isUntrustedFork(fork, ['Stranger'])).toBe(false);
+    expect(reasonNotMergeable(fork, [{ name: 'test', bucket: 'pass' }], false, ['stranger'])).toBe('');
+  });
+
+  it('treats a PR whose origin GitHub did not report as a fork', () => {
+    const parsed = parsePullRequest({
+      url: 'u', title: 't', state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE',
+      mergeStateStatus: 'CLEAN', headRefOid: 'a',
+    });
+    expect(parsed.isCrossRepository).toBe(true);
+    expect(parsed.authorLogin).toBe('');
+  });
 
   it('accepts an open, clean PR with green checks', () => {
     expect(reasonNotMergeable(pr, [{ name: 'test', bucket: 'pass' }], false)).toBe('');
@@ -971,6 +1000,26 @@ describe('parseMergeAsync', () => {
   });
 });
 
+describe('untrusted fork PRs', () => {
+  it('reports for review and never readies, approves CI on, or merges them', async () => {
+    const { gh, calls } = stubGh({
+      fork: 'chsarmento',
+      heldRuns: [{ id: 41, name: 'CI', event: 'pull_request' }],
+      steps: [{ checks: [{ name: 'test', bucket: 'pass' }] }],
+    });
+    const out: Line[] = [];
+    const summary = await sweep(baseOptions(), gh, (l) => out.push(l));
+
+    expect(calls.some((c) => c.endsWith('/approve'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+    expect(calls.some((c) => c.startsWith('pr checks'))).toBe(false);
+    expect(render(out.find((l) => l.kind === 'review')!)).toMatch(
+      /^REVIEW .* external fork PR by chsarmento; never auto-merged/,
+    );
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+  });
+});
+
 describe('fork CI held for maintainer approval', () => {
   const lines = () => {
     const out: Line[] = [];
@@ -980,6 +1029,10 @@ describe('fork CI held for maintainer approval', () => {
     { id: 41, name: 'CI', event: 'pull_request' },
     { id: 42, name: 'scan', event: 'pull_request' },
   ];
+  // Fork CI is only ever approved for a fork author on the trust list.
+  const stubGh = (o: Parameters<typeof stubGhBase>[0]) => stubGhBase({ fork: 'friend', ...o });
+  const baseOptions = (o: Partial<MergeOptions> = {}) =>
+    baseOptionsBase({ trustForksFrom: ['friend'], ...o });
 
   it('keeps only runs concluded action_required', () => {
     expect(
