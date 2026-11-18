@@ -15,7 +15,7 @@ record. Set `dry_run = false` to let it act; the policy below then applies.
 | node | Vast instance `61205210` "c0mpute-gpu-3060 profullstack", RTX 3060 12 GB, c0mpute node `sdNT3kCN`, serves `eriktonon/qwen3.8-uncensored:9b` |
 | log | `journalctl --user -u c0mpute-autoscale` and `~/www/vast-autoscale/state.log` (every transition with its reason) |
 | state | `~/.local/share/c0mpute/autoscale-state.json`; `c0mpute autoscale status` |
-| dashboard | c0mpute.com/dashboard/nodes (reported with the fleet `C0MPUTE_API_KEY`) |
+| dashboard | c0mpute.com/dashboard/nodes (reported with anthony's c0mpute.com key in `~/.c0mpute/chat.json`; the fleet `ik_live_` key is an Infernet key and gets 401) |
 
 ## Policy
 
@@ -42,6 +42,14 @@ record. Set `dry_run = false` to let it act; the policy below then applies.
 Vast bills the disk while an instance is stopped: $0.0333/h of the $0.0867/h. A stopped
 hour saves $0.0533; the most it can save is ~$1.28/day (~$38/month), and only for hours
 the 9B is not in demand.
+
+## Measured (2026-11-18, throwaway Vast GTX 1650, smollm2:135m)
+
+Stopped on idle at 19:24:09; a job sent at 19:24:19 waited in the bridge's queue;
+the autoscaler started the instance at 19:24:40 (next 30 s pass); the container was
+up at 19:24:41, the worker at 19:24:54, and the same job was answered at 19:25:07:
+**27 s from start to answer, 49 s user wait**. The 9B on the 3060 adds its model load
+(on disk, warmed by start-gpu.sh), so expect about a minute.
 
 ## Install / change
 
