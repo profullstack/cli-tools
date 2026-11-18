@@ -1,0 +1,31 @@
+# dev2: ~/.config/c0mpute/autoscale.toml (0600). Source of truth: cli-tools dev2/c0mpute-autoscale.
+# No secrets here: the Vast key and the node identity are 0600 files beside it.
+report = true
+interval_s = 60
+log_file = "~/www/vast-autoscale/state.log"
+
+[[node]]
+name = "vast-3060"
+provider = "vast"
+instance = "61205210"                      # "c0mpute-gpu-3060 profullstack"
+node = "sdNT3kCN"
+models = ["eriktonon/qwen3.8-uncensored:9b"]
+api_key_file = "~/.config/c0mpute/autoscale/vast.key"   # logicsrc profullstack/vast--prod VAST_API_KEY
+idle_minutes = 20
+min_run_minutes = 15
+boot_timeout_minutes = 8
+# exit 0 busy / 1 idle; follows the instance across replacements.
+busy_cmd = "~/.config/c0mpute/autoscale/vast-hook.sh"
+# Stop the worker first so it bids on nothing while the box powers down.
+pre_stop_cmd = "~/.config/c0mpute/autoscale/vast-hook.sh stop-worker"
+
+[node.replace]
+max_usd_per_hour = 0.12                    # pre-approved cap (Anthony 2026-11-18)
+gpus = ["RTX 3060", "RTX 3070", "RTX 4060 Ti"]
+min_gpu_ram_gb = 12
+min_reliability = 0.98
+disk_gb = 60
+image = "nvidia/cuda:12.4.1-runtime-ubuntu22.04"
+onstart_file = "~/.config/c0mpute/autoscale/vast-onstart.sh"
+identity_file = "~/.config/c0mpute/autoscale/sdNT3kCN-identity.key"
+label = "c0mpute-gpu-3060 profullstack"
