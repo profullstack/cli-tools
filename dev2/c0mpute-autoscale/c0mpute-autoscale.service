@@ -1,0 +1,16 @@
+[Unit]
+Description=c0mpute autoscale: stop rented GPU nodes while idle, start them on network demand
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dashboard reports use the c0mpute.com key in ~/.c0mpute/chat.json; provider keys are files
+# under ~/.config/c0mpute/autoscale/ (0600), read by c0mpute itself.
+EnvironmentFile=-%h/.config/c0mpute/autoscale/env
+ExecStart=%h/.local/share/c0mpute-seed/bin/c0mpute autoscale run
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
