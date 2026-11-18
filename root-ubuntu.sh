@@ -134,7 +134,7 @@
 #   ZRAM_ALGO=zstd ...falling back to lzo-rle where the kernel lacks it
 #   ZRAM_SWAPPINESS=100   overrides SWAPPINESS, but only where zram came up
 #   EARLYOOM_ENABLE=1     kill the biggest hog early instead of at the wall
-#   EARLYOOM_MEM=10,5 / EARLYOOM_SWAP=10,5   SIGTERM% , SIGKILL%
+#   EARLYOOM_MEM=10,5 / EARLYOOM_SWAP=100,100   SIGTERM% , SIGKILL% (swap 100 = act on memory alone)
 #   EARLYOOM_AVOID=... / EARLYOOM_PREFER=    unquoted regexes (see the note)
 #   LOGROTATE_ENABLE=1    nginx logs rotate early past LOGROTATE_MAXSIZE, hourly timer
 #   LOGROTATE_MAXSIZE=200M / LOGROTATE_KEEP=14
@@ -4327,9 +4327,15 @@ ZRAM_ALGO="${ZRAM_ALGO:-zstd}"
 # and wrong once it means a memcpy: it leaves zram sitting unused while the box
 # reclaims page cache it still wants. Raised only where zram actually came up.
 ZRAM_SWAPPINESS="${ZRAM_SWAPPINESS:-100}"
-# Kill at 10% free (SIGTERM) and 5% (SIGKILL), of memory AND swap together.
+# Kill at 10% free (SIGTERM) and 5% (SIGKILL) of MEMORY. Swap is ignored
+# (100,100 = "always low enough"): earlyoom fires only when memory AND swap
+# are both under their thresholds, and on a box with a big swapfile swap never
+# gets that low before the disk thrash freezes it solid. dev2 (91G RAM + 24G
+# of swapfiles) hung four times in three days on 2026-11-15..17 with earlyoom
+# never firing and no kernel OOM either. Memory-only turns that into one
+# killed process instead of a dead box.
 EARLYOOM_MEM="${EARLYOOM_MEM:-10,5}"
-EARLYOOM_SWAP="${EARLYOOM_SWAP:-10,5}"
+EARLYOOM_SWAP="${EARLYOOM_SWAP:-100,100}"
 # Never pick these. Losing sshd or systemd to the thing that was supposed to
 # save the box is how a recoverable incident becomes a console-only one.
 #
@@ -4357,7 +4363,9 @@ configure_earlyoom() {
 		try "install earlyoom" apt-get install -y -qq earlyoom || return 0
 	fi
 
-	args="-m $EARLYOOM_MEM -s $EARLYOOM_SWAP -r 3600 --avoid $EARLYOOM_AVOID"
+	# -r 600: a memory report every 10 min, so the last one before an incident
+	# says what the box looked like (hourly ones were 57 min stale at the hang).
+	args="-m $EARLYOOM_MEM -s $EARLYOOM_SWAP -r 600 --avoid $EARLYOOM_AVOID"
 	[[ -n "$EARLYOOM_PREFER" ]] && args="$args --prefer $EARLYOOM_PREFER"
 
 	write_if_changed /etc/default/earlyoom <<EOF && changed=1
