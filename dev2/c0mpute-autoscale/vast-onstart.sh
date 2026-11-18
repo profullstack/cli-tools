@@ -17,7 +17,7 @@ cat > /root/c0mpute/start-gpu.sh <<'START_GPU'
 # never unload; NUM_PARALLEL=2 matches the worker (inference.rs MAX_CONCURRENT=2, 300 s timeout incl. queue), and the 9B re-tagged to 16k ctx (its Modelfile says 65536 = 13.6 GiB).
 E="env HOME=/home/c0mpute OLLAMA_HOST=127.0.0.1:11434 OLLAMA_MODELS=/home/c0mpute/.ollama/models OLLAMA_KEEP_ALIVE=-1 OLLAMA_FLASH_ATTENTION=1 OLLAMA_KV_CACHE_TYPE=q8_0 OLLAMA_MAX_LOADED_MODELS=1 OLLAMA_NUM_PARALLEL=2"
 NINE=eriktonon/qwen3.8-uncensored:9b
-command -v ollama >/dev/null || { command -v zstd >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd >/dev/null; }; curl -fsSL https://ollama.com/install.sh | sh; }
+command -v ollama >/dev/null || { command -v zstd >/dev/null || { apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq zstd >/dev/null; }; curl -fsSL https://ollama.com/install.sh -o /root/c0mpute/ollama-install.sh && sh /root/c0mpute/ollama-install.sh; }
 mkdir -p /home/c0mpute/.ollama && chown -R c0mpute:c0mpute /home/c0mpute/.ollama
 if [ "$1" = "--restart-ollama" ]; then pkill -u c0mpute -x ollama; sleep 3; fi
 pgrep -u c0mpute -x ollama >/dev/null || runuser -u c0mpute -- $E nohup ollama serve >> /home/c0mpute/ollama.log 2>&1 &
