@@ -77,7 +77,8 @@ PG_CONTAINER = "supabase-db"
 WORKSPACE_ID = "50db2758-e580-4af6-b904-366b6bb2a71b"
 FIRST_PORT = 3200
 RAILWAY_SSH_KEY = os.path.expanduser("~/.ssh/id_ed25519")
-ACME_EMAIL = "anthony@profullstack.com"
+# Only used to register acme.sh on a box that lacks it; set it in the environment.
+ACME_EMAIL = os.environ.get("ACME_EMAIL", "")
 
 # ------------------------------------------------------------------ utils
 

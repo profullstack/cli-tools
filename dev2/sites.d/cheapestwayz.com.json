@@ -1,0 +1,35 @@
+{
+ "site": "cheapestwayz.com",
+ "service": "cheapestwayz.com",
+ "repo": "profullstack/cheapestwayz",
+ "branch": "master",
+ "image": null,
+ "domains": [
+  "cheapestwayz.com",
+  "www.cheapestwayz.com"
+ ],
+ "db": "none",
+ "db_kinds": [],
+ "redis": false,
+ "volumes": [
+  {
+   "name": "data",
+   "mountPath": "/data"
+  }
+ ],
+ "port_var": null,
+ "companions": [],
+ "infra": [],
+ "shared_repo": false,
+ "project": null,
+ "project_id": null,
+ "environment_id": null,
+ "service_id": null,
+ "port": 3392,
+ "health_path": "/healthz",
+ "max_body": "8m",
+ "mem_limit": "384m",
+ "mem_note": "Next.js 16 standalone on Node 22, node:sqlite file in volumes/data",
+ "vault": "cheapestwayz--prod",
+ "notes": "Not a Railway site: born on dev2 2026-11-18. CheapestWayz Q&A cost-discovery marketplace. SQLite at /data/cheapestwayz.sqlite (volumes/data). Secrets (RESEND_API_KEY, CWZ_EMAIL_FROM) from vault cheapestwayz--prod. Deploys on push to master."
+}
