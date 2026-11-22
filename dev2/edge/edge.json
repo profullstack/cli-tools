@@ -21,6 +21,7 @@
   "sites": [
     { "hosts": ["pit.world"], "proxy": 8787, "max_body": "1MiB" },
     { "hosts": ["www.pit.world"], "redirect": "https://pit.world{uri}" },
+    { "hosts": ["influencer.marketing.pit.world"], "proxy": 7777, "max_body": "1MiB", "gzip": true, "//": "autoinfluencer c0mpute app 8db0def85b571ff04db7. Exact host because .marketing is a real TLD, so the *.*.pit.world relay would look up the refused Moshpit name influencer.marketing; the gateway serves it as a custom domain (TXT _c0mpute-app.influencer.marketing.pit.world). Cert: pit-proxy-cert."},
     { "hosts": ["ad.network.pit.world"], "proxy": 8800, "max_body": "1MiB", "gzip": true },
     { "hosts": ["agent.database.pit.world"], "proxy": 18080, "max_body": "512KiB", "gzip": true, "access_log": true, "sanitize_query": true },
     { "hosts": ["otr.podcast.pit.world"], "proxy": 8787, "max_body": "30MiB", "gzip": true,
