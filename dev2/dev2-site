@@ -658,7 +658,10 @@ def render_compose(s, st, app_port_inside, build_args=(), node_preset=()):
             y.append(f"    build:\n      context: ./app\n      dockerfile: {df}")
             if build_args:  # deploy-app.sh exports app.env before `compose build`, so ${K} resolves
                 y.append("      args:"); y.extend(f"        {k}: \"${{{k}:-}}\"" for k in build_args)
-            y.append(f"    image: {img}-{name}:latest\n    restart: unless-stopped\n{mem}\n    env_file: {envfile}")
+            # sites.d "image_repo": CI pushes <image_repo>:<sha> and deploy-app.sh pulls it and
+            # sets APP_IMAGE; the build section stays only for an emergency hand build.
+            ref = f"${{APP_IMAGE:-{img}-{name}:latest}}" if s.get("image_repo") and name == "app" else f"{img}-{name}:latest"
+            y.append(f"    image: {ref}\n    restart: unless-stopped\n{mem}\n    env_file: {envfile}")
         y.append("    environment:")
         if heap and name not in node_preset: y.append(heap_line(heap, list_style=False))
         y.append(f"      PORT: \"{port_inside}\"\n      HOST: \"0.0.0.0\"\n      NODE_ENV: production")
@@ -1233,6 +1236,9 @@ def cmd_provision(args):
     # sites.d "remote_build": "c0mpute" builds the image on a c0mpute builder (deploy-app.sh
     # remote_build), "remote_builders" names them (peer ids), "remote_build_fallback": "local"
     # builds here when the remote build fails.
+    # sites.d "image_repo" (e.g. ghcr.io/profullstack/c0mpute-web): prebuilt images, never
+    # built on this box. The repo's deploy workflow builds and pushes <image_repo>:<sha>.
+    if s.get("image_repo"): deploy_env += f"IMAGE_REPO={s['image_repo']}\n"
     if s.get("remote_build"): deploy_env += f"REMOTE_BUILD={s['remote_build']}\n"
     if s.get("remote_builders"): deploy_env += f"C0MPUTE_BUILDERS={','.join(s['remote_builders'])}\n"
     if s.get("remote_build_fallback"): deploy_env += f"REMOTE_BUILD_FALLBACK={s['remote_build_fallback']}\n"

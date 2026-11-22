@@ -17,7 +17,24 @@
 # app.env before building, so a secret is set by `logicsrc teams push` and the
 # next deploy, never by editing this box. See sync_env_from_vault below.
 #
+# Prebuilt images (IMAGE_REPO in deploy.env, from sites.d "image_repo"): nothing is
+# built here. CI builds and pushes <IMAGE_REPO>:<full commit sha>; this script pulls
+# that tag, points the app service at it (compose `image: ${APP_IMAGE:-...}`) and runs
+# `compose up --no-build`. A tag that is not in the registry stops the deploy with an
+# error before anything running is touched; it never falls back to a local build.
+# Registry auth: one line on stdin (the workflow's short-lived GITHUB_TOKEN, read
+# before the deploy gate), used once with a throwaway DOCKER_CONFIG and never stored;
+# without it the pull is anonymous (fine for a public package, and a sha pulled before
+# is reused from the local image store).
+#
 set -euo pipefail
+if [ -z "${DEPLOY_GATED:-}" ] && [ ! -t 0 ] && [ -z "${DEPLOY_REGISTRY_TOKEN:-}" ] \
+   && grep -q '^IMAGE_REPO=.' "$(dirname "$(readlink -f "$0")")/deploy.env" 2>/dev/null; then
+  DEPLOY_REGISTRY_TOKEN=""
+  IFS= read -r -t 5 DEPLOY_REGISTRY_TOKEN || true
+  [[ $DEPLOY_REGISTRY_TOKEN =~ ^[A-Za-z0-9_.-]{20,400}$ ]] || DEPLOY_REGISTRY_TOKEN=""
+  export DEPLOY_REGISTRY_TOKEN
+fi
 # Three deploys at a time on this box (@profullstack/deploy deploy-gate): a merge
 # that lands with many others queues for a slot instead of building with all of them.
 # No gate installed, a --status call, or already inside the gate: carry on as before.
@@ -26,6 +43,9 @@ if [ -z "${DEPLOY_GATED:-}" ] && [ "${1:-}" != --status ]; then
     [ -x "$gate" ] && exec "$gate" --name "$(basename "$(dirname "$(readlink -f "$0")")")" -- "$0" "$@"
   done
 fi
+
+REGISTRY_TOKEN=${DEPLOY_REGISTRY_TOKEN:-}
+unset DEPLOY_REGISTRY_TOKEN
 
 ROOT=${ROOT:-$(cd "$(dirname "$(readlink -f "$0")")" && pwd)}
 APP_DIR="$ROOT/app"
@@ -123,6 +143,7 @@ sync_env_from_vault() {
 # running stack is touched, any failure (the ERR trap, or a failed health check)
 # re-tags those images and brings the old stack back up without building.
 SNAP=()
+SNAP_APP_REF=""
 CURRENT=""
 snapshot() {
   local svc cid id ref
@@ -134,6 +155,7 @@ snapshot() {
     case $ref in *@*) continue ;; *:*) ;; *) ref="$ref:latest" ;; esac
     docker tag "$id" "${ref%:*}:rollback" >/dev/null 2>&1 || true
     SNAP+=("$id $ref")
+    [ "$svc" != app ] || SNAP_APP_REF=$ref
   done
 }
 
@@ -144,6 +166,8 @@ restore() {
   log "Rolling back to the previous image(s)"
   local p
   for p in "${SNAP[@]}"; do docker tag "${p%% *}" "${p#* }"; done
+  # Prebuilt mode: compose names the image through APP_IMAGE, so point it back.
+  [ -z "${IMAGE_REPO:-}" ] || [ -z "$SNAP_APP_REF" ] || export APP_IMAGE="$SNAP_APP_REF"
   [ -z "$CURRENT" ] || git -C "$APP_DIR" checkout -q --detach "$CURRENT"
   compose up -d --no-build --remove-orphans
   if health; then log "Restored the previous deploy"; return 0; fi
@@ -222,6 +246,37 @@ remote_build() {
   done
 }
 
+# Prebuilt mode: make <IMAGE_REPO>:<sha> present locally. Reuses a local copy, else
+# pulls it (with the stdin token when one came, in a throwaway DOCKER_CONFIG so no
+# credential is written to this box).
+pull_image() {
+  local ref=$1 cfg rc=1 i
+  if docker image inspect "$ref" >/dev/null 2>&1; then log "Image $ref already on this box"; return 0; fi
+  cfg=$(umask 077; mktemp -d "$ROOT/.docker-pull.XXXXXX")
+  if [ -n "$REGISTRY_TOKEN" ]; then
+    printf '%s' "$REGISTRY_TOKEN" | DOCKER_CONFIG=$cfg docker login "${IMAGE_REPO%%/*}" \
+      -u "${REGISTRY_USER:-github-actions}" --password-stdin >/dev/null 2>&1 \
+      || log "Registry login with the stdin token failed; trying an anonymous pull"
+  fi
+  for i in 1 2 3; do
+    log "Pulling $ref${REGISTRY_TOKEN:+ (authenticated)} (try $i)"
+    if DOCKER_CONFIG=$cfg docker pull -q "$ref"; then rc=0; break; fi
+    sleep $((i * 10))
+  done
+  rm -rf "$cfg"
+  return $rc
+}
+
+# Prebuilt mode: drop this repo's images other than the ones running now, the
+# previous deploy (rollback) and the :rollback pin, so pulls do not pile up on disk.
+prune_images() {
+  local keep=" $SHA ${CURRENT:-} rollback " tag
+  for tag in $(docker images "$IMAGE_REPO" --format '{{.Tag}}' 2>/dev/null); do
+    case $keep in *" $tag "*) continue ;; esac
+    docker image rm "$IMAGE_REPO:$tag" >/dev/null 2>&1 || true
+  done
+}
+
 case "${1:-}" in
   --status)
     compose ps
@@ -285,6 +340,15 @@ git -C "$APP_DIR" checkout -q --detach "$SHA"
 chmod -R u+rwX,go+rX "$APP_DIR" 2>/dev/null || true
 log "At $SHA"
 
+UP_FLAGS=(--remove-orphans)
+if [ -n "${IMAGE_REPO:-}" ]; then
+  # Prebuilt: pull CI's image for this exact commit. No build on this box, ever.
+  [[ $SHA =~ ^[0-9a-f]{40}$ ]] || die "prebuilt mode needs a full commit id, got '$SHA'"
+  export APP_IMAGE="$IMAGE_REPO:$SHA"
+  UP_FLAGS+=(--no-build)
+  pull_image "$APP_IMAGE" || die "image $APP_IMAGE is not in the registry (CI has not pushed it, or the pull was refused); this box does not build. The running stack was not touched."
+  log "Using prebuilt $APP_IMAGE"
+else
 log "Building $BUILD_SERVICES"
 # Public build-time variables (NEXT_PUBLIC_*, VITE_*, ...) come from app.env through the
 # compose build args; export just those so ${K} interpolates. app.env is a compose env
@@ -311,6 +375,7 @@ else
   # shellcheck disable=SC2086
   compose build $BUILD_SERVICES || die "build of $SHA failed; the running stack was not touched"
 fi
+fi  # IMAGE_REPO
 
 # If the compose network's subnet changed (the kit moved sites to explicit
 # 10.200.x.0/24 subnets), `up -d` recreates the network in place and Docker's
@@ -357,7 +422,7 @@ set -E; trap 'on_err $LINENO' ERR
 [ "$RECREATE" = 0 ] || compose down --remove-orphans
 
 log "Starting"
-compose up -d --remove-orphans
+compose up -d "${UP_FLAGS[@]}"
 
 # Docker's embedded DNS can keep stale alias state after a network was recreated in
 # place: container names resolve, service names (`redis`) answer SERVFAIL, and the app
@@ -370,7 +435,7 @@ if [ -n "$APP_CID" ]; then
       if ! docker exec "$APP_CID" sh -c "getent hosts $svc" >/dev/null 2>&1; then
         log "Service '$svc' does not resolve inside the app container (stale embedded DNS): recreating the stack"
         compose down --remove-orphans
-        compose up -d --remove-orphans
+        compose up -d "${UP_FLAGS[@]}"
         break
       fi
     fi
@@ -384,11 +449,13 @@ if health; then
     echo "DEPLOYED_SHA=$SHA"
     echo "PREVIOUS_SHA=$CURRENT"
     echo "DEPLOYED_AT=$(date -u +%FT%TZ)"
+    [ -z "${APP_IMAGE:-}" ] || echo "DEPLOYED_IMAGE=$APP_IMAGE"
   } > "$STATE"
   compose ps
   # nginx marks a refused server down for fail_timeout (10 s): give it time to come
   # back to the main container before the standby goes.
   if [ "$STANDBY_ON" = 1 ]; then sleep 12; standby_down; fi
+  [ -z "${IMAGE_REPO:-}" ] || prune_images
 else
   trap - ERR
   log "UNHEALTHY after ${HEALTH_TIMEOUT}s - last 60 lines:"
