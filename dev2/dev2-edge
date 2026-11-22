@@ -5,6 +5,8 @@ dev2-edge: pit.world and the Moshpit names on Caddy, every other dev2 site on ng
     dev2-edge render [--out DIR] [--off]   write the box files for edge.json into DIR (nothing touches dev2)
     dev2-edge apply --yes                  cut over: backup, baseline sweep, install, switch, sweep again;
                                            any site whose status changed rolls the whole box back
+    dev2-edge reload --yes                 Caddyfile only (validate as caddy, backup, reload; no sweeps):
+                                           for edge.json changes that only touch Caddy sites, e.g. upstream_host
     dev2-edge route on|off                 point the routed names at Caddy (on) or back at nginx (off),
                                            one nginx reload, no other change: the fast way back
     dev2-edge rollback [TARBALL]           restore /etc/nginx from the apply's backup, stop Caddy
@@ -227,6 +229,18 @@ def render_cert_sources(s):
     return "\n".join(out) + "\n"
 
 
+UPSTREAM_HOST_RE = re.compile(r"^(127\.0\.0\.1|100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\.[0-9]{1,3}\.[0-9]{1,3})$")
+
+
+def upstream(site):
+    """host:port for a proxy site. upstream_host (default 127.0.0.1) moves an app off dev2:
+    a Tailscale 100.64.0.0/10 address only, so the edge never proxies over the public net."""
+    host = site.get("upstream_host", "127.0.0.1")
+    if not UPSTREAM_HOST_RE.match(host):
+        die(f"edge.json: {site['hosts']} upstream_host {host!r} must be 127.0.0.1 or a Tailscale 100.64.0.0/10 address")
+    return f"{host}:{int(site['proxy'])}"
+
+
 def caddy_site(site, s):
     tls = "edge_tls_moshpit" if site.get("moshpit") else "edge_tls"
     lines = [", ".join(f"https://{h}" for h in site["hosts"]) + " {", f"\timport {tls}"]
@@ -248,8 +262,10 @@ def caddy_site(site, s):
     if "proxy" in site and site.get("retry"):
         # While the app restarts (a deploy), hold the request and keep dialing instead of
         # answering 502: webhooks that drive live calls (Telnyx) must not fail mid-call.
-        lines += [f"\treverse_proxy 127.0.0.1:{int(site['proxy'])} {{", "\t\theader_up X-Real-IP {remote_host}",
+        lines += [f"\treverse_proxy {upstream(site)} {{", "\t\theader_up X-Real-IP {remote_host}",
                   "\t\tstream_close_delay 1h", f"\t\tlb_try_duration {site['retry']}", "\t\tlb_try_interval 250ms", "\t}"]
+    elif "proxy" in site and site.get("upstream_host"):
+        lines.append(f"\timport edge_proxy_host {upstream(site)}")
     elif "proxy" in site:
         lines.append(f"\timport edge_proxy {int(site['proxy'])}")
     elif "root" in site:
@@ -302,6 +318,14 @@ def render_caddyfile(s):
 \treverse_proxy 127.0.0.1:{{args[0]}} {{
 \t\theader_up X-Real-IP {{remote_host}}
 \t\t# A reload (every certificate renewal) would otherwise cut websockets (pit-bbs) at once.
+\t\tstream_close_delay 1h
+\t}}
+}}
+
+# Same, for an app moved off dev2 (edge.json upstream_host): args[0] is host:port on the tailnet.
+(edge_proxy_host) {{
+\treverse_proxy {{args[0]}} {{
+\t\theader_up X-Real-IP {{remote_host}}
 \t\tstream_close_delay 1h
 \t}}
 }}
@@ -420,6 +444,24 @@ def cmd_apply(a):
     sys.exit(r.returncode)
 
 
+def cmd_reload(a):
+    """Caddyfile only: for edge.json changes that touch nothing but Caddy sites (an upstream
+    moved, a proxy port changed). Validates as caddy, keeps a backup, reloads; no sweeps."""
+    if not a.yes:
+        die("this reloads production Caddy on dev2: re-run with --yes")
+    remote = ship(with_caddy=False)
+    ts = os.path.basename(remote)
+    cmd = (f"set -e; install -m 0644 {remote}/root/etc/caddy/Caddyfile /etc/caddy/Caddyfile.next; "
+           "runuser -u caddy -- env HOME=/var/lib/caddy /usr/local/bin/caddy validate "
+           "--config /etc/caddy/Caddyfile.next --adapter caddyfile >/dev/null 2>&1 "
+           "|| { echo 'caddy validate failed: nothing changed' >&2; rm -f /etc/caddy/Caddyfile.next; exit 1; }; "
+           f"cp -p /etc/caddy/Caddyfile /etc/caddy/Caddyfile.bak-reload-{ts}; "
+           "mv /etc/caddy/Caddyfile.next /etc/caddy/Caddyfile; systemctl reload caddy.service; "
+           f"sleep 2; systemctl is-active --quiet caddy.service; echo 'caddy reloaded; previous: /etc/caddy/Caddyfile.bak-reload-{ts}'")
+    r = subprocess.run(SSH + [f"root@{DEV2_HOST}", cmd])
+    sys.exit(r.returncode)
+
+
 def cmd_route(a):
     remote = ship(on=(a.state == "on"), with_caddy=False)
     r = subprocess.run(SSH + [f"root@{DEV2_HOST}", f"{remote}/root/usr/local/sbin/edge-box route {remote}"])
@@ -446,6 +488,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("render"); p.add_argument("--out"); p.add_argument("--off", action="store_true"); p.set_defaults(fn=cmd_render)
     p = sub.add_parser("apply"); p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_apply)
+    p = sub.add_parser("reload"); p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_reload)
     p = sub.add_parser("route"); p.add_argument("state", choices=["on", "off"]); p.set_defaults(fn=cmd_route)
     p = sub.add_parser("rollback"); p.add_argument("tarball", nargs="?"); p.set_defaults(fn=cmd_rollback)
     sub.add_parser("sweep").set_defaults(fn=cmd_sweep)
