@@ -11,5 +11,8 @@
   "CRAWLPROOF_DEV_BOX_TOKEN",
   "GITHUB_APP_PRIVATE_KEY",
   "X402_PRIVATE_KEY"
- ]
+ ],
+ "image_repo": "ghcr.io/profullstack/crawlproof-web",
+ "image_note": "image built and pushed by profullstack/crawlproof.com .github/workflows/deploy-dev2.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)",
+ "image_deploy_note": "bespoke deploy-app.sh (repo ops/selfhost/server) with its own IMAGE_REPO mode; not rendered by the kit"
 }

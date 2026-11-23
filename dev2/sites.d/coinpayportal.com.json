@@ -34,5 +34,7 @@
   "DOPPLER_ENVIRONMENT",
   "DOPPLER_PROJECT",
   "REPUTATION_SIGNING_SECRET"
- ]
+ ],
+ "image_repo": "ghcr.io/profullstack/coinpayportal-web",
+ "image_note": "image built and pushed by profullstack/coinpayportal .github/workflows/deploy-dev2.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)"
 }

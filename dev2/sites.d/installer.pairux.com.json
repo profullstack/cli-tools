@@ -9,5 +9,7 @@
  "vault_skip": [
   "AUR_SSH_KEY",
   "GPG_PRIVATE_KEY"
- ]
+ ],
+ "image_repo": "ghcr.io/profullstack/pairux-installer",
+ "image_note": "image built and pushed by profullstack/pairux.com .github/workflows/deploy-dev2-installer-pairux-com.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)"
 }

@@ -170,7 +170,7 @@ restore() {
   [ -z "${IMAGE_REPO:-}" ] || [ -z "$SNAP_APP_REF" ] || export APP_IMAGE="$SNAP_APP_REF"
   [ -z "$CURRENT" ] || git -C "$APP_DIR" checkout -q --detach "$CURRENT"
   compose up -d --no-build --remove-orphans
-  if health; then log "Restored the previous deploy"; return 0; fi
+  if health; then log "Restored the previous deploy"; ! declare -F handoff_import >/dev/null || handoff_import || true; return 0; fi
   log "ROLLBACK ALSO UNHEALTHY - site is down"
   return 1
 }
@@ -415,6 +415,26 @@ if [ -n "${STANDBY_PORT:-}" ] && [ "$RECREATE" = 0 ]; then
   fi
 fi
 
+# Operator vault handoff (coinpayportal.com): take the old process's in-memory unlock
+# before it stops and give it to the new one once healthy
+# (scripts/operator-vault-handoff.sh in the app repo; the key stays in this shell
+# variable, never a file or argv). No such script, or a locked vault: no-op.
+HANDOFF_SH="$APP_DIR/scripts/operator-vault-handoff.sh"
+OPERATOR_HANDOFF=""
+OLD_CID=$(compose ps -q app 2>/dev/null | head -n1 || true)
+if [ -x "$HANDOFF_SH" ] && [ -n "$OLD_CID" ]; then
+  OPERATOR_HANDOFF=$("$HANDOFF_SH" export "$OLD_CID" 2>/dev/null || true)
+  if [ -n "$OPERATOR_HANDOFF" ]; then log "Operator unlock taken from the old container for handoff"
+  else log "No operator unlock to hand off (locked, or old image)"; fi
+fi
+handoff_import() {
+  [ -n "$OPERATOR_HANDOFF" ] || return 0
+  local cid; cid=$(compose ps -q app 2>/dev/null | head -n1 || true)
+  if printf '%s' "$OPERATOR_HANDOFF" | "$HANDOFF_SH" import "$cid"; then log "Operator unlock handed to the new container"
+  else log "WARNING: operator unlock handoff failed: unlock at /admin/operator-vault"; fi
+  OPERATOR_HANDOFF=""
+}
+
 # From here on the running stack is touched: any failure rolls back to the images
 # it was running.
 snapshot
@@ -445,6 +465,7 @@ fi
 if health; then
   trap - ERR
   log "Healthy on 127.0.0.1:$APP_PORT$HEALTH_PATH"
+  handoff_import || true
   {
     echo "DEPLOYED_SHA=$SHA"
     echo "PREVIOUS_SHA=$CURRENT"

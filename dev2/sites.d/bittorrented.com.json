@@ -21,7 +21,7 @@
  "service_id": null,
  "port": 3290,
  "cloud_ref": "ussbjnpovrynxyztjeeb",
- "app_host": "do (DigitalOcean droplet 137.184.114.110, user ubuntu, systemd bittorrented.service); NOT on dev2",
+ "app_host": "dev2 (/home/anthony/www/bittorrented.com, hand-built kit-shaped deploy, since 2026-10-05; the DigitalOcean droplet is retired)",
  "notes": "Not a Railway site: only the Supabase stack lives on dev2 (supabase.bittorrented.com). DNS at DigitalOcean, so the cert is HTTP-01. The app, its workers and bitmagnet run on the droplet and were re-pointed by hand; never provision/deploy/dns/cutover this site with the kit.",
  "proxies": [
   {
@@ -35,5 +35,7 @@
   "DOPPLER_CONFIG",
   "DOPPLER_ENVIRONMENT",
   "DOPPLER_PROJECT"
- ]
+ ],
+ "image_repo": "ghcr.io/profullstack/bittorrented-web",
+ "image_note": "image built and pushed by profullstack/media-streamer .github/workflows/deploy-dev2.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)"
 }
