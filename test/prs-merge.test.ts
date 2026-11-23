@@ -18,6 +18,7 @@ import {
   isRepairable,
   isUntrustedFork,
   isUpdatable,
+  nextWakeMs,
   reasonNotMergeable,
   render,
   sweep,
@@ -1288,6 +1289,14 @@ describe('a PR with no checks at all', () => {
 
     expect(summary).toMatchObject({ merged: 0, skipped: 1 });
     expect(out.some((l) => l.kind === 'fixme' && /IT IS NOW CLOSED/.test(l.text))).toBe(true);
+  });
+
+  it('polls at the poll interval once a give-up time is behind it', () => {
+    const now = 1_000_000;
+    expect(nextWakeMs([{ giveUpAt: now - 5_000 }], 20_000, 300_000, now)).toBe(20_000);
+    expect(nextWakeMs([{ giveUpAt: now + 3_000 }], 20_000, 300_000, now)).toBe(3_000);
+    expect(nextWakeMs([{}], 20_000, 300_000, now)).toBe(20_000);
+    expect(nextWakeMs([{}], 20_000, 4_000, now)).toBe(4_000);
   });
 
   it('reads only the on: block of a workflow', () => {

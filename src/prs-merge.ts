@@ -813,11 +813,27 @@ async function drainParked(
     });
     // Wake for the earliest give-up as well as the next poll, so a PR whose CI
     // is not coming is not held for a poll interval it has no use for.
-    const nextGiveUp = Math.min(
-      ...remaining.map((item) => (item.giveUpAt ?? Number.POSITIVE_INFINITY) - Date.now()),
-    );
-    await sleep(Math.max(0, Math.min(options.pollMs, msLeft, nextGiveUp)));
+    await sleep(nextWakeMs(remaining, options.pollMs, msLeft, Date.now()));
   }
+}
+
+/**
+ * How long to sleep before looking at the parked PRs again.
+ *
+ * Only a give-up still ahead shortens the poll. One already behind us belongs
+ * to a PR whose checks did start, and counting it made the wait zero: the
+ * first real run of this polled GitHub every second for four minutes.
+ */
+export function nextWakeMs(
+  remaining: readonly { giveUpAt?: number }[],
+  pollMs: number,
+  msLeft: number,
+  now: number,
+): number {
+  const ahead = remaining
+    .map((item) => (item.giveUpAt ?? Number.POSITIVE_INFINITY) - now)
+    .filter((ms) => ms > 0);
+  return Math.min(pollMs, msLeft, ...ahead);
 }
 
 export function render(line: Line): string {
