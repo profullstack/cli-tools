@@ -118,6 +118,8 @@ export interface PullRequest {
   isCrossRepository: boolean;
   /** Login of the PR author; empty when GitHub did not say. */
   authorLogin: string;
+  /** Last activity on the PR, ISO 8601; absent when GitHub did not say. */
+  updatedAt?: string;
 }
 
 export interface Check {
@@ -180,6 +182,9 @@ export function parsePullRequest(raw: unknown, where = 'gh pr view'): PullReques
       typeof (record.author as Record<string, unknown>).login === 'string'
         ? ((record.author as Record<string, unknown>).login as string)
         : '',
+    ...(typeof record.updatedAt === 'string' && record.updatedAt
+      ? { updatedAt: record.updatedAt }
+      : {}),
   };
 }
 
@@ -226,6 +231,83 @@ export function parseRunsAwaitingApproval(
         event: asString(run.event, 'event', where),
       };
     });
+}
+
+/**
+ * What a repository's Actions setup can say about one pull request head.
+ *
+ * `gh pr checks` printing nothing has three causes that need three answers,
+ * and reading them all as "no CI checks found" left ten finished PRs sitting:
+ * the repo runs nothing on pull requests (every workflow disabled, as on the
+ * private repos, or none written), the repo does and the event never fired,
+ * or runs exist and have not reported yet.
+ */
+export interface PullCi {
+  /** Enabled workflows that run on pull requests, by name. */
+  pullWorkflows: string[];
+  /** Workflows of any kind the repo has, enabled or not. */
+  workflows: number;
+  /** Runs on this head commit started by a pull request event. */
+  pullRuns: number;
+}
+
+export interface RepoWorkflow {
+  name: string;
+  path: string;
+  state: string;
+}
+
+export function parseWorkflows(raw: unknown, where = 'gh api actions/workflows'): RepoWorkflow[] {
+  const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (!Array.isArray(record.workflows)) {
+    throw new GhError(`${where}: expected workflows, got ${JSON.stringify(raw).slice(0, 200)}`);
+  }
+  return record.workflows.map((entry) => {
+    const w = entry as Record<string, unknown>;
+    return {
+      name: asString(w.name, 'name', where),
+      path: asString(w.path, 'path', where),
+      state: asString(w.state, 'state', where),
+    };
+  });
+}
+
+/** Count the runs on a head commit that a pull request event started. */
+export function parsePullRunCount(raw: unknown, where = 'gh api actions/runs'): number {
+  const record = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  if (!Array.isArray(record.workflow_runs)) {
+    throw new GhError(`${where}: expected workflow_runs, got ${JSON.stringify(raw).slice(0, 200)}`);
+  }
+  return record.workflow_runs.filter((entry) => {
+    const event = (entry as Record<string, unknown>).event;
+    return event === 'pull_request' || event === 'pull_request_target';
+  }).length;
+}
+
+/**
+ * Does this workflow file run on pull requests?
+ *
+ * Only the `on:` block is read. `pull_request` appears all over files that
+ * never run on one (`github.event.issue.pull_request` in an issue_comment
+ * job), and counting those would make a repo with no PR CI look like it has
+ * some. A file whose `on:` cannot be found is assumed to run on pull requests:
+ * the wrong guess that way waits, the other way merges untested code.
+ */
+export function triggersOnPullRequest(yaml: string): boolean {
+  const lines = yaml.split(/\r?\n/);
+  const start = lines.findIndex((line) => /^(on|"on"|'on'|true)\s*:/.test(line));
+  if (start === -1) return true;
+
+  const block = [lines[start]!.replace(/^[^:]*:/, '')];
+  for (const line of lines.slice(start + 1)) {
+    // The next top-level key ends the block; blank lines and comments do not.
+    if (/^[^\s#]/.test(line)) break;
+    block.push(line);
+  }
+
+  return block
+    .map((line) => line.replace(/(^|\s)#.*$/, ''))
+    .some((line) => /(^|[\s[,'"])pull_request(_target)?($|[\s\],:'"])/.test(line));
 }
 
 /**
@@ -428,7 +510,7 @@ export class Gh {
             'view',
             url,
             '--json',
-            'state,isDraft,mergeable,mergeStateStatus,headRefOid,title,url,isCrossRepository,author',
+            'state,isDraft,mergeable,mergeStateStatus,headRefOid,title,url,isCrossRepository,author,updatedAt',
           ],
           (raw) => parsePullRequest(raw),
         );
@@ -578,6 +660,68 @@ export class Gh {
     }
 
     return names.length > 0 ? { names, message } : null;
+  }
+
+  /**
+   * What the repo's Actions can say about this head commit. See {@link PullCi}.
+   *
+   * Workflow files are read from the default branch, which is where GitHub
+   * reads the enabled/disabled state from too.
+   */
+  async pullCi(url: string, headSha: string): Promise<PullCi> {
+    const target = parsePullRequestUrl(url);
+    if (!target) throw new GhError(`cannot read owner/repo from ${url}`);
+
+    const workflows = await this.json(
+      ['api', `repos/${target.slug}/actions/workflows?per_page=100`],
+      (raw) => parseWorkflows(raw),
+    );
+
+    const pullWorkflows: string[] = [];
+    for (const workflow of workflows) {
+      if (workflow.state !== 'active') continue;
+
+      // GitHub-managed workflows have no file. Code scanning and code quality
+      // analyse pull requests; Dependabot updates and Pages builds do not.
+      if (!workflow.path.startsWith('.github/')) {
+        if (/codeql|code-quality|code-scanning/.test(workflow.path)) {
+          pullWorkflows.push(workflow.name);
+        }
+        continue;
+      }
+
+      const file = await this.call([
+        'api',
+        '-H',
+        'Accept: application/vnd.github.raw+json',
+        `repos/${target.slug}/contents/${workflow.path}`,
+      ]);
+      // Unreadable is not "does not run on pull requests".
+      if (file.code !== 0 || triggersOnPullRequest(file.stdout)) {
+        pullWorkflows.push(workflow.name);
+      }
+    }
+
+    const pullRuns = await this.json(
+      ['api', `repos/${target.slug}/actions/runs?head_sha=${headSha}&per_page=100`],
+      (raw) => parsePullRunCount(raw),
+    );
+
+    return { pullWorkflows, workflows: workflows.length, pullRuns };
+  }
+
+  /**
+   * Close and reopen a PR so GitHub sends `pull_request: reopened`.
+   *
+   * It is the one way to make workflows run on a head they missed without
+   * pushing a commit to someone's branch. A failed reopen is reported with the
+   * close already done, so the caller can say the PR was left closed.
+   */
+  async retrigger(url: string): Promise<RunResult & { leftClosed?: boolean }> {
+    const closed = await this.call(['pr', 'close', url]);
+    if (closed.code !== 0) return closed;
+    const reopened = await this.call(['pr', 'reopen', url]);
+    return reopened.code === 0 ? reopened : { ...reopened, leftClosed: true };
   }
 
   async approveRun(url: string, runId: number): Promise<RunResult> {

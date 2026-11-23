@@ -36,7 +36,7 @@ export interface Summary {
 
 export type Line =
   | { kind: 'mode'; text: string }
-  | { kind: 'ready'; url: string; title: string; checks: number }
+  | { kind: 'ready'; url: string; title: string; checks: number; noCi?: boolean }
   | { kind: 'merged'; url: string }
   | { kind: 'readied'; url: string; title: string }
   | { kind: 'would-ready'; url: string; title: string }
@@ -53,6 +53,21 @@ export const defaults = {
   fixWaitMs: 600_000,
   pollMs: 20_000,
 } as const;
+
+/**
+ * How long a workflow run may take to appear after the event that starts it.
+ * Runs show up within seconds; two minutes is the point past which silence
+ * means nothing is coming, not that it is slow.
+ */
+export const CI_START_WAIT_MS = 120_000;
+
+/**
+ * Accounts that are software. With no CI there is nothing between a bot's PR
+ * and the default branch, and on the private repos the default branch deploys:
+ * a dependency bump nobody ran is not merged on GitHub's word that it applies.
+ */
+export const isBot = (login: string): boolean =>
+  login.startsWith('app/') || login.endsWith('[bot]');
 
 const isBad = (check: Check): boolean =>
   check.bucket !== 'pass' && check.bucket !== 'skipping';
@@ -170,6 +185,14 @@ interface Parked {
    * not "this repo has no CI".
    */
   awaitingChecks?: boolean;
+  /**
+   * The repo runs nothing on pull requests, so an empty check list is the
+   * whole answer and not a reason to skip.
+   */
+  noCi?: boolean;
+  /** Stop waiting for a first check at this time; `silence` is why it matters. */
+  giveUpAt?: number;
+  silence?: string;
 }
 
 export async function sweep(
@@ -242,8 +265,13 @@ export async function sweep(
   }
 
   /** Judge a PR believed to be settled, and merge it when it is eligible. */
-  const judgeAndMerge = async (pr: PullRequest, checks: Check[]): Promise<void> => {
-    let reason = reasonNotMergeable(pr, checks, options.allowNoChecks, options.trustForksFrom);
+  const judgeAndMerge = async (pr: PullRequest, checks: Check[], noCi = false): Promise<void> => {
+    let reason = reasonNotMergeable(
+      pr,
+      checks,
+      options.allowNoChecks || noCi,
+      options.trustForksFrom,
+    );
 
     if (reason && checks.some((c) => c.bucket === 'fail')) {
       const refused = await gh.refusedToStart(pr.url, checks);
@@ -260,7 +288,13 @@ export async function sweep(
       return;
     }
 
-    emit({ kind: 'ready', url: pr.url, title: pr.title, checks: checks.length });
+    emit({
+      kind: 'ready',
+      url: pr.url,
+      title: pr.title,
+      checks: checks.length,
+      ...(noCi && checks.length === 0 ? { noCi: true } : {}),
+    });
     summary.ready += 1;
 
     if (!options.apply) return;
@@ -359,7 +393,36 @@ export async function sweep(
       }
     }
 
-    const reason = reasonNotMergeable(pr, checks, options.allowNoChecks, options.trustForksFrom);
+    // Still nothing: find out whether that is the repo's answer (it runs
+    // nothing on pull requests) or an event GitHub never delivered.
+    let noCi = false;
+    if (checks.length === 0 && pr.state === 'OPEN' && !pr.isDraft && !options.allowNoChecks) {
+      const silent = await explainNoChecks(pr, options, gh, emit);
+      if (silent.kind === 'no-ci') noCi = true;
+      if (silent.kind === 'skipped') {
+        summary.skipped += 1;
+        continue;
+      }
+      if (silent.kind === 'parked') {
+        if (silent.repaired) summary.fixed += 1;
+        parked.push({
+          url,
+          title: pr.title,
+          repaired: silent.repaired,
+          awaitingChecks: true,
+          giveUpAt: Date.now() + Math.min(CI_START_WAIT_MS, options.fixWaitMs),
+          silence: silent.silence,
+        });
+        continue;
+      }
+    }
+
+    const reason = reasonNotMergeable(
+      pr,
+      checks,
+      options.allowNoChecks || noCi,
+      options.trustForksFrom,
+    );
 
     // Repair is for open PRs. A PR that was merged or closed between the search
     // and this read is not a blocker to clear — it is finished — and every
@@ -384,7 +447,7 @@ export async function sweep(
         if (updated.code === 0) {
           summary.fixed += 1;
           // New head, so every check re-runs. Park it for the same reason.
-          parked.push({ url, title: pr.title, repaired: true });
+          parked.push({ url, title: pr.title, repaired: true, noCi });
           continue;
         }
 
@@ -449,7 +512,7 @@ export async function sweep(
       }
     }
 
-    await judgeAndMerge(pr, checks);
+    await judgeAndMerge(pr, checks, noCi);
   }
 
   if (parked.length > 0) {
@@ -457,6 +520,118 @@ export async function sweep(
   }
 
   return summary;
+}
+
+/**
+ * Why an open PR has no checks at all, and what to do about it.
+ *
+ * `no-ci` — no enabled workflow runs on pull requests, so there will never be
+ * a check; GitHub calling the PR clean is all the verdict there is. `parked` —
+ * CI exists and should report: either the event was re-sent or the PR is too
+ * new to have been missed. `skipped` — said why. `unknown` — the old rule.
+ *
+ * Re-sending means close and reopen. That is only done when a pull request
+ * workflow is enabled and not one run exists for the head commit, which is a
+ * delivery GitHub dropped (2026-11-22: two PRs opened in one sweep never started
+ * CI, on repos whose CI ran for the PR before them and the PR after).
+ */
+async function explainNoChecks(
+  pr: PullRequest,
+  options: MergeOptions,
+  gh: Gh,
+  emit: (line: Line) => void,
+): Promise<
+  | { kind: 'no-ci' | 'skipped' | 'unknown' }
+  | { kind: 'parked'; repaired: boolean; silence: string }
+> {
+  let ci: Awaited<ReturnType<Gh['pullCi']>>;
+  try {
+    ci = await gh.pullCi(pr.url, pr.headRefOid);
+  } catch (error) {
+    if (error instanceof RateLimitError) throw error;
+    emit({
+      kind: 'warn',
+      text: `could not read the workflows behind ${pr.url} — ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return { kind: 'unknown' };
+  }
+
+  if (ci.pullWorkflows.length === 0) {
+    if (isBot(pr.authorLogin)) {
+      emit({
+        kind: 'skip',
+        url: pr.url,
+        reason: `no CI runs on pull requests in this repo and the author is a bot ` +
+          `(${pr.authorLogin}); nothing has tested it, --allow-no-checks merges it anyway`,
+        title: pr.title,
+      });
+      return { kind: 'skipped' };
+    }
+    return { kind: 'no-ci' };
+  }
+
+  // Runs exist and reported nothing yet, or reported nothing at all. Neither
+  // is something a second delivery fixes.
+  if (ci.pullRuns > 0) return { kind: 'unknown' };
+
+  const names = ci.pullWorkflows.join(', ');
+  const silence = `CI never started on this commit (${names} should run on pull requests ` +
+    'and did not: a paths filter that excludes this change, or Actions is not ' +
+    'starting runs); run the gate locally and merge by hand, or pass --allow-no-checks';
+
+  // A PR touched moments ago has not been missed, it has not been reached.
+  const age = pr.updatedAt ? Date.now() - Date.parse(pr.updatedAt) : Number.POSITIVE_INFINITY;
+  if (age >= 0 && age < CI_START_WAIT_MS) {
+    if (!(options.apply && options.fix)) {
+      emit({
+        kind: 'skip',
+        url: pr.url,
+        reason: `no checks yet; the PR changed ${Math.round(age / 1000)}s ago and ${names} has not started`,
+        title: pr.title,
+      });
+      return { kind: 'skipped' };
+    }
+    emit({
+      kind: 'fixing',
+      url: pr.url,
+      text: `no checks yet; the PR changed ${Math.round(age / 1000)}s ago, waiting for ${names} to start`,
+    });
+    return { kind: 'parked', repaired: false, silence };
+  }
+
+  if (!(options.apply && options.fix)) {
+    emit({
+      kind: 'skip',
+      url: pr.url,
+      reason: `CI never started on this commit (${names} runs on pull requests and has no run ` +
+        'for it); --apply --fix closes and reopens the PR to start it',
+      title: pr.title,
+    });
+    return { kind: 'skipped' };
+  }
+
+  const sent = await gh.retrigger(pr.url);
+  if (sent.code !== 0) {
+    const message = (sent.stderr.trim() || sent.stdout.trim()).replace(/\s+/g, ' ');
+    emit({
+      kind: 'fixme',
+      url: pr.url,
+      text: sent.leftClosed
+        ? `closed the PR to restart CI and GitHub refused to reopen it: ${message}. IT IS NOW CLOSED; reopen it by hand`
+        : `could not close and reopen the PR to restart CI: ${message}`,
+      title: pr.title,
+    });
+    return { kind: 'skipped' };
+  }
+
+  emit({
+    kind: 'fixing',
+    url: pr.url,
+    text: `CI never started on this commit; closed and reopened the PR to start ${names}, parked for the second pass`,
+  });
+  return { kind: 'parked', repaired: true, silence };
 }
 
 /**
@@ -552,7 +727,7 @@ async function drainParked(
   gh: Gh,
   emit: (line: Line) => void,
   summary: Summary,
-  judgeAndMerge: (pr: PullRequest, checks: Check[]) => Promise<void>,
+  judgeAndMerge: (pr: PullRequest, checks: Check[], noCi?: boolean) => Promise<void>,
 ): Promise<void> {
   const deadline = Date.now() + options.fixWaitMs;
   let remaining = queue;
@@ -575,6 +750,19 @@ async function drainParked(
         continue;
       }
 
+      // Asked CI to start and it said nothing for long enough that nothing is
+      // coming. Waiting out the whole budget would only delay saying so.
+      if (checks.length === 0 && item.giveUpAt !== undefined && Date.now() >= item.giveUpAt) {
+        emit({
+          kind: 'skip',
+          url: item.url,
+          reason: item.silence ?? 'no checks appeared',
+          title: item.title,
+        });
+        summary.skipped += 1;
+        continue;
+      }
+
       if (checks.some(isPending) || (item.awaitingChecks && checks.length === 0)) {
         stillRunning.push(item);
         continue;
@@ -587,7 +775,7 @@ async function drainParked(
       if (!item.repaired) summary.fixed += 1;
       try {
         const pr = await gh.pullRequest(item.url);
-        await judgeAndMerge(pr, checks);
+        await judgeAndMerge(pr, checks, item.noCi);
       } catch (error) {
         emit({
           kind: 'skip',
@@ -623,7 +811,12 @@ async function drainParked(
       parked: remaining.length,
       secondsLeft: Math.round(msLeft / 1000),
     });
-    await sleep(Math.min(options.pollMs, msLeft));
+    // Wake for the earliest give-up as well as the next poll, so a PR whose CI
+    // is not coming is not held for a poll interval it has no use for.
+    const nextGiveUp = Math.min(
+      ...remaining.map((item) => (item.giveUpAt ?? Number.POSITIVE_INFINITY) - Date.now()),
+    );
+    await sleep(Math.max(0, Math.min(options.pollMs, msLeft, nextGiveUp)));
   }
 }
 
@@ -632,7 +825,9 @@ export function render(line: Line): string {
     case 'mode':
       return line.text;
     case 'ready':
-      return `READY ${line.url} — ${line.checks} checks green — ${line.title}`;
+      return line.noCi
+        ? `READY ${line.url} — no CI runs on pull requests in this repo; GitHub reports it clean — ${line.title}`
+        : `READY ${line.url} — ${line.checks} checks green — ${line.title}`;
     case 'merged':
       return `MERGED ${line.url}`;
     case 'readied':
