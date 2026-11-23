@@ -27,8 +27,6 @@
   "STOPFORUMSPAM_USERNAME",
   "THREATCRUSH_AGENT_KEY"
  ],
- "remote_build": "c0mpute",
- "remote_builders": [
-  "12D3KooWK9tFibPXoRih5r66qatAQL59vj5SWD53PJTLAmaKBdpB"
- ]
+ "image_repo": "ghcr.io/profullstack/threatcrush-web",
+ "image_note": "image built and pushed by profullstack/threatcrush .github/workflows/deploy-dev2.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)"
 }

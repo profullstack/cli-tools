@@ -29,5 +29,7 @@
   "EXTELLA_USER_ID",
   "GPG_PRIVATE_KEY",
   "PAIRUX_PARTNERS"
- ]
+ ],
+ "image_repo": "ghcr.io/profullstack/pairux-web",
+ "image_note": "image built and pushed by profullstack/pairux.com .github/workflows/deploy-dev2-pairux-com.yml on GitHub Actions (public repo, free minutes); dev2 only pulls (never builds on dev2)"
 }
