@@ -21,5 +21,7 @@
  "redirect_note": "2026-11-08: domain retired; the app runs on as <name>.pwa.pit.world (dev2/edge/edge.json). This vhost only 308s there until the domain lapses.",
  "vault_skip": [
   "ADMIN_EMAILS"
- ]
+ ],
+ "moved_to": "vienna",
+ "moved_note": "2026-11-22 dev2 offload batch 1: app + its own supabase stack run on vienna (seed2) from /mnt/vdb/www/weedforcrypto.com (symlink ~/www/weedforcrypto.com), published on the tailnet 100.115.66.111 only via docker-compose.vienna.yml overrides; dev2 edge proxies there (edge.json upstream_host). dev2 copy stopped (restart=no), deploy.env renamed deploy.env.moved-to-vienna-20261122, 'Deploy to dev2' workflow disabled. Rollback: edge upstream back to 127.0.0.1 + compose up on dev2 after a reverse rsync of anything written since."
 }
