@@ -29,7 +29,8 @@ Options:
   --users USER1,USER2    Search repositories owned by these personal accounts
   --limit N              Maximum PRs per owner; default 1000
   --apply                Actually squash-merge eligible PRs
-  --allow-no-checks      Also merge clean PRs that have no CI checks
+  --allow-no-checks      Merge any clean PR with no CI checks, whatever the
+                         reason there are none (see "No checks" below)
   --trust-forks-from U1,U2
                          Fork authors whose PRs may be auto-merged. Every
                          other fork PR is REVIEW: never readied, CI never
@@ -47,7 +48,7 @@ Eligibility:
     POSTed process.env to webhook.site passed CI and was merged by this tool
   - PR is open, and not a draft (or was successfully marked ready)
   - mergeable is MERGEABLE
-  - at least one CI check exists, unless --allow-no-checks
+  - at least one CI check exists (but see "No checks" below)
   - every check is pass or skipping
   - mergeStateStatus is CLEAN, HAS_HOOKS or UNSTABLE
 
@@ -57,6 +58,21 @@ Eligibility:
     read there is no second opinion and UNSTABLE is not accepted.
 
   - the head commit has not changed when the merge is submitted
+
+No checks:
+  A PR with no checks is one of three things, and they are told apart by
+  reading the repo's workflows and the runs on the head commit.
+  - No enabled workflow runs on pull requests (none written, or all disabled,
+    as on the private repos). There will never be a check, so the PR is merged
+    when GitHub reports it CLEAN or HAS_HOOKS. Not for bot authors: nothing
+    has tested a dependency bump there, and it stays a SKIP.
+  - A workflow should have run and has no run for the head commit: GitHub
+    dropped the event. With --apply --fix the PR is closed and reopened to
+    send it again, then parked. If nothing starts within two minutes (a paths
+    filter excludes the change, or Actions is not starting runs) it is a SKIP.
+    A PR that changed in the last two minutes is waited on, not closed.
+  - Runs exist and report nothing: SKIP "no CI checks found".
+  --allow-no-checks skips all of this and merges on CLEAN alone.
 
 Fork CI awaiting approval:
   GitHub holds workflow runs on a first-time contributor's fork PR at

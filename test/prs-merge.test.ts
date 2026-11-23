@@ -6,6 +6,7 @@ import {
   parsePullRequest,
   parseRunsAwaitingApproval,
   parsePullRequestUrl,
+  triggersOnPullRequest,
   parseRateLimitReset,
   formatWait,
   isRateLimited,
@@ -57,6 +58,18 @@ function stubGh(options: {
   annotations?: string[];
   /** The PR comes from a fork opened by this login. */
   fork?: string;
+  /** Author of a PR whose branch is in the repo itself. */
+  author?: string;
+  /** `updatedAt` on the PR; left out, the PR is old. */
+  updatedAt?: string;
+  /**
+   * The repo's workflows. Left out, one enabled workflow runs on pull requests
+   * and already has a run on the head: CI exists and is simply saying nothing.
+   */
+  workflows?: { name: string; state?: string; on?: string; path?: string }[];
+  /** No run on the head commit came from a pull request event. */
+  noPullRuns?: boolean;
+  reopenFails?: boolean;
 }) {
   const calls: string[] = [];
   let viewIndex = 0;
@@ -87,7 +100,8 @@ function stubGh(options: {
           mergeStateStatus: current.mergeStateStatus ?? 'CLEAN',
           headRefOid: 'deadbeef',
           isCrossRepository: options.fork !== undefined,
-          author: { login: options.fork ?? 'ralyodio' },
+          author: { login: options.fork ?? options.author ?? 'ralyodio' },
+          ...(options.updatedAt ? { updatedAt: options.updatedAt } : {}),
         }),
       );
     }
@@ -136,13 +150,45 @@ function stubGh(options: {
 
     if (args[0] === 'pr' && args[1] === 'ready') return ok('');
 
+    if (args[0] === 'pr' && args[1] === 'close') return ok('');
+    if (args[0] === 'pr' && args[1] === 'reopen') {
+      return options.reopenFails ? { code: 1, stdout: '', stderr: 'HTTP 422: cannot reopen' } : ok('');
+    }
+
+    const workflows = options.workflows ?? [{ name: 'CI', on: 'on:\n  pull_request:\n' }];
+    const pathOf = (w: { name: string; path?: string }) =>
+      w.path ?? `.github/workflows/${w.name.toLowerCase()}.yml`;
+
+    if (args[0] === 'api' && args.some((a) => a.includes('/actions/workflows?'))) {
+      return ok(
+        JSON.stringify({
+          workflows: workflows.map((w) => ({
+            name: w.name,
+            path: pathOf(w),
+            state: w.state ?? 'active',
+          })),
+        }),
+      );
+    }
+
+    if (args[0] === 'api' && args.some((a) => a.includes('/contents/'))) {
+      const wanted = args.find((a) => a.includes('/contents/'))!.split('/contents/')[1];
+      const file = workflows.find((w) => pathOf(w) === wanted);
+      return file?.on === undefined ? { code: 1, stdout: '', stderr: 'HTTP 404' } : ok(file.on);
+    }
+
     if (args[0] === 'api' && args.some((a) => a.includes('/actions/runs?head_sha='))) {
       const approved = calls.some((c) => c.includes('/approve'));
       const runs = approved ? [] : (options.heldRuns ?? []);
       return ok(
         JSON.stringify({
           workflow_runs: [
-            { id: 1, name: 'already ran', event: 'push', conclusion: 'success' },
+            {
+              id: 1,
+              name: 'already ran',
+              event: options.noPullRuns ? 'push' : 'pull_request',
+              conclusion: 'success',
+            },
             ...runs.map((r) => ({ ...r, conclusion: 'action_required' })),
           ],
         }),
@@ -1111,6 +1157,152 @@ describe('fork CI held for maintainer approval', () => {
     await sweep(baseOptions(), gh, emit);
 
     expect(out.find((l) => l.kind === 'skip')).toMatchObject({ reason: 'no CI checks found' });
+  });
+});
+
+describe('a PR with no checks at all', () => {
+  const lines = () => {
+    const out: Line[] = [];
+    return { out, emit: (l: Line) => out.push(l) };
+  };
+  const applyFix = (over: Partial<MergeOptions> = {}) =>
+    baseOptions({ apply: true, fix: true, fixWaitMs: 200, pollMs: 5, ...over });
+  const DISABLED = [
+    { name: 'CI', state: 'disabled_manually', on: 'on:\n  pull_request:\n' },
+    { name: 'Invoice', on: 'on:\n  issue_comment:\n    types: [created]\n' },
+  ];
+
+  it('merges when no enabled workflow runs on pull requests', async () => {
+    const { gh, calls } = stubGh({ workflows: DISABLED, steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(applyFix(), gh, emit);
+
+    expect(summary).toMatchObject({ ready: 1, merged: 1, skipped: 0 });
+    expect(out.map(render).join('\n')).toContain('no CI runs on pull requests in this repo');
+    expect(calls.some((c) => c.startsWith('pr close'))).toBe(false);
+  });
+
+  it('merges a repo with no workflows at all', async () => {
+    const { gh } = stubGh({ workflows: [], steps: [{ checks: [] }] });
+    const summary = await sweep(applyFix(), gh, () => {});
+    expect(summary).toMatchObject({ merged: 1 });
+  });
+
+  it('only names it in a dry run', async () => {
+    const { gh, calls } = stubGh({ workflows: DISABLED, steps: [{ checks: [] }] });
+    const summary = await sweep(baseOptions({ apply: false }), gh, () => {});
+    expect(summary).toMatchObject({ ready: 1, merged: 0 });
+    expect(calls.some((c) => c.startsWith('pr merge'))).toBe(false);
+  });
+
+  it('still needs GitHub to call it clean', async () => {
+    for (const mergeStateStatus of ['UNSTABLE', 'BLOCKED']) {
+      const { gh } = stubGh({ workflows: DISABLED, steps: [{ checks: [], mergeStateStatus }] });
+      const summary = await sweep(baseOptions({ apply: true }), gh, () => {});
+      expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    }
+  });
+
+  it('does not merge a bot PR nothing has tested', async () => {
+    const { gh } = stubGh({ workflows: DISABLED, author: 'app/dependabot', steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(applyFix(), gh, emit);
+
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    expect(out.find((l) => l.kind === 'skip')).toMatchObject({
+      reason: expect.stringContaining('the author is a bot (app/dependabot)'),
+    });
+  });
+
+  it('never applies to a fork', async () => {
+    const { gh, calls } = stubGh({ workflows: DISABLED, fork: 'stranger', steps: [{ checks: [] }] });
+    const summary = await sweep(applyFix(), gh, () => {});
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    expect(calls.some((c) => c.includes('/actions/workflows'))).toBe(false);
+  });
+
+  it('treats a workflow it cannot read as one that runs on pull requests', async () => {
+    const { gh } = stubGh({ workflows: [{ name: 'CI' }], steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(baseOptions({ apply: true }), gh, emit);
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    expect(out.find((l) => l.kind === 'skip')).toMatchObject({ reason: 'no CI checks found' });
+  });
+
+  it('reopens a PR whose CI never started, then merges on green', async () => {
+    const { gh, calls } = stubGh({
+      noPullRuns: true,
+      steps: [{ checks: [] }, { checks: [{ name: 'test', bucket: 'pass' }] }],
+    });
+    const { out, emit } = lines();
+    const summary = await sweep(applyFix(), gh, emit);
+
+    const closed = calls.findIndex((c) => c.startsWith('pr close'));
+    expect(closed).toBeGreaterThan(-1);
+    expect(calls.findIndex((c) => c.startsWith('pr reopen'))).toBeGreaterThan(closed);
+    expect(out.some((l) => l.kind === 'fixing' && /closed and reopened/.test(l.text))).toBe(true);
+    expect(summary).toMatchObject({ fixed: 1, merged: 1, skipped: 0 });
+  });
+
+  it('gives up when the reopened PR still starts nothing', async () => {
+    const { gh } = stubGh({ noPullRuns: true, steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(applyFix(), gh, emit);
+
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    expect(out.find((l) => l.kind === 'skip')).toMatchObject({
+      reason: expect.stringContaining('CI never started on this commit (CI should run'),
+    });
+  });
+
+  it('does not close anything without --apply --fix', async () => {
+    for (const over of [{ apply: false }, { apply: false, fix: true }, {}]) {
+      const { gh, calls } = stubGh({ noPullRuns: true, steps: [{ checks: [] }] });
+      const { out, emit } = lines();
+      const summary = await sweep(baseOptions(over), gh, emit);
+
+      expect(calls.some((c) => c.startsWith('pr close'))).toBe(false);
+      expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+      expect(out.find((l) => l.kind === 'skip')).toMatchObject({
+        reason: expect.stringContaining('--apply --fix closes and reopens'),
+      });
+    }
+  });
+
+  it('waits on a PR that changed a moment ago instead of closing it', async () => {
+    const { gh, calls } = stubGh({
+      noPullRuns: true,
+      updatedAt: new Date().toISOString(),
+      steps: [{ checks: [] }, { checks: [{ name: 'test', bucket: 'pass' }] }],
+    });
+    const summary = await sweep(applyFix(), gh, () => {});
+
+    expect(calls.some((c) => c.startsWith('pr close'))).toBe(false);
+    expect(summary).toMatchObject({ merged: 1 });
+  });
+
+  it('shouts when the reopen is refused', async () => {
+    const { gh } = stubGh({ noPullRuns: true, reopenFails: true, steps: [{ checks: [] }] });
+    const { out, emit } = lines();
+    const summary = await sweep(applyFix(), gh, emit);
+
+    expect(summary).toMatchObject({ merged: 0, skipped: 1 });
+    expect(out.some((l) => l.kind === 'fixme' && /IT IS NOW CLOSED/.test(l.text))).toBe(true);
+  });
+
+  it('reads only the on: block of a workflow', () => {
+    expect(triggersOnPullRequest('name: CI\non:\n  pull_request:\n  push:\njobs:\n')).toBe(true);
+    expect(triggersOnPullRequest('on: [push, pull_request]\njobs: {}\n')).toBe(true);
+    expect(triggersOnPullRequest('on: pull_request_target\n')).toBe(true);
+    expect(triggersOnPullRequest('"on":\n  pull_request:\n    branches: [main]\n')).toBe(true);
+    expect(triggersOnPullRequest('on:\n  push:\n  # pull_request:\njobs:\n')).toBe(false);
+    expect(
+      triggersOnPullRequest(
+        'on:\n  issue_comment:\n\njobs:\n  a:\n    if: github.event.issue.pull_request\n',
+      ),
+    ).toBe(false);
+    expect(triggersOnPullRequest('on:\n  pull_request_review:\n')).toBe(false);
+    expect(triggersOnPullRequest('jobs: {}\n')).toBe(true);
   });
 });
 
