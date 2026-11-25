@@ -39,6 +39,7 @@
     {"hosts": ["bg0ne.pwa.pit.world"], "proxy": 3201, "max_body": "64MiB", "gzip": true},
     {"hosts": ["brisk.pwa.pit.world"], "proxy": 3238, "upstream_host": "100.115.66.111", "max_body": "64MiB", "gzip": true},
     {"hosts": ["c0ncerts.pwa.pit.world"], "proxy": 3278, "upstream_host": "100.115.66.111", "max_body": "64MiB", "gzip": true},
+    {"hosts": ["blum-mcp.pwa.pit.world"], "proxy": 8095, "upstream_host": "100.115.66.111", "max_body": "16MiB", "//": "blum-studio MCP server (Loann110/blum_studio 0.0.1, AGPL) for Anthony's c0mpute chat plugin, 2026-11-25. Vienna container /mnt/vdb/www/blum-mcp, bearer key in its .env. No gzip: Streamable HTTP/SSE."},
     {"hosts": ["c0upons.pwa.pit.world"], "proxy": 3231, "max_body": "64MiB", "gzip": true},
     {"hosts": ["cigarunderground.pwa.pit.world"], "proxy": 3203, "max_body": "64MiB", "gzip": true},
     {"hosts": ["d1sks.pwa.pit.world"], "proxy": 3207, "max_body": "64MiB", "gzip": true},
