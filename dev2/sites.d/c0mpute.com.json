@@ -1,4 +1,14 @@
 {
  "image_repo": "ghcr.io/profullstack/c0mpute-web",
- "image_note": "image built and pushed by profullstack/c0mpute .github/workflows/deploy-dev2.yml on GitHub Actions; dev2 only pulls (never cargo on dev2)"
+ "image_note": "image built and pushed by profullstack/c0mpute .github/workflows/deploy-dev2.yml on GitHub Actions; dev2 only pulls (never cargo on dev2)",
+ "volumes": [
+  {
+   "name": "data",
+   "mountPath": "/data"
+  }
+ ],
+ "env_overrides": {
+  "DATABASE_PATH": "/data/c0mpute.db"
+ },
+ "db_note": "site DB is a self-hosted local SQLite file on ./volumes/data (2026-11-28, off SQLite Cloud; c0mpute #518). Nightly VACUUM INTO backup to vienna."
 }
